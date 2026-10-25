@@ -13,6 +13,8 @@ BTN_TOUCH = 0x14A
 EVENT_FORMAT = "llHHi"
 EVENT_SIZE = struct.calcsize(EVENT_FORMAT)
 EVIOCGABS = lambda axis: 0x80184540 + axis
+# Half of a seed-keyboard key. Drift inside this stays on the key that was pressed.
+_HOLD = 21
 
 
 def find_touch():
@@ -43,15 +45,107 @@ def scale(value, low, high, pixels):
     return int((value - low) * (pixels - 1) / (high - low))
 
 
+class _Contact:
+    """Coordinates for one finger, across the events in a report.
+
+    The ADS7846 sends X and Y before BTN_TOUCH. Those coordinates belong to the press.
+    """
+
+    def __init__(self, width, height, x_range, y_range):
+        self.width = width
+        self.height = height
+        self.x_range = x_range
+        self.y_range = y_range
+        self.raw = [None, None]
+        self.touching = False
+        self.sent_down = False
+        self.anchor = (0, 0)
+        self.last = (0, 0)
+
+    def feed(self, packet: bytes) -> list[tuple]:
+        actions = []
+        for offset in range(0, len(packet) - EVENT_SIZE + 1, EVENT_SIZE):
+            _sec, _usec, ev_type, code, value = struct.unpack_from(EVENT_FORMAT, packet, offset)
+            if ev_type == EV_KEY and code == BTN_TOUCH:
+                if value:
+                    self.touching = True
+                    self._press(actions)
+                elif self.sent_down:
+                    point = self.anchor if self._near(self.last) else self.last
+                    actions.append(("up", point[0], point[1]))
+                    self.touching = False
+                    self.sent_down = False
+                else:
+                    self.touching = False
+                continue
+            if ev_type != EV_ABS:
+                continue
+            if code == ABS_X:
+                self.raw[0] = value
+            elif code == ABS_Y:
+                self.raw[1] = value
+            else:
+                continue
+            if self.touching:
+                self._press(actions)
+        return actions
+
+    def _press(self, actions: list):
+        if self.raw[0] is None or self.raw[1] is None:
+            return
+        self.last = (
+            scale(self.raw[0], self.x_range[0], self.x_range[1], self.width),
+            scale(self.raw[1], self.y_range[0], self.y_range[1], self.height),
+        )
+        self.raw = [None, None]
+        if not self.sent_down:
+            self.anchor = self.last
+            self.sent_down = True
+            actions.append(("down", self.last[0], self.last[1]))
+            return
+        if self._near(self.last):
+            return
+        actions.append(("move", self.last[0], self.last[1]))
+
+    def _near(self, point: tuple[int, int]) -> bool:
+        return abs(point[0] - self.anchor[0]) < _HOLD and abs(point[1] - self.anchor[1]) < _HOLD
+
+
+def coalesce(actions: list[tuple]) -> list[tuple]:
+    """One redraw per burst: the press, the last move, and the release."""
+    down = move = up = None
+    for kind, x, y in actions:
+        if kind == "down":
+            down = (x, y)
+            move = None
+        elif kind == "move":
+            move = (x, y)
+        elif kind == "up":
+            up = (x, y)
+    if down is not None and up is not None and move is None:
+        return [("up", up[0], up[1])]
+    result = []
+    if down is not None:
+        result.append(("down", down[0], down[1]))
+    if move is not None:
+        result.append(("move", move[0], move[1]))
+    if up is not None:
+        result.append(("up", up[0], up[1]))
+    return result
+
+
 def read_points(handle, width, height, x_range, y_range, wait=None):
     """Yield ("down", x, y), ("move", x, y), ("up", x, y), or None on timeout.
 
     A timeout means no touch arrived before wait() elapsed, so the screen can redraw.
+    One finger report is one yield, not one yield per input event. The device is
+    read without blocking, the same way the touch demo drains its event device.
     """
-    raw = [None, None]
-    touching = False
-    sent_down = False
-    last = (0, 0)
+    import fcntl
+
+    flags = fcntl.fcntl(handle, fcntl.F_GETFL)
+    fcntl.fcntl(handle, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+    contact = _Contact(width, height, x_range, y_range)
     while True:
         timeout = wait() if callable(wait) else wait
         if timeout is not None:
@@ -59,36 +153,14 @@ def read_points(handle, width, height, x_range, y_range, wait=None):
             if not ready:
                 yield None
                 continue
-        packet = os.read(handle, EVENT_SIZE * 64)
-        if not packet:
-            return
-        for offset in range(0, len(packet) - EVENT_SIZE + 1, EVENT_SIZE):
-            _sec, _usec, ev_type, code, value = struct.unpack_from(EVENT_FORMAT, packet, offset)
-            if ev_type == EV_KEY and code == BTN_TOUCH:
-                if value:
-                    touching = True
-                elif sent_down:
-                    yield ("up", last[0], last[1])
-                    touching = False
-                    sent_down = False
-                else:
-                    touching = False
-                continue
-            if ev_type != EV_ABS:
-                continue
-            if code == ABS_X:
-                raw[0] = value
-            elif code == ABS_Y:
-                raw[1] = value
-            if raw[0] is None or raw[1] is None or not touching:
-                continue
-            last = (
-                scale(raw[0], x_range[0], x_range[1], width),
-                scale(raw[1], y_range[0], y_range[1], height),
-            )
-            raw = [None, None]
-            if sent_down:
-                yield ("move", last[0], last[1])
-            else:
-                sent_down = True
-                yield ("down", last[0], last[1])
+        actions = []
+        while True:
+            try:
+                packet = os.read(handle, EVENT_SIZE * 64)
+            except BlockingIOError:
+                break
+            if not packet:
+                return
+            actions.extend(contact.feed(packet))
+        for action in coalesce(actions):
+            yield action
