@@ -1,13 +1,15 @@
 """Touch screens for the portrait signer. The same object drives the emulator."""
 
+import hashlib
 import io
 import os
 import sys
 import time
+from bisect import bisect_left
 from pathlib import Path
 
 import qrcode
-from embit.bip39 import WORDLIST, mnemonic_is_valid
+from embit.bip39 import WORDLIST
 from PIL import Image, ImageDraw
 
 from .. import __version__
@@ -163,6 +165,17 @@ class App:
         self.seed_words = []
         self.word_prefix = ""
         self.word_cursor = 0
+        self._seed_choice_key = None
+        self._seed_choice_words = WORDLIST
+        self._seed_picture = None
+        self._seed_shell_key = None
+        self._seed_key_boxes = {}
+        self._seed_bottom_letters: set[str] = set()
+        self._seed_fixed_hits = []
+        self._seed_enabled: set[str] = set()
+        self._seed_field_box = None
+        self._letter_sprites = {}
+        self.dirty = None
         self.seed_grid_scroll = 0
         self.seed_grid_max = 0
         self.seed_grid_stick = True
@@ -244,6 +257,7 @@ class App:
             self.notice_until = None
 
     def render(self) -> Image.Image:
+        self.dirty = None
         self._expire_notice()
         self._advance_boot()
         frame = Frame()
@@ -2342,6 +2356,8 @@ class App:
         frame.text(self.draft or "Descriptor, key expression, or seed words", MARGIN + 12, HEADER + 36, size=TITLE_SIZE, mono=True)
 
     def _seed(self, frame: Frame):
+        if self._patch_seed_keyboard(frame):
+            return
         entered = len(self.seed_words)
         complete = entered >= self.seed_length and entered > 0
         title = "Seed words" if complete else f"Word {entered + 1} of {self.seed_length}"
@@ -2364,6 +2380,7 @@ class App:
                     frame.button(lower_top, self.word_prefix, f"pick-{self.word_prefix}")
                 self._seed_keyboard(frame, self._enabled_letters())
             self._seed_transcript(frame, content_top, lower_top - 8, matches)
+            self._remember_seed_keyboard(frame, show_words, matches)
         if self.open_dropdown == "seed-length":
             self._dropdown_menu(
                 frame,
@@ -2496,12 +2513,21 @@ class App:
             frame.draw.text((MARGIN, y), line, font=note_face, fill=MUTED)
             y += note_h
         box = (MARGIN, y, WIDTH - MARGIN, y + input_h)
+        self._seed_field_box = box
+        self._paint_seed_field(frame, box)
+        note_y = box[3] + 8
+        for line in checksum_lines:
+            frame.draw.text((MARGIN, note_y), line, font=note_face, fill=MUTED)
+            note_y += note_h
+
+    def _paint_seed_field(self, frame: Frame, box):
+        prefix = self.word_prefix
         frame.draw.rounded_rectangle(box, radius=12, fill=WHITE, outline=LINE)
         shown = prefix if prefix else "Type a seed word"
         text_x = box[0] + 16
         field_face = font(TITLE_SIZE)
         _left, text_top, _right, text_bottom = frame.draw.textbbox((0, 0), shown, font=field_face)
-        text_y = box[1] + (input_h - (text_bottom - text_top)) / 2 - text_top
+        text_y = box[1] + (72 - (text_bottom - text_top)) / 2 - text_top
         frame.draw.text((text_x, text_y), shown, font=field_face, fill=INK if prefix else MUTED)
         if prefix:
             caret_x = text_x + frame.draw.textlength(prefix[: self.word_cursor], font=field_face)
@@ -2509,10 +2535,79 @@ class App:
             self._seed_cursor_hits(frame, box, prefix)
         else:
             frame.hit(box, "cursor-0", "cursor-0")
-        note_y = box[3] + 8
-        for line in checksum_lines:
-            frame.draw.text((MARGIN, note_y), line, font=note_face, fill=MUTED)
-            note_y += note_h
+
+    def _letter_sprite(self, letter: str, enabled: bool) -> Image.Image:
+        key = (letter, enabled)
+        sprite = self._letter_sprites.get(key)
+        if sprite is not None:
+            return sprite
+        width, height = 43, 65
+        sprite = Image.new("RGB", (width, height), PAPER)
+        draw = ImageDraw.Draw(sprite)
+        draw.rounded_rectangle((0, 0, 42, 64), radius=10, fill=WHITE if enabled else (228, 230, 234), outline=LINE)
+        face = font(TITLE_SIZE)
+        text_width = draw.textlength(letter, font=face)
+        _left, text_top, _right, text_bottom = draw.textbbox((0, 0), letter, font=face)
+        text_y = (64 - (text_bottom - text_top)) / 2 - text_top
+        draw.text(((42 - text_width) / 2, text_y), letter, font=face, fill=INK if enabled else MUTED)
+        self._letter_sprites[key] = sprite
+        return sprite
+
+    def _seed_shell(self, show_words: bool, matches: list[str]):
+        has_pick = bool(self.word_prefix) and self.word_prefix in matches
+        return (tuple(self.seed_words), self.seed_length, self.seed_grid_scroll, show_words, has_pick)
+
+    def _remember_seed_keyboard(self, frame: Frame, show_words: bool, matches: list[str]):
+        """Keep this picture so the next letter can change keys instead of redrawing it."""
+        if show_words or self.open_dropdown or self.notice or self.menu or self.confirm:
+            self._seed_picture = None
+            return
+        self._seed_picture = frame.image
+        self._seed_shell_key = self._seed_shell(False, matches)
+        self._seed_enabled = self._enabled_letters()
+        self._seed_fixed_hits = [
+            hit for hit in frame.hits
+            if not (hit["action"].startswith("key-") and len(hit["action"]) == 5)
+            and not hit["action"].startswith("cursor-")
+        ]
+
+    def _patch_seed_keyboard(self, frame: Frame) -> bool:
+        """Paste changed keys and the word field onto the previous picture."""
+        if self._seed_picture is None or self._seed_field_box is None or not self._seed_key_boxes:
+            return False
+        if self.menu or self.confirm or self.notice or self.open_dropdown:
+            return False
+        if len(self.seed_words) >= self.seed_length:
+            return False
+        matches = self._seed_matches()
+        if 0 < len(matches) <= 6:
+            return False
+        if self._seed_shell_key != self._seed_shell(False, matches):
+            return False
+        enabled = self._enabled_letters()
+        image = self._seed_picture
+        top = HEIGHT
+        bottom = 0
+        for letter, box in self._seed_key_boxes.items():
+            if (letter in enabled) == (letter in self._seed_enabled):
+                continue
+            image.paste(self._letter_sprite(letter, letter in enabled), (box[0], box[1]))
+            top = min(top, box[1])
+            bottom = max(bottom, box[1] + 65)
+        field = self._seed_field_box
+        frame.image = image
+        frame.draw = ImageDraw.Draw(image)
+        frame.hits = list(self._seed_fixed_hits)
+        self._paint_seed_field(frame, field)
+        for letter, box in self._seed_key_boxes.items():
+            if letter in enabled:
+                hit = self._edge_key_hit(box) if letter in self._seed_bottom_letters else box
+                frame.hit(hit, f"key-{letter}", letter)
+        self._seed_enabled = enabled
+        top = min(top, field[1])
+        bottom = max(bottom, field[3])
+        self.dirty = (max(0, top), min(HEIGHT, bottom))
+        return True
 
     def _seed_cursor_hits(self, frame: Frame, box, prefix: str):
         face = font(TITLE_SIZE)
@@ -2531,7 +2626,7 @@ class App:
         columns = 2
         width = (WIDTH - 2 * MARGIN - gap) // columns
         rows = (len(matches) + columns - 1) // columns
-        back_top = HEIGHT - 16 - 64
+        back_top = self._seed_keyboard_top() + 2 * (64 + 6)
         grid_bottom = back_top - 12
         grid_top = grid_bottom - rows * height - (rows - 1) * gap
         for index, word in enumerate(matches):
@@ -2547,36 +2642,47 @@ class App:
             text_y = y + (height - (text_bottom - text_top)) / 2 - text_top
             frame.draw.text((x + (width - text_width) / 2, text_y), word, font=face, fill=WHITE)
             frame.hit(box, f"pick-{word}", word)
-        self._seed_backspace(frame, (WIDTH - MARGIN - 88, back_top, WIDTH - MARGIN, back_top + 64))
+        self._seed_backspace(frame, (WIDTH - MARGIN - 88, back_top, WIDTH - MARGIN, back_top + 64), to_edge=True)
         return grid_top
+
+    def _edge_key_hit(self, box):
+        """The bottom row's target includes the margin below it and the gap above it.
+
+        On this panel a press near the bezel is reported higher than the finger,
+        and the glass below the last key is still that key.
+        """
+        return (box[0] - 3, box[1] - 6, box[2] + 3, HEIGHT)
 
     def _seed_keyboard(self, frame: Frame, enabled: set[str]):
         rows = ("qwertyuiop", "asdfghjkl", "zxcvbnm")
         key_w, key_h, gap = 42, 64, 6
         y = self._seed_keyboard_top()
+        self._seed_key_boxes = {}
+        self._seed_bottom_letters = set()
+        for letter in "abcdefghijklmnopqrstuvwxyz":
+            self._letter_sprite(letter, True)
+            self._letter_sprite(letter, False)
         for row_index, letters in enumerate(rows):
             extra = row_index == len(rows) - 1
             row_w = key_w * len(letters) + gap * (len(letters) - 1)
             if extra:
                 row_w += gap + 72
-            x = (WIDTH - row_w) / 2
+            x = int((WIDTH - row_w) / 2)
             for letter in letters:
                 box = (x, y, x + key_w, y + key_h)
-                active = letter in enabled
-                frame.draw.rounded_rectangle(box, radius=10, fill=WHITE if active else (228, 230, 234), outline=LINE)
-                face = font(TITLE_SIZE)
-                text_width = frame.draw.textlength(letter, font=face)
-                _left, text_top, _right, text_bottom = frame.draw.textbbox((0, 0), letter, font=face)
-                text_y = y + (key_h - (text_bottom - text_top)) / 2 - text_top
-                frame.draw.text((x + (key_w - text_width) / 2, text_y), letter, font=face, fill=INK if active else MUTED)
-                if active:
-                    frame.hit(box, f"key-{letter}", letter)
+                frame.image.paste(self._letter_sprite(letter, letter in enabled), (x, y))
+                self._seed_key_boxes[letter] = box
+                if letter in enabled:
+                    hit = self._edge_key_hit(box) if extra else box
+                    frame.hit(hit, f"key-{letter}", letter)
+                if extra:
+                    self._seed_bottom_letters.add(letter)
                 x += key_w + gap
             if extra:
-                self._seed_backspace(frame, (x, y, x + 72, y + key_h))
+                self._seed_backspace(frame, (x, y, x + 72, y + key_h), to_edge=True)
             y += key_h + gap
 
-    def _seed_backspace(self, frame: Frame, box):
+    def _seed_backspace(self, frame: Frame, box, to_edge: bool = False):
         frame.draw.rounded_rectangle(box, radius=10, fill=BLUE)
         glyph = "del"
         face = font(TITLE_SIZE)
@@ -2584,33 +2690,55 @@ class App:
         cx = (box[0] + box[2]) / 2
         cy = (box[1] + box[3]) / 2
         frame.draw.text((cx - (right - left) / 2 - left, cy - (bottom - top) / 2 - top), glyph, font=face, fill=WHITE)
-        frame.hit(box, "key-backspace", "backspace")
+        frame.hit(self._edge_key_hit(box) if to_edge else box, "key-backspace", "backspace")
 
     def _seed_keyboard_top(self) -> int:
-        return HEIGHT - 16 - (3 * 64 + 2 * 6)
+        # The last row stays clear of the bezel. Its touch target still reaches the edge.
+        return HEIGHT - 64 - (3 * 64 + 2 * 6)
+
+    def _seed_choices(self) -> list[str]:
+        """Words allowed for the word being typed.
+
+        The last word's checksum is decided by the words already entered. That list is
+        built once. Checking it again for every letter, through a linear dictionary
+        search, is what made each key on this screen wait.
+        """
+        final = len(self.seed_words) + 1 == self.seed_length and len(self.seed_words) > 0
+        key = (tuple(self.seed_words), self.seed_length) if final else None
+        if key == self._seed_choice_key:
+            return self._seed_choice_words
+        if key is None:
+            choices = WORDLIST
+        else:
+            stem = [_WORD_INDEX[word] for word in self.seed_words]
+            choices = [word for word in WORDLIST if _phrase_checksum_ok(stem + [_WORD_INDEX[word]])]
+        self._seed_choice_key = key
+        self._seed_choice_words = choices
+        return choices
 
     def _seed_matches(self, prefix: str | None = None) -> list[str]:
         prefix = self.word_prefix if prefix is None else prefix
-        final = len(self.seed_words) + 1 == self.seed_length
-        earlier = " ".join(self.seed_words)
-        found = []
-        for word in WORDLIST:
-            if not word.startswith(prefix):
-                continue
-            if final:
-                phrase = f"{earlier} {word}" if earlier else word
-                if not mnemonic_is_valid(phrase):
-                    continue
-            found.append(word)
-        return found
+        choices = self._seed_choices()
+        if choices is WORDLIST:
+            start, end = _prefix_bounds(prefix)
+            return WORDLIST[start:end]
+        return [word for word in choices if word.startswith(prefix)]
 
     def _enabled_letters(self) -> set[str]:
         head = self.word_prefix[: self.word_cursor]
         tail = self.word_prefix[self.word_cursor :]
+        start_at = len(head) + 1
+        choices = self._seed_choices()
+        if choices is WORDLIST:
+            words = WORDLIST[slice(*_prefix_bounds(head))]
+        else:
+            words = choices
         enabled = set()
-        for letter in "abcdefghijklmnopqrstuvwxyz":
-            if self._seed_matches(head + letter + tail):
-                enabled.add(letter)
+        for word in words:
+            if len(word) < start_at + len(tail) or not word.startswith(head):
+                continue
+            if word[start_at : start_at + len(tail)] == tail:
+                enabled.add(word[len(head)])
         return enabled
 
     def _seed_key(self, key: str):
@@ -4061,6 +4189,47 @@ def _text_ink_width(draw, text: str, face) -> int:
         return 0
     left, _top, right, _bottom = draw.textbbox((0, 0), text, font=face)
     return right - left
+
+
+_WORD_INDEX = {word: index for index, word in enumerate(WORDLIST)}
+
+
+def _prefix_bounds(prefix: str) -> tuple[int, int]:
+    """Indexes of the sorted word list that start with this prefix."""
+    if not prefix:
+        return 0, len(WORDLIST)
+    start = bisect_left(WORDLIST, prefix)
+    end = bisect_left(WORDLIST, prefix[:-1] + chr(ord(prefix[-1]) + 1))
+    return start, end
+
+
+def _phrase_checksum_ok(indexes: list[int]) -> bool:
+    """True when these BIP39 word indexes have a valid checksum. No dictionary scan."""
+    count = len(indexes)
+    checksum_bits = count * 11 // 33
+    acc = 0
+    width = 0
+    raw = bytearray()
+    for index in indexes:
+        acc = (acc << 11) | index
+        width += 11
+        while width >= 8:
+            width -= 8
+            raw.append((acc >> width) & 0xFF)
+            acc &= (1 << width) - 1
+    if width:
+        raw.append((acc << (8 - width)) & 0xFF)
+    remainder = checksum_bits % 8
+    if remainder:
+        checksum_length = checksum_bits // 8 + 1
+        bits_to_ignore = 8 - remainder
+    else:
+        checksum_length = checksum_bits // 8
+        bits_to_ignore = 0
+    data, checksum = bytes(raw[:-checksum_length]), bytes(raw[-checksum_length:])
+    computed = bytearray(hashlib.sha256(data).digest()[:checksum_length])
+    computed[-1] &= 256 - (1 << (bits_to_ignore + 1) - 1)
+    return checksum == bytes(computed)
 
 
 def _grid_font_size(draw, width: int, max_size: int = SEED_CARD_FONT) -> int:

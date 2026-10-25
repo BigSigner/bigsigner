@@ -24,16 +24,27 @@ GREEN = (20, 110, 78)
 LINE = (214, 218, 224)
 
 ROOT = Path(__file__).resolve().parents[1] / "resources"
+_FONTS: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}
 
 
 def font(size: int, mono: bool = False) -> ImageFont.ImageFont:
     name = "DejaVuSansMono.ttf" if mono else "DejaVuSans.ttf"
-    return ImageFont.truetype(str(ROOT / name), size)
+    return _font(name, size)
 
 
 def icon_font(size: int, awesome: bool = False) -> ImageFont.FreeTypeFont:
     name = "Font_Awesome_6_Free-Solid-900.otf" if awesome else "seedsigner-icons.otf"
-    return ImageFont.truetype(str(ROOT / name), size)
+    return _font(name, size)
+
+
+def _font(name: str, size: int) -> ImageFont.FreeTypeFont:
+    """Load each size once. Opening the file again on every line is slow on a Pi Zero."""
+    key = (name, size)
+    face = _FONTS.get(key)
+    if face is None:
+        face = ImageFont.truetype(str(ROOT / name), size)
+        _FONTS[key] = face
+    return face
 
 
 class Icons:

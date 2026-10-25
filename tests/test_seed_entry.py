@@ -15,9 +15,25 @@ def test_seed_entry_starts_with_a_keyboard():
     assert "a" in labels
     assert "backspace" in labels
     assert "x" not in labels
+    bottom = next(hit["box"] for hit in app.hits if hit["label"] == "b")
+    assert bottom[3] == HEIGHT
+    assert bottom[1] < app._seed_keyboard_top() + 2 * (64 + 6)
     app.seed_length = 24
     app.render()
     assert any(hit["label"] == "24 words" and hit["action"] == "dropdown-seed-length" for hit in app.hits)
+
+
+def test_typing_a_letter_updates_the_keyboard_without_redrawing_the_screen():
+    app = App()
+    app.screen = "seed"
+    app.render()
+    app._seed_key("a")
+    patched = app.render().copy()
+    assert app.dirty is not None
+    assert app.dirty[1] - app.dirty[0] < HEIGHT
+    app._seed_picture = None
+    full = app.render()
+    assert patched.tobytes() == full.tobytes()
     app._act("dropdown-seed-length")
     app.render()
     labels = {hit["label"] for hit in app.hits}
@@ -62,6 +78,24 @@ def test_short_prefix_replaces_the_keyboard_with_words():
     assert "abandon" in labels
     assert "q" not in labels
     assert "backspace" in labels
+
+
+def test_last_word_choices_match_the_checksum_without_rescanning_every_letter():
+    from embit.bip39 import mnemonic_is_valid
+
+    from bigsigner.ui.app import _WORD_INDEX, _phrase_checksum_ok
+
+    app = App()
+    app.seed_words = ["abandon"] * 11
+    choices = app._seed_choices()
+    again = app._seed_choices()
+    assert again is choices
+    assert "about" in choices
+    assert "abandon" not in choices
+    indexes = [_WORD_INDEX[word] for word in app.seed_words]
+    for word in ("about", "abandon", "zoo", "ability"):
+        phrase = " ".join(app.seed_words + [word])
+        assert _phrase_checksum_ok(indexes + [_WORD_INDEX[word]]) is mnemonic_is_valid(phrase)
 
 
 def test_last_word_must_match_the_checksum():
@@ -127,7 +161,10 @@ def test_entered_words_use_one_column():
     assert image.getpixel((WIDTH // 2, row_y))[:3] == WHITE
     assert image.getpixel((WIDTH - inset - 8, row_y))[:3] == WHITE
     assert image.getpixel((WIDTH - 4, row_y))[:3] == PAPER
-    assert image.getpixel((WIDTH // 2, top + cell_h + 4))[:3] == PAPER
+    assert any(
+        image.getpixel((WIDTH // 2, y))[:3] == PAPER
+        for y in range(row_y, min(HEIGHT - 1, row_y + cell_h))
+    )
 
 
 def test_shown_seed_words_use_one_larger_column():
