@@ -1,0 +1,13 @@
+---
+description: Button colors in the BigSigner portrait UI
+globs: src/bigsigner/ui/**/*.py
+alwaysApply: false
+---
+
+# Button colors
+
+Buttons use the brighter blue (`BLUE`, `(24, 92, 184)`).
+
+Dark navy (`NAVY`, `(18, 36, 58)`) is only for a button that is currently deselected in a choice. The passphrase keyboard modes (`abc`, `ABC`, `.?123`, `#+=`) use it: the selected mode is brighter blue, and the others are navy.
+
+A disabled button is grey, not navy. The title bar, toasts, and the boot screen may stay navy; those are not buttons.
