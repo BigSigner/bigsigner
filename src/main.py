@@ -1,4 +1,4 @@
-"""Device entry point.
+"""Device entry point.2
 
 BigSigner OS runs this file with ``python3 main.py`` from the ``src`` directory,
 both for the image at ``/opt/src`` and for a checkout synced to
