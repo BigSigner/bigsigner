@@ -1,7 +1,10 @@
 """Live camera frames for the Raspberry Pi panel.
 
-picamera2 and pyzbar are provided by the device image. They are not imported
-unless this machine is actually capturing. The emulator does not use this module.
+The device image provides one of two camera libraries. bigsigner-os ships the
+legacy ``picamera``, which talks to the firmware over MMAL. A card built on the
+libcamera stack has ``picamera2`` instead. Both are tried; neither is imported
+unless this machine is actually capturing. pyzbar reads the codes. The emulator
+does not use this module.
 """
 
 import io
@@ -10,6 +13,7 @@ from PIL import Image
 
 
 VIEWFINDER = (12, 14, 18)
+CAPTURE_SIZE = (640, 480)
 
 
 class LiveCamera:
@@ -29,11 +33,7 @@ class LiveCamera:
             camera = self._open()
             if camera is None:
                 return None
-            request = camera.capture_request()
-            try:
-                image = _image_from_request(request)
-            finally:
-                request.release()
+            image = camera.frame()
         except Exception:
             self.failed = True
             self.close()
@@ -46,10 +46,6 @@ class LiveCamera:
         if camera is None:
             return
         try:
-            camera.stop()
-        except Exception:
-            pass
-        try:
             camera.close()
         except Exception:
             pass
@@ -57,20 +53,80 @@ class LiveCamera:
     def _open(self):
         if self._camera is not None:
             return self._camera
+        for backend in (_Picamera2, _LegacyPicamera):
+            camera = backend.open()
+            if camera is not None:
+                self._camera = camera
+                return camera
+        self.failed = True
+        return None
+
+
+class _Picamera2:
+    """libcamera through picamera2."""
+
+    def __init__(self, camera):
+        self._camera = camera
+
+    @classmethod
+    def open(cls):
         try:
             from picamera2 import Picamera2
         except ImportError:
-            self.failed = True
             return None
         camera = Picamera2()
         config = camera.create_preview_configuration(
-            main={"size": (640, 480), "format": "RGB888"},
+            main={"size": CAPTURE_SIZE, "format": "RGB888"},
             buffer_count=2,
         )
         camera.configure(config)
         camera.start()
+        return cls(camera)
+
+    def frame(self) -> Image.Image:
+        request = self._camera.capture_request()
+        try:
+            return _image_from_request(request)
+        finally:
+            request.release()
+
+    def close(self):
+        try:
+            self._camera.stop()
+        finally:
+            self._camera.close()
+
+
+class _LegacyPicamera:
+    """The firmware camera through picamera 1.x, as on bigsigner-os.
+
+    The video port gives a frame without the still-capture pause. The sensor
+    needs a moment after start before its exposure settles.
+    """
+
+    def __init__(self, camera):
         self._camera = camera
-        return camera
+        self._buffer = io.BytesIO()
+
+    @classmethod
+    def open(cls):
+        try:
+            from picamera import PiCamera
+        except ImportError:
+            return None
+        camera = PiCamera(resolution=CAPTURE_SIZE, framerate=15)
+        return cls(camera)
+
+    def frame(self) -> Image.Image:
+        buffer = self._buffer
+        buffer.seek(0)
+        buffer.truncate()
+        self._camera.capture(buffer, format="rgb", use_video_port=True)
+        width, height = CAPTURE_SIZE
+        return Image.frombuffer("RGB", (width, height), buffer.getvalue(), "raw", "RGB", 0, 1).copy()
+
+    def close(self):
+        self._camera.close()
 
 
 def paste_preview(image: Image.Image, shot: Image.Image, box: tuple[int, int, int, int]):

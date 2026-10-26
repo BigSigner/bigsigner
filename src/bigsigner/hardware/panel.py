@@ -54,8 +54,9 @@ def run_panel():
             _kmsg(f"frame {frames} {elapsed} ms")
 
     def wait():
-        # Keep painting while the viewfinder is open. Otherwise wait for a notice to expire.
-        if app.camera_preview_box() is not None:
+        # Keep painting while the viewfinder shows a live picture. A camera that
+        # could not open has nothing new to show, so wait for a touch instead.
+        if app.camera_preview_box() is not None and not camera.failed:
             return 0.1
         return app.notice_delay()
 

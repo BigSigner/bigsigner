@@ -138,8 +138,10 @@ def read_points(handle, width, height, x_range, y_range, wait=None):
     """Yield ("down", x, y), ("move", x, y), ("up", x, y), or None on timeout.
 
     A timeout means no touch arrived before wait() elapsed, so the screen can redraw.
-    One finger report is one yield, not one yield per input event. The device is
-    read without blocking, the same way the touch demo drains its event device.
+    A wait of None sleeps until a finger arrives. The process must not spin on the
+    device: the Pi Zero has one core, and the touch controller's kernel thread
+    needs it. One finger report is one yield, not one yield per input event. The
+    device is read without blocking, the same way the touch demo drains it.
     """
     import fcntl
 
@@ -148,11 +150,10 @@ def read_points(handle, width, height, x_range, y_range, wait=None):
     contact = _Contact(width, height, x_range, y_range)
     while True:
         timeout = wait() if callable(wait) else wait
-        if timeout is not None:
-            ready, _, _ = select.select([handle], [], [], timeout)
-            if not ready:
-                yield None
-                continue
+        ready, _, _ = select.select([handle], [], [], timeout)
+        if not ready:
+            yield None
+            continue
         actions = []
         while True:
             try:

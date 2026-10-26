@@ -64,8 +64,12 @@ def pack_image(image, stride, bpp, channels):
 
     16-bit frames are RGB565, which is what bigsigner-os asks the firmware for.
     32-bit frames are kept so a card built before that change still shows the
-    right colors. Both are one pass over the bytes. A Python loop is the fallback.
+    right colors. Pillow converts RGB565 in C, about seven times faster than
+    numpy on the Pi Zero. numpy is next. A Python loop is the fallback.
     """
+    packed = _pack_image_pillow(image, stride, bpp, channels)
+    if packed is not None:
+        return packed
     try:
         import numpy as np
     except ImportError:
@@ -75,6 +79,27 @@ def pack_image(image, stride, bpp, channels):
         if packed is not None:
             return packed
     return _pack_image_slow(image, stride, bpp, channels)
+
+
+def _pack_image_pillow(image, stride, bpp, channels):
+    """RGB565 through Pillow's BGR;16 raw mode, when this Pillow still has it.
+
+    The mode was removed in Pillow 12. The device image ships Pillow 10 or 11.
+    """
+    if bpp != 16 or channels != ((11, 5), (5, 6), (0, 5)):
+        return None
+    width, height = image.size
+    if stride != width * 2:
+        return None
+    import warnings
+
+    rgb = image if image.mode == "RGB" else image.convert("RGB")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            return rgb.convert("BGR;16").tobytes()
+    except (ValueError, KeyError, AttributeError):
+        return None
 
 
 def _pack_image_fast(np, image, stride, bpp, channels):

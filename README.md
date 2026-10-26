@@ -13,7 +13,7 @@ A typical build uses:
 - A Raspberry Pi Zero, Zero W, or Zero 2 W. A board without Wi-Fi is preferable.
 - The Waveshare 4inch HDMI LCD, SKU 12030, used at its native 480×800 portrait resolution.
 - A Mini HDMI cable, and the display's GPIO header seated on pins 1–26 so the touch controller can use SPI.
-- A Raspberry Pi camera, used for QR codes and for camera entropy. On the device, the scan and camera screens show the live picture in a viewfinder. That needs `picamera2` on the image. Reading the QR code also needs `pyzbar`. The browser emulator shows the camera above the panel instead.
+- A Raspberry Pi camera, used for QR codes and for camera entropy. On the device, the scan and camera screens show the live picture in a viewfinder. That needs `picamera` (the library bigsigner-os ships) or `picamera2` on the image. Reading the QR code also needs `pyzbar`. The browser emulator shows the camera above the panel instead.
 
 The release image should not enable networking, Bluetooth, or USB. A development image with SSH is only for building the software. Do not use it with real funds.
 
