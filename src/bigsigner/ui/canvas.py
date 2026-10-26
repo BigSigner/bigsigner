@@ -110,6 +110,36 @@ def wrap(draw: ImageDraw.ImageDraw, text: str, face, width: int) -> list[str]:
     return lines
 
 
+_GLYPHS: dict[tuple, tuple[Image.Image, tuple[float, float]] | None] = {}
+
+
+def glyph_sprite(char: str, size: int, fill: tuple, awesome: bool = False, text: bool = False):
+    """A rendered glyph and the center of its ink, drawn once per look.
+
+    `text` draws with the body font instead of an icon font. The ink box comes
+    from the alpha channel in C. Reading it pixel by pixel from Python took half
+    a second per icon on a Pi Zero. None means the glyph has no ink.
+    """
+    key = (char, size, fill, awesome, text)
+    if key in _GLYPHS:
+        return _GLYPHS[key]
+    face = font(size) if text else icon_font(size, awesome=awesome)
+    left, top, right, bottom = face.getbbox(char)
+    width = right - left + 4
+    height = bottom - top + 4
+    icon = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    ImageDraw.Draw(icon).text((2 - left, 2 - top), char, font=face, fill=(*fill, 255))
+    box = icon.getchannel("A").point(lambda alpha: 255 if alpha > 16 else 0).getbbox()
+    if box is None:
+        result = None
+    else:
+        # getbbox is exclusive on the right and bottom. The center is of the inked pixels.
+        min_x, min_y, right_edge, bottom_edge = box
+        result = (icon, ((min_x + right_edge - 1) / 2, (min_y + bottom_edge - 1) / 2))
+    _GLYPHS[key] = result
+    return result
+
+
 class Frame:
     def __init__(self):
         self.image = Image.new("RGB", (WIDTH, HEIGHT), PAPER)
@@ -208,24 +238,11 @@ class Frame:
         return y + size + 16
 
     def glyph(self, char: str, cx: float, cy: float, size: int, fill, awesome: bool = False):
-        face = icon_font(size, awesome=awesome)
-        left, top, right, bottom = face.getbbox(char)
-        width = right - left + 4
-        height = bottom - top + 4
-        icon = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-        ImageDraw.Draw(icon).text((2 - left, 2 - top), char, font=face, fill=(*fill, 255))
-        ink = []
-        for y in range(height):
-            for x in range(width):
-                if icon.getpixel((x, y))[3] > 16:
-                    ink.append((x, y))
-        if not ink:
+        rendered = glyph_sprite(char, size, tuple(fill), awesome)
+        if rendered is None:
             return
-        min_x = min(point[0] for point in ink)
-        max_x = max(point[0] for point in ink)
-        min_y = min(point[1] for point in ink)
-        max_y = max(point[1] for point in ink)
-        self.image.paste(icon, (round(cx - (min_x + max_x) / 2), round(cy - (min_y + max_y) / 2)), icon)
+        icon, (center_x, center_y) = rendered
+        self.image.paste(icon, (round(cx - center_x), round(cy - center_y)), icon)
 
     def text(self, value: str, x: int, y: int, size=BODY_SIZE, fill=INK, mono=False, width=None):
         face = font(size, mono=mono)

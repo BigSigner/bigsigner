@@ -51,7 +51,7 @@ A seed key opens Derive Key (`derive`) for one of the three supported paths. The
 
 Load External Key is two screens, `external-review` and `external-details`. A failed QR or SD import uses `load-error`. The license list is `licenses`, and one notice is `license`.
 
-On the Pi, `camera_preview_box` is the viewfinder rectangle for the scan and camera screens. `hardware/camera.py` fills it from picamera2 and reads QR codes with pyzbar. Those packages come from the device image. They are not imported on a machine that is not capturing, and the emulator does not use that module. The emulator page shows the computer's camera above the panel.
+On the Pi, `camera_preview_box` is the viewfinder rectangle for the scan and camera screens. `hardware/camera.py` fills it from picamera2 when that is installed, otherwise from the legacy picamera that bigsigner-os ships, and reads QR codes with pyzbar. Those packages come from the device image. They are not imported on a machine that is not capturing, and the emulator does not use that module. The emulator page shows the computer's camera above the panel.
 
 ## What is bundled
 

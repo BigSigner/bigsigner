@@ -6,6 +6,7 @@ import os
 import sys
 import time
 from bisect import bisect_left
+from functools import lru_cache
 from pathlib import Path
 
 import qrcode
@@ -41,6 +42,7 @@ from .canvas import (
     Frame,
     Icons,
     font,
+    glyph_sprite,
     wrap,
 )
 
@@ -3051,30 +3053,12 @@ class App:
         fill = BLUE if enabled else (186, 190, 196)
         text = WHITE if enabled else (132, 136, 142)
         frame.draw.rounded_rectangle(box, radius=12, fill=fill)
-        face = font(32)
-        left, top, right, bottom = frame.draw.textbbox((0, 0), label, font=face)
-        width = right - left + 4
-        height = bottom - top + 4
-        glyph = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-        ImageDraw.Draw(glyph).text((2 - left, 2 - top), label, font=face, fill=(*text, 255))
-        ink = [
-            (x, y)
-            for y in range(height)
-            for x in range(width)
-            if glyph.getpixel((x, y))[3] > 16
-        ]
-        if ink:
-            min_x = min(point[0] for point in ink)
-            max_x = max(point[0] for point in ink)
-            min_y = min(point[1] for point in ink)
-            max_y = max(point[1] for point in ink)
+        rendered = glyph_sprite(label, 32, text, text=True)
+        if rendered is not None:
+            glyph, (center_x, center_y) = rendered
             cx = (box[0] + box[2]) / 2
             cy = (box[1] + box[3]) / 2
-            frame.image.paste(
-                glyph,
-                (round(cx - (min_x + max_x) / 2), round(cy - (min_y + max_y) / 2)),
-                glyph,
-            )
+            frame.image.paste(glyph, (round(cx - center_x), round(cy - center_y)), glyph)
         if enabled:
             frame.hit(box, action, label)
 
@@ -3823,6 +3807,7 @@ class App:
             return
         if self.wallet_index >= len(self.session.wallets):
             self.wallet_index = max(0, len(self.session.wallets) - 1)
+        _forget_qr_codes()
         self.back = []
         self.open_dropdown = None
         self.screen = "wallets"
@@ -3836,6 +3821,7 @@ class App:
         except SessionError as exc:
             self.set_notice(str(exc))
             return
+        _forget_qr_codes()
         self.selected_fp = None
         self.screen = "keys"
 
@@ -4246,9 +4232,13 @@ def _grid_font_size(draw, width: int, max_size: int = SEED_CARD_FONT) -> int:
     return size
 
 
+@lru_cache(maxsize=8)
 def _qr_code(data):
     # Error correction L packs the most data into one code. The screen is large
     # enough to show that single dense code instead of several sparse ones.
+    # Building a code is pure Python and takes seconds on a Pi Zero, so each
+    # payload is built once. Every redraw of the QR, scrolled, or zoomed screen
+    # asks for the same code again.
     code = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L, border=2)
     code.add_data(data)
     code.make(fit=True)
@@ -4259,21 +4249,28 @@ def _qr_light(level: int) -> tuple[int, int, int]:
     return QR_BRIGHTNESS_STOPS[level]
 
 
+@lru_cache(maxsize=4)
 def _qr_image(data, box: int, light: tuple[int, int, int] = WHITE) -> Image.Image:
+    """The code as a picture. Callers paste it and do not draw on it."""
     image = _qr_code(data).make_image(fill_color="black", back_color="white")
     image = image.resize((box, box), Image.Resampling.NEAREST).convert("RGB")
     if light == WHITE:
         return image
-    pixels = image.load()
-    for y in range(image.height):
-        for x in range(image.width):
-            if pixels[x, y] == WHITE:
-                pixels[x, y] = light
-    return image
+    # Dark modules stay black. Everything else takes the chosen background.
+    dark = image.convert("L").point(lambda value: 255 if value < 128 else 0)
+    tinted = Image.new("RGB", image.size, light)
+    tinted.paste((0, 0, 0), mask=dark)
+    return tinted
 
 
 def _qr_modules(data):
     return _qr_code(data).get_matrix()
+
+
+def _forget_qr_codes():
+    """Drop cached codes once what they showed is gone from the session."""
+    _qr_code.cache_clear()
+    _qr_image.cache_clear()
 
 
 def _is_text(payload: bytes) -> bool:
