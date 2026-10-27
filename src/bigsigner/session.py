@@ -4,15 +4,18 @@ import unicodedata
 
 from embit import bip32, bip39
 from embit.descriptor import Descriptor
+from embit.descriptor.checksum import checksum
 from embit.networks import NETWORKS
 
 from .bsms import descriptor_from_bsms
 from .names import animal_name
 from .parse import ParseError, parse_key_expression, parse_wallet, _normalize_expression
 from .paths import (
+    HARDENED,
     MULTISIG_NATIVE,
     SINGLESIG_NATIVE,
     SINGLESIG_TAPROOT,
+    coin_type,
     format_path,
 )
 
@@ -111,7 +114,9 @@ class Session:
         record = self._ensure_fingerprint(fingerprint)
         if stored_passphrase:
             self.passphrase_index(stored_passphrase)
-        record.keys = [self._new_key(kind, fingerprint, mnemonic, stored_passphrase)]
+        stored = self._new_key(kind, fingerprint, mnemonic, stored_passphrase)
+        stored.root = root
+        record.keys = [stored]
         warnings = _passphrase_warnings(stored_passphrase)
         message = "The seed was added successfully."
         if removed:
@@ -753,11 +758,19 @@ def _passphrase_warnings(passphrase):
     return warnings
 
 
+def _seed_root(seed_key):
+    """The master key for this seed, stretched once and kept in memory."""
+    root = getattr(seed_key, "root", None)
+    if root is None:
+        root = bip32.HDKey.from_seed(
+            bip39.mnemonic_to_seed(" ".join(seed_key.mnemonic), seed_key.passphrase or "")
+        )
+        seed_key.root = root
+    return root
+
+
 def _derive_public(seed_key, path):
-    root = bip32.HDKey.from_seed(
-        bip39.mnemonic_to_seed(" ".join(seed_key.mnemonic), seed_key.passphrase or "")
-    )
-    return root.derive(format_path(list(path))).to_public()
+    return _seed_root(seed_key).derive(format_path(list(path))).to_public()
 
 
 def _same_extended(left, right) -> bool:
@@ -813,8 +826,6 @@ def _descriptor(wallet: WalletRecord, session: Session) -> str:
         body = f"tr({parts[0]})"
     else:
         body = f"wsh(sortedmulti({wallet.threshold},{','.join(parts)}))"
-    from embit.descriptor.checksum import checksum
-
     return f"{body}#{checksum(body)}"
 
 
@@ -834,8 +845,6 @@ def _public_for(session: Session, fingerprint: bytes, role: str, account: int):
 
 
 def _account_path(network: str, role: str, account: int):
-    from .paths import HARDENED, coin_type
-
     coin = coin_type(network) | HARDENED
     account_h = account | HARDENED
     if role == SINGLESIG_NATIVE:

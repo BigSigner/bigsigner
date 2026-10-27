@@ -1,7 +1,7 @@
 from bigsigner.paths import format_path
 from bigsigner.session import _public_for
 from bigsigner.ui.app import App, XPUB_ACCOUNT_PREVIEW
-from bigsigner.ui.canvas import Frame
+from bigsigner.ui.canvas import HEADER, HEIGHT, Frame
 
 ABANDON = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 
@@ -69,6 +69,169 @@ def test_the_derive_screen_shows_the_account_selector_and_the_derived_key():
     assert derived.xpub.to_string() == _public_for(app.session, fingerprint, app.derive_role, 4).xpub.to_string()
     account_zero = _public_for(app.session, fingerprint, app.derive_role, 0).xpub.to_string()
     assert derived.xpub.to_string()[:XPUB_ACCOUNT_PREVIEW] != account_zero[:XPUB_ACCOUNT_PREVIEW]
+
+
+def test_the_next_account_repaints_only_the_changed_lines(monkeypatch):
+    import bigsigner.session as session
+
+    calls = {"n": 0}
+    original = session.bip39.mnemonic_to_seed
+
+    def counted(*args, **kwargs):
+        calls["n"] += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(session.bip39, "mnemonic_to_seed", counted)
+    app, _fingerprint = _seed_app()
+    loaded = calls["n"]
+    app._act("derive-native")
+    app.render()
+    app._act("derive-inc")
+    app.render()
+    app._act("derive-inc")
+    app.render()
+    assert calls["n"] == loaded
+    assert app.derive_account == 2
+    top, bottom = app.dirty
+    assert top >= HEADER
+    assert bottom < HEIGHT
+    assert format_path(list(app._derived_key().path)) == "m/84h/0h/2h"
+
+
+def test_the_account_control_sits_between_the_type_and_the_path():
+    app, _fingerprint = _seed_app()
+    app._act("derive-native")
+    app.render()
+    account = app._derive_account_box
+    path = app._derive_path_box
+    assert account[3] <= path[1]
+    assert account[1] > HEADER + 80
+
+
+def test_back_from_the_account_editor_repaints_the_derive_page():
+    from bigsigner.ui.canvas import NAVY, WIDTH
+
+    app, _fingerprint = _seed_app()
+    app._act("derive-native")
+    app.render()
+    app._act("derive-edit")
+    app.render()
+    assert app.screen == "account"
+    back = next(item for item in app.hits if item["action"] == "back")
+    app.tap((back["box"][0] + back["box"][2]) // 2, (back["box"][1] + back["box"][3]) // 2)
+    image = app.render()
+    assert app.screen == "derive"
+    assert app.dirty is None
+    assert image.getpixel((400, 44))[:3] == NAVY
+    assert not any(item["action"] == "account-save" for item in app.hits)
+    assert any(item["action"] == "derive-inc" for item in app.hits)
+
+
+def test_a_slide_on_plus_changes_the_account_and_does_not_scroll():
+    app, _fingerprint = _seed_app()
+    app._act("derive-native")
+    app.render()
+    app.scroll_max["derive"] = 300
+    hit = next(item for item in app.hits if item["action"] == "derive-inc")
+    x = (hit["box"][0] + hit["box"][2]) // 2
+    y = (hit["box"][1] + hit["box"][3]) // 2
+    app.pointer_down(x, y)
+    app.pointer_move(x, y + 90)
+    app.pointer_up(x, y + 90)
+    assert app.derive_account == 1
+    assert app.scroll.get("derive", 0) == 0
+
+
+def test_a_short_move_stays_a_click_and_a_long_move_scrolls():
+    app = App()
+    app.screen = "keys"
+    app.render()
+    app.scroll_max["keys"] = 400
+    app.pointer_down(200, 400)
+    assert app.pointer_move(200, 388) is False
+    app.pointer_up(200, 388)
+    assert app.scroll.get("keys", 0) == 0
+    app.pointer_down(200, 400)
+    assert app.pointer_move(200, 280)
+    assert app.scroll["keys"] == 120
+
+
+def test_a_drag_that_returns_stays_a_scroll():
+    app = App()
+    app.screen = "keys"
+    app.render()
+    app.scroll_max["keys"] = 400
+    app.pointer_down(200, 400)
+    assert app.pointer_move(200, 250)
+    app.pointer_move(200, 390)
+    app.pointer_up(200, 390)
+    assert app.screen == "keys"
+    assert app.scroll["keys"] == 10
+
+
+def test_a_drag_on_the_account_number_scrolls_the_page():
+    app, _fingerprint = _seed_app()
+    app._act("derive-native")
+    app.render()
+    box = app._derive_account_box
+    x = (box[0] + box[2]) // 2
+    y = (box[1] + box[3]) // 2
+    app.pointer_down(x, y)
+    app.pointer_move(x, y - 80)
+    app.pointer_up(x, y - 80)
+    assert app.screen == "derive"
+    assert app.derive_account == 0
+    assert app.scroll["derive"] == 80
+
+
+def test_a_long_hold_on_the_account_number_does_not_open_it():
+    app, _fingerprint = _seed_app()
+    app._act("derive-native")
+    app.render()
+    box = app._derive_account_box
+    x = (box[0] + box[2]) // 2
+    y = (box[1] + box[3]) // 2
+    app.pointer_down(x, y)
+    app._press_at -= 1
+    app.pointer_up(x, y)
+    assert app.screen == "derive"
+    assert app.derive_account == 0
+
+
+def test_a_quiet_press_on_the_account_number_opens_it():
+    app, _fingerprint = _seed_app()
+    app._act("derive-native")
+    app.render()
+    box = app._derive_account_box
+    x = (box[0] + box[2]) // 2
+    y = (box[1] + box[3]) // 2
+    app.pointer_down(x, y)
+    app._press_last -= 1
+    assert app.pointer_idle()
+    assert app.screen == "account"
+
+
+def test_the_account_field_stays_under_the_title():
+    from bigsigner.ui.canvas import NAVY, WIDTH
+
+    app, _fingerprint = _seed_app()
+    app._act("derive-native")
+    app._act("derive-inc")
+    app.scroll["derive"] = 180
+    app.render()
+    app._act("derive-inc")
+    image = app.render()
+    assert image.getpixel((WIDTH // 2, 30))[:3] == NAVY
+    assert image.getpixel((WIDTH // 2, 70))[:3] == NAVY
+
+
+def test_a_press_just_above_plus_still_raises_the_account():
+    app, _fingerprint = _seed_app()
+    app._act("derive-native")
+    app.render()
+    drawn = max(hit["box"][1] for hit in app.hits if hit["action"] == "derive-inc")
+    app.tap(428, drawn - 10)
+    assert app.derive_account == 1
 
 
 def test_a_singlesig_derivation_creates_a_wallet_at_the_selected_account():

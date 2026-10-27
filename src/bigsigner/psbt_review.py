@@ -1,11 +1,13 @@
 """Review a PSBT against one loaded wallet before anything is signed."""
 
+from embit.descriptor import Descriptor
+from embit.networks import NETWORKS
 from embit.psbt import PSBT, PSBTError
 from embit.script import Script
 from embit.transaction import SIGHASH, Transaction, TransactionInput, TransactionOutput, Witness
 
-from .paths import HARDENED, format_path, parse_path
-from .session import SessionError, _account_path, _descriptor, _public_for
+from .paths import HARDENED, classify_path, format_path, parse_path
+from .session import SessionError, _account_path, _descriptor, _public_for, _seed_root
 
 LOCKTIME_THRESHOLD = 500_000_000
 SEQUENCE_FINAL = 0xFFFFFFFF
@@ -170,8 +172,6 @@ def _locate(session, wallet, derivations, script, accounts=None, required=True):
 
 
 def _split_wallet_path(path: list[int], role: str, network: str) -> dict:
-    from .paths import classify_path
-
     if role == "multisig_native":
         if len(path) != 6:
             raise ReviewError("An input derivation does not include the address index.")
@@ -203,8 +203,6 @@ def _script_at(session, wallet, accounts, branch: int, index: int):
         descriptor = _descriptor(wallet, session)
     finally:
         wallet.accounts = saved
-    from embit.descriptor import Descriptor
-
     return Descriptor.from_string(descriptor).derive(index, branch_index=branch).script_pubkey()
 
 
@@ -311,8 +309,6 @@ def _estimate_vsize(transaction: Transaction, inputs, outputs, wallet) -> int:
 
 
 def _net(network: str):
-    from embit.networks import NETWORKS
-
     if network == "main":
         return NETWORKS["main"]
     if network == "regtest":
@@ -330,11 +326,7 @@ def sign_with(session, wallet_index: int, psbt: PSBT, fingerprint: bytes):
     seed = session._seed_for(fingerprint)
     if seed is None:
         raise SessionError("That fingerprint does not have a seed.")
-    root = __import__("embit.bip32", fromlist=["HDKey"]).HDKey.from_seed(
-        __import__("embit.bip39", fromlist=["mnemonic_to_seed"]).mnemonic_to_seed(
-            " ".join(seed.mnemonic), seed.passphrase or ""
-        )
-    )
+    root = _seed_root(seed)
     signed = psbt.sign_with(root)
     if not signed:
         raise ReviewError("This seed did not add a signature.")

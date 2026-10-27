@@ -1,5 +1,6 @@
 """Read the ADS7846 touchscreen with the standard library."""
 
+import fcntl
 import glob
 import os
 import select
@@ -30,8 +31,6 @@ def find_touch():
 
 
 def axis_range(handle, axis):
-    import fcntl
-
     info = bytearray(24)
     fcntl.ioctl(handle, EVIOCGABS(axis), info)
     _value, minimum, maximum = struct.unpack_from("iii", info)
@@ -59,6 +58,7 @@ class _Contact:
         self.raw = [None, None]
         self.touching = False
         self.sent_down = False
+        self.left_hold = False
         self.anchor = (0, 0)
         self.last = (0, 0)
 
@@ -71,10 +71,11 @@ class _Contact:
                     self.touching = True
                     self._press(actions)
                 elif self.sent_down:
-                    point = self.anchor if self._near(self.last) else self.last
+                    point = self.anchor if not self.left_hold else self.last
                     actions.append(("up", point[0], point[1]))
                     self.touching = False
                     self.sent_down = False
+                    self.left_hold = False
                 else:
                     self.touching = False
                 continue
@@ -101,10 +102,14 @@ class _Contact:
         if not self.sent_down:
             self.anchor = self.last
             self.sent_down = True
+            self.left_hold = False
             actions.append(("down", self.last[0], self.last[1]))
             return
-        if self._near(self.last):
+        # Jitter around the press is not a move. After the finger leaves that
+        # box, later points are reported even when it comes back.
+        if not self.left_hold and self._near(self.last):
             return
+        self.left_hold = True
         actions.append(("move", self.last[0], self.last[1]))
 
     def _near(self, point: tuple[int, int]) -> bool:
@@ -112,29 +117,61 @@ class _Contact:
 
 
 def coalesce(actions: list[tuple]) -> list[tuple]:
-    """One redraw per burst: the press, the last move, and the release."""
-    down = move = up = None
+    """Collapse moves inside one gesture. Separate taps in the same burst all stay.
+
+    A finger that taps twice while the screen is busy is two keys, not one.
+    """
+    result = []
+    down = move = None
+    started = False
+
+    def flush(up):
+        nonlocal down, move, started
+        if not started:
+            return
+        if down is not None and up is not None and move is None:
+            result.append(("up", up[0], up[1]))
+        else:
+            if down is not None:
+                result.append(("down", down[0], down[1]))
+            if move is not None:
+                result.append(("move", move[0], move[1]))
+            if up is not None:
+                result.append(("up", up[0], up[1]))
+        down = move = None
+        started = False
+
     for kind, x, y in actions:
         if kind == "down":
+            if started:
+                flush(None)
+            started = True
             down = (x, y)
             move = None
         elif kind == "move":
+            started = True
             move = (x, y)
         elif kind == "up":
-            up = (x, y)
-    if down is not None and up is not None and move is None:
-        return [("up", up[0], up[1])]
-    result = []
-    if down is not None:
-        result.append(("down", down[0], down[1]))
-    if move is not None:
-        result.append(("move", move[0], move[1]))
-    if up is not None:
-        result.append(("up", up[0], up[1]))
+            started = True
+            flush((x, y))
+    flush(None)
     return result
 
 
-def read_points(handle, width, height, x_range, y_range, wait=None):
+def tap_line(line: bytes):
+    """One injected point. "x y" is a tap. "down x y" is that phase."""
+    parts = line.decode("ascii", errors="replace").split()
+    try:
+        if len(parts) == 2:
+            return ("up", int(parts[0]), int(parts[1]))
+        if len(parts) == 3 and parts[0] in ("down", "move", "up"):
+            return (parts[0], int(parts[1]), int(parts[2]))
+    except ValueError:
+        return None
+    return None
+
+
+def read_points(handle, width, height, x_range, y_range, wait=None, inject=None):
     """Yield ("down", x, y), ("move", x, y), ("up", x, y), or None on timeout.
 
     A timeout means no touch arrived before wait() elapsed, so the screen can redraw.
@@ -142,17 +179,41 @@ def read_points(handle, width, height, x_range, y_range, wait=None):
     device: the Pi Zero has one core, and the touch controller's kernel thread
     needs it. One finger report is one yield, not one yield per input event. The
     device is read without blocking, the same way the touch demo drains it.
+    inject is an optional pipe of tap lines, so a test can press without the panel.
     """
-    import fcntl
-
     flags = fcntl.fcntl(handle, fcntl.F_GETFL)
     fcntl.fcntl(handle, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+    if inject is not None:
+        flags = fcntl.fcntl(inject, fcntl.F_GETFL)
+        fcntl.fcntl(inject, fcntl.F_SETFL, flags | os.O_NONBLOCK)
     contact = _Contact(width, height, x_range, y_range)
+    pending = bytearray()
     while True:
         timeout = wait() if callable(wait) else wait
-        ready, _, _ = select.select([handle], [], [], timeout)
+        watch = [handle] if inject is None else [handle, inject]
+        ready, _, _ = select.select(watch, [], [], timeout)
         if not ready:
-            yield None
+            # The pen is still down and the controller has gone quiet. Keep the
+            # gesture alive so a long hold is not mistaken for the end of a tap.
+            if contact.touching and contact.sent_down:
+                yield ("hold", contact.last[0], contact.last[1])
+            else:
+                yield None
+            continue
+        if inject is not None and inject in ready:
+            try:
+                chunk = os.read(inject, 256)
+            except BlockingIOError:
+                chunk = b""
+            if chunk:
+                pending.extend(chunk)
+                while b"\n" in pending:
+                    line, _, rest = bytes(pending).partition(b"\n")
+                    pending[:] = rest
+                    point = tap_line(line)
+                    if point is not None:
+                        yield point
+        if handle not in ready:
             continue
         actions = []
         while True:

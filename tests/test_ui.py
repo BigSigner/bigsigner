@@ -14,7 +14,7 @@ from bigsigner.ui.app import (
     _zoom_grid_box,
     _zoom_index_size,
 )
-from bigsigner.ui.canvas import HEADER, HEIGHT, INK, LINE, MARGIN, NAVY, TITLE_SIZE, WHITE, WIDTH, font, wrap
+from bigsigner.ui.canvas import HEADER, HEIGHT, INK, LINE, MARGIN, NAVY, PAPER, TITLE_SIZE, WHITE, WIDTH, font, wrap
 
 PINK = (255, 20, 147)
 
@@ -181,6 +181,16 @@ def test_menu_highlights_the_page_that_owns_the_back_stack():
     app.screen = "addresses"
     assert row_color(app, "Bitcoin Wallets") != (255, 255, 255)
     assert row_color(app, "Bitcoin Keys") == (255, 255, 255)
+
+
+def test_the_sd_card_screen_shows_the_logo_above_the_text():
+    app = App()
+    app.screen = "warning"
+    image = app.render()
+    # The logo is the orange mark. The sentence starts below it, and Continue stays.
+    assert image.getpixel((WIDTH // 2, HEADER + 60))[0] > 180
+    assert image.getpixel((MARGIN + 8, HEADER + 220))[:3] == PAPER
+    assert any(hit["action"] == "warning-ok" for hit in app.hits)
 
 
 def test_continue_from_the_sd_card_screen_opens_the_sidebar():
@@ -407,6 +417,9 @@ def test_main_screens_save_screenshots():
     record = ScreenRecord(Path("artifacts/screenshots/test_main_screens_save_screenshots"))
 
     record.shot(app, "boot")
+    # The boot screen moves on by itself after BOOT_HOLD. A loaded machine can
+    # take longer than that between the two renders, so hold it for the tap.
+    app.boot_until = time.monotonic() + 60
     record.click(app, "boot")
     record.shot(app, "remove-sd")
     record.click(app, "warning-ok")

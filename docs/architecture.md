@@ -39,7 +39,7 @@ Wallets are descriptors built from those keys. Changing the network drops wallet
 | `sdcard.py` | Read the microSD card. The emulator uses the `BIGSIGNER_SDCARD_PATH` folder. |
 | `licenses.py` | Notices shown from About → Licenses. |
 
-Bitcoin operations go through embit 0.8.0, the release SeedSigner pins. Pillow draws the screen. qrcode builds the codes the device displays.
+Bitcoin operations go through embit 0.8.0, the release SeedSigner pins. Pillow draws the screen. `qr.py` builds the codes the device displays: through libqrencode when the image has it (milliseconds on a Pi Zero), otherwise through the pure-Python qrcode package (seconds). Each payload is built once and cached.
 
 ## Screens
 

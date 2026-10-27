@@ -1,8 +1,10 @@
 """HDMI framebuffer, following the bigsigner-os touch demo."""
 
+import fcntl
 import glob
 import os
 import struct
+import warnings
 
 FB_DEV = "/dev/fb0"
 FBIOGET_VSCREENINFO = 0x4600
@@ -13,8 +15,6 @@ def framebuffer_available() -> bool:
 
 
 def framebuffer_info(handle):
-    import fcntl
-
     var = bytearray(160)
     fcntl.ioctl(handle, FBIOGET_VSCREENINFO, var)
     xres, yres, _xv, _yv, _xo, _yo, bpp, _gray = struct.unpack_from("8I", var)
@@ -50,8 +50,6 @@ def silence_console():
     except OSError:
         return
     try:
-        import fcntl
-
         fcntl.ioctl(tty, 0x4B3A, 1)  # KDSETMODE, KD_GRAPHICS
     except OSError:
         pass
@@ -91,8 +89,6 @@ def _pack_image_pillow(image, stride, bpp, channels):
     width, height = image.size
     if stride != width * 2:
         return None
-    import warnings
-
     rgb = image if image.mode == "RGB" else image.convert("RGB")
     try:
         with warnings.catch_warnings():
