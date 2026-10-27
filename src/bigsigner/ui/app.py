@@ -5,11 +5,11 @@ import io
 import os
 import sys
 import time
+from types import SimpleNamespace
 from bisect import bisect_left
 from functools import lru_cache
 from pathlib import Path
 
-import qrcode
 from embit.bip39 import WORDLIST
 from PIL import Image, ImageDraw
 
@@ -18,6 +18,7 @@ from ..entropy import mnemonic_from_camera, mnemonic_from_coins, mnemonic_from_d
 from ..parse import ParseError
 from ..paths import MULTISIG_NATIVE, SINGLESIG_NATIVE, SINGLESIG_TAPROOT, format_path
 from ..psbt_review import ReviewError, review_psbt, sign_with
+from ..qr import qr_matrix
 from ..session import Session, SessionError, _passphrase_warnings, _public_for, account_index_phrase
 from ..scan import import_scanned
 from ..sdcard import SdError, child_path, file_exists, list_folder, parent_path, read_text, write_text
@@ -43,6 +44,7 @@ from .canvas import (
     Icons,
     font,
     glyph_sprite,
+    logo,
     wrap,
 )
 
@@ -115,7 +117,16 @@ def _draw_name_block(frame: Frame, y: int, lines: list[str], size: int, icon: st
 BOOT_HOLD = 1.0
 NOTICE_HOLD = 4.0
 QR_HINT_HOLD = 2.0
-SCROLL_SLOP = 18
+# A click is a short press that stays inside this box. Either edge is enough
+# to make it a scroll, as LVGL's scroll limit does, so there is no radius.
+# Once the finger has left the box it stays a scroll, including a fast flick
+# that comes back. A finger that stays down this long is a scroll as well.
+SCROLL_DELTA_X = 24
+SCROLL_DELTA_Y = 24
+SCROLL_HOLD = 0.4
+# Touch reports that stop for this long end the gesture. A short one inside
+# the box is a click.
+SCROLL_GAP = 0.08
 SEED_FORMATS = ("words", "text", "compact", "standard")
 SEED_FORMAT_NAMES = ("Words", "Text QR", "Compact SeedQR", "Standard SeedQR")
 QR_BRIGHTNESS_MAX = 4
@@ -159,6 +170,12 @@ class App:
         self.qr_scroll_max = 0
         self.qr_scroll_box = None
         self.qr_hint_until = None
+        # One picture of the QR and the text under it. Scrolling crops this
+        # picture. A frame for every scroll position would be hundreds of
+        # megabytes; this one is a couple of megabytes.
+        self._qr_strip = None
+        self._qr_strip_key = None
+        self._qr_strip_due = False
         self.seed_format = 0
         self.qr_brightness = QR_BRIGHTNESS_DEFAULT
         self.review = None
@@ -170,6 +187,19 @@ class App:
         self._seed_choice_key = None
         self._seed_choice_words = WORDLIST
         self._seed_picture = None
+        self._pass_picture = None
+        self._pass_field_box = None
+        self._pass_shell = None
+        self._pass_fixed_hits = []
+        self._derive_picture = None
+        self._derive_hits = []
+        self._derive_shell = None
+        self._derive_account_box = None
+        self._derive_path_box = None
+        self._derive_xpub_box = None
+        self._derive_text_size = TITLE_SIZE
+        self._derive_still = []
+        self._flow_value_box = None
         self._seed_shell_key = None
         self._seed_key_boxes = {}
         self._seed_bottom_letters: set[str] = set()
@@ -231,7 +261,11 @@ class App:
         self.camera_final = b""
         self.scroll = {}
         self.scroll_max = {}
+        self.keyboard_top = None
+        self._still_boxes = []
         self._press = None
+        self._press_at = 0.0
+        self._press_last = 0.0
 
     def set_notice(self, message: str):
         self.notice = message or ""
@@ -260,6 +294,16 @@ class App:
 
     def render(self) -> Image.Image:
         self.dirty = None
+        self.keyboard_top = None
+        self._still_boxes = []
+        # A remembered picture is only valid while that screen is showing.
+        # Coming back and patching a band would leave the other screen on the panel.
+        if self.screen != "derive":
+            self._derive_picture = None
+        if self.screen != "seed":
+            self._seed_picture = None
+        if self.screen != "passphrase":
+            self._pass_picture = None
         self._expire_notice()
         self._advance_boot()
         frame = Frame()
@@ -332,6 +376,9 @@ class App:
         else:
             panel = ""
         self._press = (x, y, self.scroll.get(self.screen, 0), False, panel)
+        now = time.monotonic()
+        self._press_at = now
+        self._press_last = now
         if panel == "qr":
             self._grid_origin = self.qr_scroll
         elif panel == "entropy":
@@ -353,16 +400,28 @@ class App:
         left, top, right, bottom = box
         return left <= x < right and top <= y < bottom
 
+    def finger_down(self) -> bool:
+        return self._press is not None
+
     def pointer_move(self, x: int, y: int) -> bool:
         """Drag the current page, or the seed-word list, vertically."""
         if self._press is None:
             return False
+        self._press_last = time.monotonic()
         origin_x, origin_y, origin_scroll, dragging, panel = self._press
         dx = x - origin_x
         dy = y - origin_y
+        # A press on the keyboard is a key, down to the bottom edge of the panel.
+        if self.keyboard_top is not None and origin_y >= self.keyboard_top:
+            return False
+        # Plus and minus are clicks even when the finger slides off them.
+        if self._in_still_box(origin_x, origin_y):
+            return False
+        if not dragging and abs(dx) <= SCROLL_DELTA_X and abs(dy) <= SCROLL_DELTA_Y:
+            if time.monotonic() - self._press_at >= SCROLL_HOLD:
+                self._press = (origin_x, origin_y, origin_scroll, True, panel)
+            return False
         if not dragging:
-            if abs(dx) < SCROLL_SLOP and abs(dy) < SCROLL_SLOP:
-                return False
             dragging = True
             self._press = (origin_x, origin_y, origin_scroll, True, panel)
             if abs(dy) < abs(dx) or not self._scroll_allowed():
@@ -399,10 +458,39 @@ class App:
         return True
 
     def pointer_up(self, x: int, y: int, camera: dict | None = None):
-        dragging = bool(self._press and self._press[3])
+        press = self._press
         self._press = None
-        if not dragging:
+        if press is None:
             self.tap(x, y, camera)
+            return
+        if self._press_is_click(press):
+            self.tap(press[0], press[1], camera)
+
+    def pointer_idle(self) -> bool:
+        """The reports stopped. A short press inside the box is a click."""
+        press = self._press
+        if press is None or time.monotonic() - self._press_last < SCROLL_GAP:
+            return False
+        self._press = None
+        if not self._press_is_click(press):
+            return False
+        self.tap(press[0], press[1])
+        return True
+
+    def _press_is_click(self, press) -> bool:
+        if self.keyboard_top is not None and press[1] >= self.keyboard_top:
+            return True
+        if self._in_still_box(press[0], press[1]):
+            return True
+        if press[3]:
+            return False
+        return time.monotonic() - self._press_at < SCROLL_HOLD
+
+    def _in_still_box(self, x: int, y: int) -> bool:
+        for left, top, right, bottom in self._still_boxes:
+            if left <= x < right and top <= y < bottom:
+                return True
+        return False
 
     def _scroll_allowed(self) -> bool:
         return not self.menu and not self.add_menu and self.confirm is None and self.open_dropdown is None
@@ -1329,11 +1417,10 @@ class App:
 
     def _boot(self, frame: Frame):
         frame.draw.rectangle((0, 0, WIDTH, HEIGHT), fill=NAVY)
-        logo = Image.open(RESOURCES / "logo.png").convert("RGBA")
-        logo.thumbnail((WIDTH - 48, 280))
+        mark = logo(WIDTH - 48, 280)
         logo_top = 200
-        frame.image.paste(logo, ((WIDTH - logo.width) // 2, logo_top), logo)
-        y = logo_top + logo.height + 48
+        frame.image.paste(mark, ((WIDTH - mark.width) // 2, logo_top), mark)
+        y = logo_top + mark.height + 48
         caption_size = 42
         for caption in (f"Version {__version__}", "Fork of SeedSigner"):
             caption_width = frame.draw.textlength(caption, font=font(caption_size))
@@ -1399,10 +1486,13 @@ class App:
 
     def _warning(self, frame: Frame):
         frame.header("Remove SD Card")
+        mark = logo(WIDTH - 48, 180)
+        logo_top = HEADER + 24
+        frame.image.paste(mark, ((WIDTH - mark.width) // 2, logo_top), mark)
         frame.text(
             "It is now safe to remove the SD card to guarantee nothing will be saved on permanent storage.",
             MARGIN,
-            140,
+            logo_top + mark.height + 28,
             size=BODY_SIZE,
         )
         frame.button(HEIGHT - 110, "Continue", "warning-ok")
@@ -1639,10 +1729,12 @@ class App:
     def _flow_value_below(self, frame: Frame, y: int, label: str, value: str, paint: bool, offset: int, size: int) -> int:
         """A title-sized label, then the technical value centered on the next line."""
         y = self._flow_text(frame, y, label, paint, offset, size, fill=MUTED)
+        top = y - offset
+        self._flow_value_box = (0, top, WIDTH, top + size + 8)
         face = font(size, mono=True)
         if paint:
             width = frame.draw.textlength(value, font=face)
-            frame.draw.text((max(MARGIN, (WIDTH - width) / 2), y - offset), value, font=face, fill=MUTED)
+            frame.draw.text((max(MARGIN, (WIDTH - width) / 2), top), value, font=face, fill=MUTED)
         return y + size + 8
 
     def _flow_button(
@@ -1688,6 +1780,8 @@ class App:
         self.go("account")
 
     def _derive(self, frame: Frame):
+        if self._patch_derive(frame):
+            return
         record = None if self.selected_fp is None else self.session.fingerprints.get(self.selected_fp)
         key = self._derived_key()
         if record is None or key is None or not record.keys or not record.keys[0].has_seed:
@@ -1698,11 +1792,66 @@ class App:
         offset = self._scroll_offset("derive", end, clearance=16)
         self._derive_flow(frame, record, key, paint=True, offset=offset)
         frame.header("Derive Key", "back")
+        self._remember_derive(frame, key)
+
+    def _current_derive_shell(self, key):
+        label = ""
+        if key.role in (SINGLESIG_NATIVE, SINGLESIG_TAPROOT):
+            script = "Taproot" if key.role == SINGLESIG_TAPROOT else "Native Segwit"
+            label = self._seed_wallet_label(key.role, script)
+        return (self.selected_fp, self.derive_role, self.scroll.get("derive", 0), label)
+
+    def _remember_derive(self, frame: Frame, key):
+        """Keep this picture so the next account changes three lines, not the page."""
+        if self.menu or self.notice or self.confirm or self._derive_account_box is None:
+            self._derive_picture = None
+            return
+        self._derive_picture = frame.image
+        self._derive_hits = list(frame.hits)
+        self._derive_shell = self._current_derive_shell(key)
+        self._derive_minus_on = self.derive_account > 0
+        self._derive_plus_on = self.derive_account < 0x7FFFFFFF
+        self._derive_still = list(self._still_boxes)
+
+    def _patch_derive(self, frame: Frame) -> bool:
+        if self._derive_picture is None or self._derive_path_box is None or self._derive_xpub_box is None:
+            return False
+        if self.menu or self.notice or self.confirm:
+            return False
+        if (self.derive_account > 0) != self._derive_minus_on or (self.derive_account < 0x7FFFFFFF) != self._derive_plus_on:
+            return False
+        key = self._derived_key()
+        if key is None or self._derive_shell != self._current_derive_shell(key):
+            return False
+        image = self._derive_picture
+        frame.image = image
+        frame.draw = ImageDraw.Draw(image)
+        frame.hits = list(self._derive_hits)
+        self._still_boxes = list(self._derive_still)
+        box = self._derive_account_box
+        self._account_textbox(frame, box[1], str(self.derive_account), left=box[0], right=box[2])
+        self._paint_centered_value(frame, self._derive_path_box, format_path(list(key.path)))
+        preview = key.xpub.to_string()[:XPUB_ACCOUNT_PREVIEW] + "\u2026"
+        self._paint_centered_value(frame, self._derive_xpub_box, preview)
+        frame.header("Derive Key", "back")
+        top = min(box[1], self._derive_path_box[1], self._derive_xpub_box[1])
+        bottom = max(box[3], self._derive_path_box[3], self._derive_xpub_box[3])
+        self.dirty = (max(0, top), min(HEIGHT, bottom))
+        return True
+
+    def _paint_centered_value(self, frame: Frame, box, value: str):
+        frame.draw.rectangle(box, fill=PAPER)
+        face = font(self._derive_text_size, mono=True)
+        width = frame.draw.textlength(value, font=face)
+        _left, top, _right, bottom = frame.draw.textbbox((0, 0), value, font=face)
+        text_y = box[1] + (box[3] - box[1] - (bottom - top)) / 2 - top
+        frame.draw.text((max(MARGIN, (WIDTH - width) / 2), text_y), value, font=face, fill=MUTED)
 
     def _derive_flow(self, frame: Frame, record, key, paint: bool, offset: int = 0) -> int:
-        """The external-key details, with the account selector first and no Delete button."""
-        y = self._account_selector(frame, HEADER + 16, self.derive_account, paint, offset)
+        """The external-key details. The account control sits under the type and above the path."""
+        y = HEADER + 16
         text_size, icon = self._fitted_fingerprint(frame)
+        self._derive_text_size = text_size
         y = _draw_name_block(
             frame, y, _fingerprint_name_lines(record.nickname), NAME_ON_KEY, Icons.KEY, False, icon, paint, offset,
         )
@@ -1710,9 +1859,12 @@ class App:
             frame.fingerprint_line(y - offset, record.fingerprint.hex(), text_size=text_size, icon_size=icon)
         y += icon + 16
         y = self._flow_text(frame, y, f"Type: {self._external_kind(key)}", paint, offset, size=text_size)
+        y = self._account_selector(frame, y, self.derive_account, paint, offset)
         preview = key.xpub.to_string()[:XPUB_ACCOUNT_PREVIEW] + "\u2026"
         y = self._flow_value_below(frame, y, "Derivation Path:", format_path(list(key.path)), paint, offset, text_size)
+        self._derive_path_box = self._flow_value_box
         y = self._flow_value_below(frame, y, "Extended Public Key:", preview, paint, offset, text_size)
+        self._derive_xpub_box = self._flow_value_box
         if key.role in (SINGLESIG_NATIVE, SINGLESIG_TAPROOT):
             script = "Taproot" if key.role == SINGLESIG_TAPROOT else "Native Segwit"
             y = self._flow_button(frame, y, self._seed_wallet_label(key.role, script), "derive-wallet", paint, offset)
@@ -1736,10 +1888,24 @@ class App:
                 value < 0x7FFFFFFF,
                 "derive-inc",
             )
+            # A press on this panel is reported a little above the drawn key.
+            reach = 24
+            if value > 0:
+                minus = (0, top - reach, MARGIN + side + gap // 2, top + 64)
+                frame.hit(minus, "derive-dec", "-")
+                self._still_boxes.append(minus)
+            if value < 0x7FFFFFFF:
+                plus = (WIDTH - (MARGIN + side + gap // 2), top - reach, WIDTH, top + 64)
+                frame.hit(plus, "derive-inc", "+")
+                self._still_boxes.append(plus)
             box = self._account_textbox(
                 frame, top, str(value), left=MARGIN + side + gap, right=WIDTH - MARGIN - side - gap,
             )
+            self._derive_account_box = box
             frame.hit(box, "derive-edit", "Account")
+            # The number is wide and sits in the middle, so a drag on it scrolls.
+            self._still_boxes.append((MARGIN, top, MARGIN + side, top + 64))
+            self._still_boxes.append((WIDTH - MARGIN - side, top, WIDTH - MARGIN, top + 64))
         return y + 64 + 16
 
     def _open_derived_details(self):
@@ -2294,9 +2460,8 @@ class App:
 
     def _about(self, frame: Frame):
         frame.header("About", "menu")
-        logo = Image.open(RESOURCES / "logo.png").convert("RGBA")
-        logo.thumbnail((WIDTH - 80, 220))
-        frame.image.paste(logo, ((WIDTH - logo.width) // 2, HEADER + 30), logo)
+        mark = logo(WIDTH - 80, 220)
+        frame.image.paste(mark, ((WIDTH - mark.width) // 2, HEADER + 30), mark)
         y = frame.text(f"BigSigner {__version__}", MARGIN, HEADER + 280, size=TITLE_SIZE)
         y = frame.text("Fork of SeedSigner", MARGIN, y + 8, size=TITLE_SIZE, fill=MUTED)
         y = frame.text("Portrait 480×800 HDMI touchscreen.", MARGIN, y + 8, size=TITLE_SIZE)
@@ -2358,6 +2523,8 @@ class App:
         frame.text(self.draft or "Descriptor, key expression, or seed words", MARGIN + 12, HEADER + 36, size=TITLE_SIZE, mono=True)
 
     def _seed(self, frame: Frame):
+        if len(self.seed_words) < self.seed_length:
+            self.keyboard_top = self._seed_keyboard_top()
         if self._patch_seed_keyboard(frame):
             return
         entered = len(self.seed_words)
@@ -2603,8 +2770,16 @@ class App:
         self._paint_seed_field(frame, field)
         for letter, box in self._seed_key_boxes.items():
             if letter in enabled:
-                hit = self._edge_key_hit(box) if letter in self._seed_bottom_letters else box
-                frame.hit(hit, f"key-{letter}", letter)
+                frame.hit(
+                    self._key_hit(
+                        box,
+                        bottom=letter in self._seed_bottom_letters,
+                        left=letter in self._seed_left_letters,
+                        right=letter in self._seed_right_letters,
+                    ),
+                    f"key-{letter}",
+                    letter,
+                )
         self._seed_enabled = enabled
         top = min(top, field[1])
         bottom = max(bottom, field[3])
@@ -2655,12 +2830,26 @@ class App:
         """
         return (box[0] - 3, box[1] - 6, box[2] + 3, HEIGHT)
 
+    def _key_hit(self, box, bottom=False, left=False, right=False):
+        """Include the bezel beside a key that sits at the edge of its row.
+
+        A press on the left side of a is reported a few pixels left of the key.
+        """
+        hit = self._edge_key_hit(box) if bottom else box
+        if left:
+            hit = (0, hit[1], hit[2], hit[3])
+        if right:
+            hit = (hit[0], hit[1], WIDTH, hit[3])
+        return hit
+
     def _seed_keyboard(self, frame: Frame, enabled: set[str]):
         rows = ("qwertyuiop", "asdfghjkl", "zxcvbnm")
         key_w, key_h, gap = 42, 64, 6
         y = self._seed_keyboard_top()
         self._seed_key_boxes = {}
         self._seed_bottom_letters = set()
+        self._seed_left_letters = set()
+        self._seed_right_letters = set()
         for letter in "abcdefghijklmnopqrstuvwxyz":
             self._letter_sprite(letter, True)
             self._letter_sprite(letter, False)
@@ -2670,13 +2859,18 @@ class App:
             if extra:
                 row_w += gap + 72
             x = int((WIDTH - row_w) / 2)
-            for letter in letters:
+            for index, letter in enumerate(letters):
                 box = (x, y, x + key_w, y + key_h)
                 frame.image.paste(self._letter_sprite(letter, letter in enabled), (x, y))
                 self._seed_key_boxes[letter] = box
+                left = index == 0
+                right = index == len(letters) - 1 and not extra
+                if left:
+                    self._seed_left_letters.add(letter)
+                if right:
+                    self._seed_right_letters.add(letter)
                 if letter in enabled:
-                    hit = self._edge_key_hit(box) if extra else box
-                    frame.hit(hit, f"key-{letter}", letter)
+                    frame.hit(self._key_hit(box, bottom=extra, left=left, right=right), f"key-{letter}", letter)
                 if extra:
                     self._seed_bottom_letters.add(letter)
                 x += key_w + gap
@@ -2692,7 +2886,7 @@ class App:
         cx = (box[0] + box[2]) / 2
         cy = (box[1] + box[3]) / 2
         frame.draw.text((cx - (right - left) / 2 - left, cy - (bottom - top) / 2 - top), glyph, font=face, fill=WHITE)
-        frame.hit(self._edge_key_hit(box) if to_edge else box, "key-backspace", "backspace")
+        frame.hit(self._key_hit(box, bottom=to_edge, right=to_edge), "key-backspace", "backspace")
 
     def _seed_keyboard_top(self) -> int:
         # The last row stays clear of the bezel. Its touch target still reaches the edge.
@@ -2781,12 +2975,52 @@ class App:
         frame.header("Passphrase", "back")
 
     def _passphrase(self, frame: Frame):
+        if self._patch_passphrase(frame):
+            return
         frame.header("Passphrase", "back")
         warnings = _passphrase_warnings(self.passphrase_text)
         y = HEADER + 16
         for warning in warnings:
             y = frame.text(warning, MARGIN, y, size=TITLE_SIZE, fill=RED)
         box = (MARGIN, y, WIDTH - MARGIN, y + 72)
+        self._paint_passphrase_field(frame, box)
+        frame.button(box[3] + 12, "Save passphrase", "passphrase-save")
+        self._passphrase_keyboard(frame)
+        self._remember_passphrase(frame, warnings, box)
+
+    def _passphrase_shell(self, warnings):
+        return (self.passphrase_mode, tuple(warnings))
+
+    def _remember_passphrase(self, frame: Frame, warnings, box):
+        """Keep this picture so the next letter changes the field, not the keys."""
+        if self.menu or self.notice or self.confirm:
+            self._pass_picture = None
+            return
+        self._pass_picture = frame.image
+        self._pass_field_box = box
+        self._pass_shell = self._passphrase_shell(warnings)
+        self._pass_fixed_hits = [hit for hit in frame.hits if not hit["action"].startswith("passcur-")]
+
+    def _patch_passphrase(self, frame: Frame) -> bool:
+        """Paste the passphrase text onto the previous picture."""
+        if self._pass_picture is None or self._pass_field_box is None:
+            return False
+        if self.menu or self.notice or self.confirm:
+            return False
+        warnings = _passphrase_warnings(self.passphrase_text)
+        if self._pass_shell != self._passphrase_shell(warnings):
+            return False
+        image = self._pass_picture
+        frame.image = image
+        frame.draw = ImageDraw.Draw(image)
+        frame.hits = list(self._pass_fixed_hits)
+        self._paint_passphrase_field(frame, self._pass_field_box)
+        self.keyboard_top = 470
+        box = self._pass_field_box
+        self.dirty = (max(0, box[1]), min(HEIGHT, box[3]))
+        return True
+
+    def _paint_passphrase_field(self, frame: Frame, box):
         frame.draw.rounded_rectangle(box, radius=12, fill=WHITE, outline=LINE)
         text_x = box[0] + 16
         face = font(TITLE_SIZE, mono=True)
@@ -2803,8 +3037,6 @@ class App:
             caret_x = text_x + _text_ink_width(frame.draw, shown[:shown_cursor], face)
             frame.draw.line((caret_x, box[1] + 14, caret_x, box[3] - 14), fill=BLUE, width=2)
             self._passphrase_cursor_hits(frame, box, shown, start)
-        frame.button(box[3] + 12, "Save passphrase", "passphrase-save")
-        self._passphrase_keyboard(frame)
 
     def _passphrase_window(self, draw, face, width: int) -> tuple[str, int, int]:
         """The slice of the passphrase that fits, keeping the cursor on screen.
@@ -2838,6 +3070,7 @@ class App:
     def _passphrase_keyboard(self, frame: Frame):
         modes = (("abc", "lower"), ("ABC", "upper"), (".?123", "digit"), ("#+=", "symbol"))
         y = 470
+        self.keyboard_top = y
         gap = 8
         width = (WIDTH - 2 * MARGIN - gap * 3) // 4
         for index, (label, mode) in enumerate(modes):
@@ -2864,7 +3097,7 @@ class App:
             key_w = min(42, (WIDTH - 2 * MARGIN - 6 * (len(letters) - 1)) // len(letters))
             row_w = key_w * len(letters) + 6 * (len(letters) - 1)
             x = (WIDTH - row_w) / 2
-            for char in letters:
+            for index, char in enumerate(letters):
                 box = (x, y, x + key_w, y + key_h)
                 frame.draw.rounded_rectangle(box, radius=8, fill=WHITE, outline=LINE)
                 face = font(TITLE_SIZE)
@@ -2872,17 +3105,21 @@ class App:
                 _left, text_top, _right, text_bottom = frame.draw.textbbox((0, 0), char, font=face)
                 text_y = y + (key_h - (text_bottom - text_top)) / 2 - text_top
                 frame.draw.text((x + (key_w - text_width) / 2, text_y), char, font=face, fill=INK)
-                frame.hit(box, f"passkey-{char}", char)
+                frame.hit(
+                    self._key_hit(box, left=index == 0, right=index == len(letters) - 1),
+                    f"passkey-{char}",
+                    char,
+                )
                 x += key_w + 6
             y += key_h + 6
         space = (MARGIN, y, WIDTH - MARGIN - 100, y + key_h)
         frame.draw.rounded_rectangle(space, radius=8, fill=WHITE, outline=LINE)
         frame.draw.text((space[0] + 16, y + 8), "space", font=font(TITLE_SIZE), fill=INK)
-        frame.hit(space, "passkey- ", "space")
+        frame.hit(self._key_hit(space, bottom=True, left=True), "passkey- ", "space")
         delete = (WIDTH - MARGIN - 88, y, WIDTH - MARGIN, y + key_h)
         frame.draw.rounded_rectangle(delete, radius=8, fill=BLUE)
         frame.draw.text((delete[0] + 16, y + 8), "del", font=font(TITLE_SIZE), fill=WHITE)
-        frame.hit(delete, "passkey-backspace", "backspace")
+        frame.hit(self._key_hit(delete, bottom=True, right=True), "passkey-backspace", "backspace")
 
     def _passphrase_key(self, key: str):
         if self.screen == "export-name":
@@ -3218,10 +3455,9 @@ class App:
         frame.image = Image.alpha_composite(base, overlay).convert("RGB")
         frame.draw = __import__("PIL.ImageDraw", fromlist=["Draw"]).Draw(frame.image)
         frame.draw.rectangle((0, 0, 320, HEIGHT), fill=WHITE)
-        logo = Image.open(RESOURCES / "logo.png").convert("RGBA")
-        logo.thumbnail((260, 88))
-        frame.image.paste(logo, ((320 - logo.width) // 2, 28), logo)
-        y = 28 + logo.height + 20
+        mark = logo(260, 88)
+        frame.image.paste(mark, ((320 - mark.width) // 2, 28), mark)
+        y = 28 + mark.height + 20
         face = font(30)
         row_h = 80
         section = self._menu_section()
@@ -3753,14 +3989,9 @@ class App:
         if account < 0 or account >= 0x80000000:
             self.set_notice("The account index is too large.")
             return
-        purpose = "84h" if kind == "wpkh" else "86h"
-        coin = "0h" if self.session.network == "main" else "1h"
-        from embit import bip32, bip39
-
-        root = bip32.HDKey.from_seed(bip39.mnemonic_to_seed(" ".join(record.keys[0].mnemonic), record.keys[0].passphrase or ""))
-        path = f"m/{purpose}/{coin}/{account}h"
-        public = root.derive(path).to_public()
-        text = f"{kind}([{root.my_fingerprint.hex()}/{path[2:]}]{public.to_string()}/<0;1>/*)"
+        derived = _public_for(self.session, self.selected_fp, role, account)
+        origin = format_path(list(derived.path))[2:]
+        text = f"{kind}([{self.selected_fp.hex()}/{origin}]{derived.xpub.to_string()}/<0;1>/*)"
         try:
             added = self.session.add_text(text)
         except SessionError as exc:
@@ -3895,6 +4126,60 @@ class App:
         self.qr_zoom = None
         self.qr_scroll = 0
 
+    def qr_strip_due(self) -> bool:
+        return self._qr_strip_due
+
+    def qr_hint_holding(self) -> bool:
+        layout = self._qr_scroll_layout()
+        return layout is not None and self._qr_hint_active(layout)
+
+    def preview_qr_frame(self) -> Image.Image | None:
+        """The chevrons, or a loading line, while the scroll picture is not ready."""
+        layout = self._qr_scroll_layout()
+        if layout is None or self._qr_strip_matches(layout):
+            self._qr_strip_due = False
+            return None
+        self._qr_strip_due = True
+        self.dirty = None
+        self.keyboard_top = None
+        self._still_boxes = []
+        self._expire_notice()
+        frame = Frame()
+        body = "hint" if self._qr_hint_active(layout) else "loading"
+        self._paint_qr_page(frame, layout, body)
+        if self.notice:
+            self._toast(frame)
+        self.hits = frame.hits
+        return frame.image
+
+    def build_qr_strip(self):
+        """Draw the QR and its text once. Later scrolls crop this picture."""
+        layout = self._qr_scroll_layout()
+        self._qr_strip_due = False
+        if layout is None or self._qr_strip_matches(layout):
+            return
+        face = font(TITLE_SIZE, mono=True)
+        visible = layout.payload if layout.shown is None else layout.shown
+        scratch = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+        if layout.shown is None:
+            lines = wrap(scratch, visible, face, WIDTH - 2 * MARGIN)
+        else:
+            lines = _wrap_indented(scratch, visible, face, WIDTH - 2 * MARGIN)
+        content_h = layout.qr_size + layout.text_gap + layout.line_h * len(lines) + layout.tail
+        height = max(content_h, layout.view_h)
+        strip = Image.new("RGB", (WIDTH, height), layout.light)
+        code = _qr_image(layout.payload, layout.qr_size, layout.light)
+        strip.paste(code, ((WIDTH - layout.qr_size) // 2, 0))
+        draw = ImageDraw.Draw(strip)
+        text_y = layout.qr_size + layout.text_gap
+        for line in lines:
+            draw.text((MARGIN, text_y), line, font=face, fill=INK)
+            text_y += layout.line_h
+        self._qr_strip = strip
+        self._qr_strip_key = self._qr_strip_identity(layout)
+        self.qr_scroll_max = max(0, content_h - layout.view_h)
+        self.qr_scroll = max(0, min(self.qr_scroll, self.qr_scroll_max))
+
     def _draw_key_qr(self, frame: Frame):
         formats = self._key_qr_formats()
         if not formats:
@@ -3903,72 +4188,112 @@ class App:
             frame.header("QR", "back")
             frame.text("This key is no longer loaded.", MARGIN, 140)
             return
-        name, payload = formats[self.key_qr_index % len(formats)]
-        self._draw_scrolled_qr(frame, "QR & content", payload, name)
+        self._draw_scrolled_qr(frame)
 
     def _draw_descriptor_qr(self, frame: Frame):
         if self.wallet_index >= len(self.session.wallets):
             frame.header("Descriptor", "back")
             frame.text("This wallet is no longer loaded.", MARGIN, 140)
             return
-        self.qr_text = self.session.descriptor_text(self.wallet_index)
-        self._draw_scrolled_qr(frame, "Descriptor", self.qr_text, None, shown=_pretty_descriptor(self.qr_text))
+        self._draw_scrolled_qr(frame)
 
-    def _draw_scrolled_qr(self, frame: Frame, title: str, payload: str, format_name: str | None, shown: str | None = None):
-        light = _qr_light(self.qr_brightness)
-        frame.draw.rectangle((0, 0, WIDTH, HEIGHT), fill=light)
-        frame.header(title, "back")
+    def _draw_scrolled_qr(self, frame: Frame):
+        layout = self._qr_scroll_layout()
+        if layout is None:
+            return
+        if self._qr_hint_active(layout):
+            self._paint_qr_page(frame, layout, "hint")
+            return
+        if not self._qr_strip_matches(layout):
+            self.build_qr_strip()
+        self._paint_qr_page(frame, layout, "strip")
+
+    def _qr_scroll_layout(self):
+        if self.screen != "qr" or self.qr_zoom is not None or self.qr_kind not in ("key", "descriptor"):
+            return None
+        if self.qr_kind == "key":
+            formats = self._key_qr_formats()
+            if not formats:
+                return None
+            format_name, payload = formats[self.key_qr_index % len(formats)]
+            shown = None
+            title = "QR & content"
+        else:
+            if self.wallet_index >= len(self.session.wallets):
+                return None
+            payload = self.session.descriptor_text(self.wallet_index)
+            self.qr_text = payload
+            shown = _pretty_descriptor(payload)
+            format_name = None
+            title = "Descriptor"
         if format_name:
-            switch_y = HEIGHT - 88
-            zoom_y = switch_y - 12 - 64
+            zoom_y = HEIGHT - 88 - 12 - 64
         else:
             zoom_y = HEIGHT - 100
         bright_y = zoom_y - 12 - 52
         view_top = HEADER + 8
         view_bottom = bright_y - 4
         view_h = view_bottom - view_top
-        face = font(TITLE_SIZE, mono=True)
-        visible = payload if shown is None else shown
-        if shown is None:
-            lines = wrap(frame.draw, visible, face, WIDTH - 2 * MARGIN)
-        else:
-            lines = _wrap_indented(frame.draw, visible, face, WIDTH - 2 * MARGIN)
         line_h = TITLE_SIZE + 8
         text_gap = 4
         # The first text line is fully visible, and part of the next line is cut off.
         second_peek = 16
         qr_size = min(WIDTH - 2 * MARGIN, view_h - text_gap - line_h - second_peek)
-        image = _qr_image(payload, qr_size, light)
         # A blank line after the key text, so scrolling to the end leaves empty space.
         tail = line_h if format_name else 0
-        content_h = qr_size + text_gap + line_h * len(lines) + tail
-        self.qr_scroll_max = max(0, content_h - view_h)
-        self.qr_scroll = max(0, min(self.qr_scroll, self.qr_scroll_max))
-        hint = (
-            self.qr_scroll_max > 0
-            and self.qr_hint_until is not None
-            and time.monotonic() < self.qr_hint_until
+        return SimpleNamespace(
+            title=title,
+            payload=payload,
+            shown=shown,
+            format_name=format_name,
+            light=_qr_light(self.qr_brightness),
+            view_top=view_top,
+            view_bottom=view_bottom,
+            view_h=view_h,
+            qr_size=qr_size,
+            zoom_y=zoom_y,
+            bright_y=bright_y,
+            line_h=line_h,
+            text_gap=text_gap,
+            tail=tail,
         )
-        self.qr_scroll_box = None if hint or self.qr_scroll_max <= 0 else (0, view_top, WIDTH, view_bottom)
+
+    def _qr_strip_identity(self, layout):
+        return (layout.payload, layout.shown, layout.light, layout.qr_size, layout.tail)
+
+    def _qr_strip_matches(self, layout) -> bool:
+        return self._qr_strip is not None and self._qr_strip_key == self._qr_strip_identity(layout)
+
+    def _qr_hint_active(self, layout) -> bool:
+        if self.qr_hint_until is None or time.monotonic() >= self.qr_hint_until:
+            return False
+        # The chevrons stay up while the picture is built. A page that does not
+        # scroll drops them once that picture exists.
+        if not self._qr_strip_matches(layout):
+            return True
+        return self.qr_scroll_max > 0
+
+    def _paint_qr_page(self, frame: Frame, layout, body: str):
+        frame.draw.rectangle((0, 0, WIDTH, HEIGHT), fill=layout.light)
+        frame.header(layout.title, "back")
+        hint = body == "hint"
         if hint:
-            self._draw_scroll_hint(frame, view_top, view_bottom)
-            self._brightness_control(frame, bright_y)
-            frame.button(zoom_y, "Zoom In", "zoom-in")
-            if format_name:
-                self._format_switcher(frame, format_name, "qr-form-prev", "qr-form-next")
-            return
-        layer = Image.new("RGB", (WIDTH, view_h), light)
-        layer.paste(image, ((WIDTH - qr_size) // 2, -self.qr_scroll))
-        draw = ImageDraw.Draw(layer)
-        text_y = qr_size + text_gap - self.qr_scroll
-        for line in lines:
-            draw.text((MARGIN, text_y), line, font=face, fill=INK)
-            text_y += line_h
-        frame.image.paste(layer, (0, view_top))
-        self._brightness_control(frame, bright_y)
-        frame.button(zoom_y, "Zoom In", "zoom-in")
-        if format_name:
-            self._format_switcher(frame, format_name, "qr-form-prev", "qr-form-next")
+            self._draw_scroll_hint(frame, layout.view_top, layout.view_bottom)
+        elif body == "loading":
+            frame.text("Preparing the QR code.", MARGIN, layout.view_top + 48, size=TITLE_SIZE)
+        elif self._qr_strip is not None:
+            top = self.qr_scroll
+            window = self._qr_strip.crop((0, top, WIDTH, top + layout.view_h))
+            frame.image.paste(window, (0, layout.view_top))
+        self.qr_scroll_box = (
+            None
+            if hint or body == "loading" or self.qr_scroll_max <= 0
+            else (0, layout.view_top, WIDTH, layout.view_bottom)
+        )
+        self._brightness_control(frame, layout.bright_y)
+        frame.button(layout.zoom_y, "Zoom In", "zoom-in")
+        if layout.format_name:
+            self._format_switcher(frame, layout.format_name, "qr-form-prev", "qr-form-next")
 
     def _draw_scroll_hint(self, frame: Frame, top: int, bottom: int):
         face = font(36)
@@ -4233,16 +4558,12 @@ def _grid_font_size(draw, width: int, max_size: int = SEED_CARD_FONT) -> int:
 
 
 @lru_cache(maxsize=8)
-def _qr_code(data):
+def _qr_modules(data):
     # Error correction L packs the most data into one code. The screen is large
     # enough to show that single dense code instead of several sparse ones.
-    # Building a code is pure Python and takes seconds on a Pi Zero, so each
-    # payload is built once. Every redraw of the QR, scrolled, or zoomed screen
-    # asks for the same code again.
-    code = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L, border=2)
-    code.add_data(data)
-    code.make(fit=True)
-    return code
+    # Each payload is built once. Every redraw of the QR, scrolled, or zoomed
+    # screen asks for the same code again.
+    return qr_matrix(data)
 
 
 def _qr_light(level: int) -> tuple[int, int, int]:
@@ -4252,8 +4573,11 @@ def _qr_light(level: int) -> tuple[int, int, int]:
 @lru_cache(maxsize=4)
 def _qr_image(data, box: int, light: tuple[int, int, int] = WHITE) -> Image.Image:
     """The code as a picture. Callers paste it and do not draw on it."""
-    image = _qr_code(data).make_image(fill_color="black", back_color="white")
-    image = image.resize((box, box), Image.Resampling.NEAREST).convert("RGB")
+    modules = _qr_modules(data)
+    count = len(modules)
+    shades = bytes(0 if dark else 255 for row in modules for dark in row)
+    small = Image.frombytes("L", (count, count), shades)
+    image = small.resize((box, box), Image.Resampling.NEAREST).convert("RGB")
     if light == WHITE:
         return image
     # Dark modules stay black. Everything else takes the chosen background.
@@ -4263,13 +4587,9 @@ def _qr_image(data, box: int, light: tuple[int, int, int] = WHITE) -> Image.Imag
     return tinted
 
 
-def _qr_modules(data):
-    return _qr_code(data).get_matrix()
-
-
 def _forget_qr_codes():
     """Drop cached codes once what they showed is gone from the session."""
-    _qr_code.cache_clear()
+    _qr_modules.cache_clear()
     _qr_image.cache_clear()
 
 

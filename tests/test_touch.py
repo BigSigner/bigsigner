@@ -34,6 +34,14 @@ def test_a_burst_of_moves_becomes_one_position():
     assert coalesce(moves) == [("move", 80, 80)]
 
 
+def test_a_finger_that_comes_back_keeps_the_release_point():
+    contact = _contact()
+    contact.feed(_packet((EV_ABS, ABS_X, 100), (EV_ABS, ABS_Y, 200), (EV_KEY, BTN_TOUCH, 1)))
+    assert contact.feed(_packet((EV_ABS, ABS_X, 100), (EV_ABS, ABS_Y, 280))) == [("move", 100, 280)]
+    assert contact.feed(_packet((EV_ABS, ABS_X, 100), (EV_ABS, ABS_Y, 205))) == [("move", 100, 205)]
+    assert contact.feed(_packet((EV_KEY, BTN_TOUCH, 0))) == [("up", 100, 205)]
+
+
 def test_a_small_drift_stays_on_the_key_that_was_pressed():
     contact = _contact()
     contact.feed(_packet((EV_ABS, ABS_X, 100), (EV_ABS, ABS_Y, 200), (EV_KEY, BTN_TOUCH, 1)))
@@ -62,6 +70,34 @@ def test_the_reader_sleeps_until_a_touch_when_nothing_is_pending():
         os.close(writer)
     assert point == ("up", 30, 40)
     assert len(polls) == 1
+
+
+def test_two_taps_in_one_burst_stay_two_taps():
+    actions = [
+        ("down", 10, 10),
+        ("up", 10, 10),
+        ("down", 20, 20),
+        ("up", 22, 20),
+    ]
+    assert coalesce(actions) == [("up", 10, 10), ("up", 22, 20)]
+
+
+def test_a_written_line_is_a_tap():
+    touch_reader, touch_writer = os.pipe()
+    inject_reader, inject_writer = os.pipe()
+    os.write(inject_writer, b"12 34\n")
+
+    def wait():
+        return 0.2
+
+    try:
+        point = next(read_points(touch_reader, 480, 800, (0, 479), (0, 799), wait=wait, inject=inject_reader))
+    finally:
+        os.close(touch_reader)
+        os.close(touch_writer)
+        os.close(inject_reader)
+        os.close(inject_writer)
+    assert point == ("up", 12, 34)
 
 
 def test_a_tap_in_one_burst_is_a_single_release():

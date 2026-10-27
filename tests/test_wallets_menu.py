@@ -63,6 +63,38 @@ def test_show_descriptor_opens_a_qr_with_the_text_below_it():
     assert shown.replace("\n  ", "").replace("\n", "") == app.qr_text
 
 
+def test_scrolling_the_descriptor_reuses_one_picture():
+    from embit.descriptor.checksum import checksum
+
+    from test_domain import LEGAL, expression
+
+    app = App()
+    third = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong"
+    keys = [
+        expression(ABANDON, "m/48h/0h/0h/2h"),
+        expression(LEGAL, "m/48h/0h/1h/2h"),
+        expression(third, "m/48h/0h/2h/2h"),
+    ]
+    body = "wsh(sortedmulti(2," + ",".join(keys) + "))"
+    app.session.add_text(f"{body}#{checksum(body)}")
+    app._open_descriptor_qr()
+    preview = app.preview_qr_frame()
+    assert preview is not None
+    assert app._qr_strip is None
+    assert app.qr_strip_due()
+    app.qr_hint_until = 0
+    app.render()
+    strip = app._qr_strip
+    view_h = app.qr_scroll_box[3] - app.qr_scroll_box[1]
+    assert strip is not None
+    assert strip.height == app.qr_scroll_max + view_h
+    assert strip.height < app.qr_scroll_max * view_h
+    app.qr_scroll = 80
+    app.render()
+    assert app._qr_strip is strip
+    assert app.qr_scroll == 80
+
+
 def test_descriptor_text_indents_each_key_and_the_qr_stays_compact():
     from bigsigner.ui.app import _pretty_descriptor
 

@@ -64,6 +64,13 @@ These variables are for development. Do not set them on a device that holds real
 | `BIGSIGNER_INITIAL_SEED` | A 12, 18, or 24 word mnemonic loaded when the boot screen is left. Commas are treated as spaces. An invalid value is printed and shown on screen. |
 | `BIGSIGNER_INITIAL_WALLET_DESCRIPTOR` | A wallet descriptor loaded when the boot screen is left, after the initial seed. It is imported the same way as a descriptor from the Bitcoin Wallets page, including a BSMS 1.0 file. An invalid value is printed and shown on screen. |
 | `BIGSIGNER_CPU_SERIAL` | A string mixed into camera entropy. The default is `bigsigner-emulator`. |
+| `BIGSIGNER_TAP` | Path of a pipe the panel reads in addition to the touchscreen. Leave it unset on a device that holds real funds; a missing file does nothing. Create the pipe before the process starts. A line `x y` is a tap. `down x y`, `move x y`, and `up x y` are those phases, and they go through the same press handling as a finger. Each release is logged as `bigsigner: tap x,y N ms`. |
+
+```bash
+mkfifo /tmp/bigsigner-tap
+BIGSIGNER_TAP=/tmp/bigsigner-tap python -m bigsigner
+printf '240 726\n' > /tmp/bigsigner-tap
+```
 
 On a device whose HDMI framebuffer is `/dev/fb0`, the same command uses the panel and the touchscreen instead of the browser. BigSigner OS starts that device by running `src/main.py`. Syncing this checkout to a dev image and restarting uses that file.
 

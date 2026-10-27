@@ -6,6 +6,76 @@ from bigsigner.ui.canvas import HEADER, HEIGHT, MARGIN, MUTED, PAPER, TITLE_SIZE
 WORDS = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".split()
 
 
+def test_a_press_left_of_q_a_and_z_still_types_them():
+    app = App()
+    app.screen = "passphrase"
+    app.passphrase_mode = "lower"
+    app.render()
+    for label in ("q", "a", "z"):
+        hit = next(item for item in app.hits if item["label"] == label)
+        assert hit["box"][0] == 0
+        y = (hit["box"][1] + hit["box"][3]) // 2
+        app.tap(10, y)
+    assert app.passphrase_text == "qaz"
+
+
+def test_a_passphrase_letter_repaints_only_the_field():
+    app = App()
+    app.screen = "passphrase"
+    app.passphrase_mode = "lower"
+    app.render()
+    hit = next(item for item in app.hits if item["label"] == "q")
+    x = (hit["box"][0] + hit["box"][2]) // 2
+    y = (hit["box"][1] + hit["box"][3]) // 2
+    app.tap(x, y)
+    app.render()
+    assert app.passphrase_text == "q"
+    top, bottom = app.dirty
+    assert bottom - top < 120
+
+
+def test_a_vertical_twitch_on_the_keyboard_still_types():
+    app = App()
+    app.screen = "passphrase"
+    app.passphrase_mode = "lower"
+    app.render()
+    assert app.keyboard_top == 470
+    hit = next(item for item in app.hits if item["label"] == "q")
+    x = (hit["box"][0] + hit["box"][2]) // 2
+    y = (hit["box"][1] + hit["box"][3]) // 2
+    app.scroll_max["passphrase"] = 400
+    app.pointer_down(x, y)
+    app.pointer_move(x, y + 80)
+    app.pointer_up(x, y + 80)
+    assert app.passphrase_text == "q"
+    assert app.scroll.get("passphrase", 0) == 0
+
+
+def test_a_sideways_twitch_still_types_the_passphrase_key():
+    app = App()
+    app.screen = "passphrase"
+    app.passphrase_mode = "lower"
+    app.render()
+    hit = next(item for item in app.hits if item["label"] == "q")
+    x = (hit["box"][0] + hit["box"][2]) // 2
+    y = (hit["box"][1] + hit["box"][3]) // 2
+    app.pointer_down(x, y)
+    app.pointer_move(x + 40, y)
+    app.pointer_up(x + 40, y)
+    assert app.passphrase_text == "q"
+
+
+def test_a_press_just_left_of_the_key_still_types_a():
+    app = App()
+    app.screen = "seed"
+    app.render()
+    hit = next(item for item in app.hits if item["label"] == "a")
+    assert hit["box"][0] == 0
+    y = (hit["box"][1] + hit["box"][3]) // 2
+    app.tap(23, y)
+    assert app.word_prefix == "a"
+
+
 def test_seed_entry_starts_with_a_keyboard():
     app = App()
     app.screen = "seed"

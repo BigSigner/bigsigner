@@ -27,6 +27,29 @@ ROOT = Path(__file__).resolve().parents[1] / "resources"
 _FONTS: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}
 
 
+_LOGO: Image.Image | None = None
+_LOGO_FIT: dict[tuple[int, int], Image.Image] = {}
+
+
+def logo(max_width: int, max_height: int) -> Image.Image:
+    """The logo scaled to fit, decoded once.
+
+    The source is much larger than the panel. Opening and scaling it on every
+    paint costs about a second on a Pi Zero.
+    """
+    global _LOGO
+    key = (max_width, max_height)
+    fitted = _LOGO_FIT.get(key)
+    if fitted is not None:
+        return fitted
+    if _LOGO is None:
+        _LOGO = Image.open(ROOT / "logo.png").convert("RGBA")
+    fitted = _LOGO.copy()
+    fitted.thumbnail((max_width, max_height))
+    _LOGO_FIT[key] = fitted
+    return fitted
+
+
 def font(size: int, mono: bool = False) -> ImageFont.ImageFont:
     name = "DejaVuSansMono.ttf" if mono else "DejaVuSans.ttf"
     return _font(name, size)
@@ -72,16 +95,19 @@ def _break_token(draw: ImageDraw.ImageDraw, word: str, face, width: int) -> list
     if word == "" or draw.textlength(word, font=face) <= width:
         return [word]
     pieces = []
-    current = ""
-    for char in word:
-        trial = current + char
-        if current and draw.textlength(trial, font=face) > width:
-            pieces.append(current)
-            current = char
-        else:
-            current = trial
-    if current:
-        pieces.append(current)
+    rest = word
+    while rest:
+        # The longest prefix that fits, found by halving. Measuring one more
+        # character at a time costs a FreeType call per character of an xpub.
+        low, high = 1, len(rest)
+        while low < high:
+            middle = (low + high + 1) // 2
+            if draw.textlength(rest[:middle], font=face) <= width:
+                low = middle
+            else:
+                high = middle - 1
+        pieces.append(rest[:low])
+        rest = rest[low:]
     return pieces
 
 
