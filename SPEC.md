@@ -31,7 +31,7 @@ A multisig address uses the same `/<branch>/<index>` suffix on every key. Accoun
 
 Dice and coin entropy follow SeedSigner: SHA-256 of the ASCII string, first 16 bytes for 12 words. That matches Ian Coleman's Base 10 or Hex mode with the mnemonic length set to 12 or 24 words, and it does not match his Dice [1-6] mode. Generation is 12 or 24 words. An 18-word mnemonic can be imported when its checksum is valid. Camera entropy follows SeedSigner's chain, including the CPU serial and the time, so the same scene does not repeat.
 
-Passphrases follow BIP39, including Unicode and NFKD. The UI calls them passphrases. A warning appears when a passphrase is outside ASCII 32–126, is longer than 100 characters, or has a leading or trailing space. The spaces are kept.
+Passphrases follow BIP39, including Unicode and NFKD. The UI calls them passphrases. A warning appears below the text field when a passphrase is outside ASCII 32–126, is longer than 100 characters, or has a leading or trailing space. The spaces are kept.
 
 An `OP_RETURN` output produces a transaction-level warning, and its payload can be shown as text or hex. A non-zero `OP_RETURN` amount blocks signing. Replace-by-fee warning appears when any input sequence is `0xFFFFFFFE` or `0xFFFFFFFF`. Locktime sentences use the raw number with "greater than". Relative locktime says "at least" and cites BIP68. Message signatures are base64. The About screen shows the BigSigner logo, the version, and an Licenses list for the bundled libraries and assets.
 
@@ -52,11 +52,12 @@ For this app, we will use UI elements common in smartphone apps.
 - Back button - an icon in the top left corner that appears when the user is not on the main screen, and goes back to the previous screen.
 - Screen title - a title at the top of the screen, usually in the center.
 - Buttons are the brighter blue. Dark navy is only for a button that is currently deselected in a choice, such as the passphrase keyboard modes `abc`, `ABC`, `.?123`, and `#+=`: the chosen mode is brighter blue and the others are navy. A disabled button is grey, not navy.
+- Button labels use Title Case. Capitalize each word. These words stay lowercase unless they are the first or last word: a, an, the, and, or, to, of, for, with, from, in. A word that is written in capitals stays in capitals, such as OK, QR, and SD. A technical token keeps its own spelling, such as xpub in "xpub only". Product terms keep their spelling: SingleSig, MultiSig, Native-Segwit, Taproot. Native-Segwit is written with a hyphen. The passphrase keyboard modes stay the literal strings `abc`, `ABC`, `.?123`, and `#+=`.
 - Scrolling - after opening a menu or a submenu, a page could appear with content that is too long to fit on the screen. In this case, we need to detect scrolling and implement it. Scrolling should not include the Screen title.
 - Confirmation dialog - a dialog that appear with a title and a message, with no back button, and two buttons at the buttom: "Cancel" and "Confirm". Texts may vary in some cases, and the Confirm button could be blue in some cases and red in others (font color should be white in the Confirm button).
 - Warning dialog - similar to the confirmation dialog, but with one button.
 - Keyboard - a virtual keyboard that appears when the user needs to enter text. The edited text should appear at the top of the screen and the keyboard should appear at the bottom, with option to click at different places in the text to move the cursor. The keyboard should have modes like Smartphone keyboards, to switch between uppercase/lowercase/numbers/symbols. The numbers mode is labeled `.?123` because it also contains the common punctuation (`- _ . , ' "`). `#+=` holds the remaining symbols.
-- Text editing dialog - a dialog that appears when the user needs to edit texts (labels, descriptions, etc.). It should appear full screen, with the edited text at the top and the keyboard at the bottom. Users should be able to click at different places in the text to move the cursor. Some text editing dialogs may be for multiline texts and some for single-line texts (which will break visually when the text is too long to fit on the screen). If the text takes many lines, scrolling should be implemented as well. There should also be Cancel & Ok buttons at the bottom (above the keyboard) that will exit the dialog.
+- Text editing dialog - a dialog that appears when the user needs to edit texts (labels, descriptions, etc.). It should appear full screen, with the edited text at the top and the keyboard at the bottom. Users should be able to click at different places in the text to move the cursor. Some text editing dialogs may be for multiline texts and some for single-line texts (which will break visually when the text is too long to fit on the screen). If the text takes many lines, scrolling should be implemented as well. There should also be Cancel & OK buttons at the bottom (above the keyboard) that will exit the dialog.
 - A circular plus button, usually in the bottom right corner of the screen, that hovers over the content and does not scroll with it.
 - Dropdown menu - a text element with a chevron icon that opens a dropdown menu. The dropdown menu may be scrollable if it's above a certain height. It could also be infinite scrolling, with a function that loads the item at index X when the user scrolls enough to reach it. Click the item will select it as the value of the text element (each item represents a key-value pair - the user sees the value, and the key is used to identify the selected item).
 - Read/Write SD Card dialogs - should allow to browse the SD Card file tree (clicking a directory will open it, non-root directories will show a ".." item at the top to go up) and select a file to read from or write to. In some cases write cases, the user should be able to enter a filename and create a new file.
@@ -155,7 +156,7 @@ If the default account indexes of the new wallet are different, there are two ca
 
 # UX
 
-After booting with the BigSigner logo (showing the version and the subtitle "Fork of SeedSigner"), the user should be presented with a warning reccomending to remove the SD-card, and after the user confirms theys should see the Keys screen.
+After booting with the BigSigner logo (showing the version and the subtitle "Fork of SeedSigner"), the user should be presented with a warning reccomending to remove the SD-card. That screen shows the logo with the version in small text under it. After the user confirms theys should see the Keys screen.
 
 The Keys screen, Wallets screen, Settings screen and About screen should be accessible from the sidebar menu (which should be accessible from the hamburger menu on the top left corner of those screens).
 
@@ -168,10 +169,10 @@ This will also be the default screen when the app is opened.
 When no keys are present, the screen should show a message "No keys found. Press the plus button to add a new key."
 
 The plus button (hovering over the bottom right corner of the screen) will open a menu with the options to add a new key, similar to SeedSigner:
-- Scan QR code
-- Manual entry
-- Load from SD card
-- Generate new seed
+- Scan QR Code
+- Manual Entry
+- Load from SD Card
+- Generate New Seed
 
 When adding a new key, we should first check if the key is already present - and warn the user if it is.
 
@@ -181,16 +182,16 @@ After adding a new key, we should go to the Key screen for the new key.
 
 When there are keys present, the screen should show them grouped by the fingerprint in the screen content area (which will be scrollable in case it doesn't fit on the screen).
 
-Seed cards come first, under a "Seeds" label. Key-expression cards follow, under an "External Keys" label. A label is shown only when that section has a card. Every new seed or watch-only key takes the next number from a global counter. Within a section, cards are ordered by that number, using a card's earliest key when it holds more than one. Lines on an external-key card follow the same order.
+Seed cards come first, under a "Seeds" label. External keys follow in two sections, "SingleSig External Keys" and "MultiSig External Keys". A label is shown only when that section has a card. Each external key is its own card, including two keys that share a fingerprint. Seed cards are ordered by `key_counter`, using a card's earliest key. External cards in each section are ordered by fingerprint nickname, then Native-Segwit before Taproot, then account number.
 
-The "Seeds" label has a key icon before it. The "External Keys" label has an eye icon before it. Each card shows the fingerprint name on two centered lines, broken after the second word:
+The "Seeds" label has a key icon before it. Each external section has an eye icon before it. Each card shows the fingerprint name on two centered lines, broken after the second word:
 
 ```
 Condemned Chocolate
 Chimpanzee DD
 ```
 
-Below the name is a fingerprint icon followed by the fingerprint hex. A seed card adds one more line under the fingerprint: a seedling icon, then the seed's first word followed by "...". If that seed has a passphrase, the line continues with " + Passphrase" and the passphrase's number, for example "Abandon... + Passphrase1". A key-expression card adds two lines under the fingerprint hex: the script and SingleSig or MultiSig, then the account, for example "Native-Segwit MultiSig" and "Account #0".
+Below the name is a fingerprint icon followed by the fingerprint hex. A seed card adds one more line under the fingerprint: a seedling icon, then the seed's first word followed by "...". If that seed has a passphrase, the line continues with " + Passphrase" and the passphrase's number, for example "Abandon... + Passphrase1". An external-key card adds two lines under the fingerprint hex: Native-Segwit or Taproot, then the account, for example "Native-Segwit" and "Account #0". The section title already says whether the key is single-sig or multisig.
 
 If the fingerprint has a seed or seed + passphrase in its list of keys (in this case the list in this case will only contain one key), we should show in a new row a symbol of a key followed by a small title "Generated from a 12/18/24 words seed".
 In the case of a seed + passphrase, it should say "Generated from a 12/18/24 words seed + passphrase" and that passphrase's number, for example "Generated from a 12 words seed + passphrase1".
@@ -201,7 +202,7 @@ If some of the keys are SingleSig Xpubs, we should show in a new row a symbol of
 If some of the keys are MultiSig Xpubs, we should show in a new row a symbol of an eye (read only) followed by a small title "MultiSig Xpubs", and below it a list of the MultiSig Xpub keys displayed as:
 "<kind> Account <account>: <derivation path prefix>", e.g. "Native-Segwit Account 3: m/48h/0h/3h/2h".
 
-This should be followed by the xpub's 12 first letters followed by "...", e.g. "xpub6ERApfZw...".
+This should be followed by the xpub's first 19 letters followed by "...", e.g. "xpub6ERApfZw...".
 
 Clicking a key or creating a new key will open the Key screen.
 
@@ -216,29 +217,29 @@ For xpub key expressions, the screen will show the key's:
 
 The fingerprint name is the calculated adjective-color-animal-hex name. It is not editable. On the key screen it is broken after the second word. A seed has a key icon on the left of that name, and an external key has an eye icon, the same size as the fingerprint icon below it. The name lines start at the same left edge as "Fingerprint: ". The screen scrolls when the sentences and buttons do not fit under the title.
 
-Xpub key expressions should also show the account, the derivation path (which includes the account), and the xpub. Type, account, the path, and the extended public key use the same size as the fingerprint line. "Derivation Path:" is its own line, and the path is centered on the next line. "Extended Public Key:" is its own line, and the 12-character preview is centered on the next line. Show Full Details comes next. Export to SD Card follows it. Delete Key is the next button after that, in the list, not pinned to the bottom.
+Xpub key expressions should also show the account, the derivation path (which includes the account), and the xpub. Type, account, the path, and the extended public key use the same size as the fingerprint line. "Derivation Path:" is its own line, and the path is centered on the next line. "Extended Public Key:" is its own line, and the 19-character preview is centered on the next line. Show Full Details comes next. Export to SD Card follows it. Delete Key is the next button after that, in the list, not pinned to the bottom.
 Some xpub keys may have a zpub/Zpub presentation (Depending on the derivation path prefix, for exmaple if it begins with m/84h/0h/<account>h and we know that it's a Native-Segwit). Show Full Details shows a QR code of the key, followed by the text, and its format switcher offers Key Expression, the canonical extended key, and that SLIP-132 form when the path has one.
-Export to SD Card opens a screen with those same choices. Key Expression writes `[{fingerprint}/{derivation path prefix}]{xpub}/<0;1>/*`. The other choices write that key alone, such as the xpub or the zpub. The next screen lists the SD card. Choosing a file asks to replace it. New file asks for a name and then writes that file.
+Export to SD Card opens a screen with those same choices. Key Expression writes `[{fingerprint}/{derivation path prefix}]{xpub}/<0;1>/*`. The other choices write that key alone, such as the xpub or the zpub. The next screen lists the SD card. Choosing a file asks to replace it. New File asks for a name and then writes that file. A name wider than the field scrolls sideways inside it. The passphrase field scrolls the same way.
 
 Seed keys should have a button to show the seed, and a button to export the seed to the SD Card.
 The button to show the seed should first show a warning message for the user to verify that nobody is peeking over their shoulder.
-Showing the seed opens one screen. The words are in one column, in the same size used for entering seed words. The format switcher stays at the bottom. When the cards are taller than the space above it, as they are for 12 and 24 words, that card area scrolls and the title bar stays put. At the bottom, `<` and `>` switch the format, and the current format name is between them. The formats, in order, are Words, Text QR (the seed words in uppercase, separated by spaces), Compact SeedQR, and Standard SeedQR. After the last format, `>` returns to Words. On Words, `<` goes to Standard SeedQR. Each QR format has a Zoom In button that opens a screen titled Zoomed QR. Its back button returns to the QR. The view is a 9×9 module grid on the right side of the screen, 46×46 pixels per module. On the Waveshare 4-inch 480×800 panel the pixels are 0.108 mm square, so each module is 4.97 mm × 4.97 mm, the nearest whole-pixel size to 5 mm. The row number is shown to the left of each row, and the column number above each column. Both count from 1 at the top-left module of the whole code, including its quiet zone, so a scrolled window still matches the same squares on a 5 mm school grid. The numbers use a small monospace font sized for two digits, and a smaller size when a number has three digits. Direction buttons sit in a 3×3 pad at the bottom: Up in the top center, Left and Right in the middle row, and Down in the bottom center. One module of empty space separates that pad from the grid. A direction button is grey when the view is already at that edge.
+Showing the seed opens one screen. The words are in one column, in the same size used for entering seed words. The format switcher stays at the bottom. When the cards are taller than the space above it, as they are for 12 and 24 words, that card area scrolls and the title bar stays put. At the bottom, `<` and `>` switch the format, and the current format name is between them. The formats, in order, are Words, Compact SeedQR, and Text QR (the seed words in uppercase, separated by spaces). After the last format, `>` returns to Words. On Words, `<` goes to Text QR. Each QR format has a Zoom In button that opens a screen titled Zoomed QR. Its back button returns to the QR. The view is a 9×9 module grid on the right side of the screen, 46×46 pixels per module. On the Waveshare 4-inch 480×800 panel the pixels are 0.108 mm square, so each module is 4.97 mm × 4.97 mm, the nearest whole-pixel size to 5 mm. The row number is shown to the left of each row, and the column number above each column. Both count from 1 at the top-left module of the whole code, including its quiet zone, so a scrolled window still matches the same squares on a 5 mm school grid. The numbers use a small monospace font sized for two digits, and a smaller size when a number has three digits. Direction buttons sit in a 3×3 pad at the bottom: Up in the top center, Left and Right in the middle row, and Down in the bottom center. One module of empty space separates that pad from the grid. A direction button is grey when the view is already at that edge.
 
 If there is a passphrase, a button should allow to show it (again, with a warning message for the user to verify that nobody is peeking over their shoulder). No need to export the passphrase. The passphrase screen wraps the text inside the page margins. A run of characters with no spaces still breaks onto the next line. When the wrapped lines are taller than the screen, the page scrolls and the title bar stays put.
 
 If there is no passphrase, there should be a label saying that no passphrase is used in the seed.
 
-There should be a button to create another seed with a different passphrase (if there is no passphrase set, it should say something like "Create a copy of this seed with passphrase").
+There should be a button to create another seed with a different passphrase. With no passphrase set, the button is Create a Copy of This Seed with a Passphrase. With a passphrase set, it is Create a Copy of This Seed with a Different Passphrase.
 
-When the key a SingleSig Xpub key expression, there should be a button to create/go-to-existing wallet screen (mentioning the supported wallet script-types). In the future there could be key expressions that support multiple script-types, and then we should show a button for each script-type.
-When it's a seed, or a seed + passphrase, there should be three buttons: "Derive a Native-Segwit SingleSig key", "Derive a Native-Segwit MultiSig key", and "Derive a Taproot SingleSig key". Each button breaks after "Derive a", and again after "Native-Segwit" or "Taproot". Each opens a Derive Key screen for that script. The screen derives an extended public key from the seed at one account. It does not store another key. The first control is an account selector: minus on the left, plus on the right, and the account index in an editable field in the middle. Minus does nothing at account 0. Tapping the field opens the account keypad, and Use this account returns with that index. The rest of the screen follows the External Key screen: the fingerprint name, the fingerprint, the type, the derivation path on its own centered line, and a 20-character extended-public-key preview on its own centered line. The preview is long enough that changing the account changes it. There is no Delete button. Show Full Details shows the derived key expression, the same way an external key's details do. Export to SD Card is the next button. It uses the account selected on this screen and then the same format choice and SD card file choice as an external key. A single-signature derivation also has the create-or-open wallet button. Creating a wallet uses the account selected on this screen and then opens the Wallet screen. If that single-signature wallet already exists, the button opens it and leaves its account unchanged. A multisig derivation has no wallet button, because a multisig wallet is assembled from keys rather than from one derived key.
+When the key is a single-signature key expression, the button is Create a Native-Segwit SingleSig Wallet or Create a Taproot SingleSig Wallet. If that wallet is already loaded, it is Go to Native-Segwit SingleSig Wallet or Go to Taproot SingleSig Wallet. Native-Segwit stays on one line. In the future there could be key expressions that support multiple script-types, and then we should show a button for each script-type.
+When it's a seed, or a seed + passphrase, there should be three buttons: "Derive a Native-Segwit SingleSig Key", "Derive a Native-Segwit MultiSig Key", and "Derive a Taproot SingleSig Key". Each button breaks after "Derive a", and again after "Native-Segwit" or "Taproot". Each opens a Derive Key screen for that script. The screen derives an extended public key from the seed at one account. It does not store another key. The first control is an account selector: minus on the left, plus on the right, and the account index in an editable field in the middle. Minus does nothing at account 0. Tapping the field opens the account keypad, and Use This Account returns with that index. The rest of the screen follows the External Key screen: the fingerprint name, the fingerprint, the type, the derivation path on its own centered line, and a 20-character extended-public-key preview on its own centered line. The preview is long enough that changing the account changes it. There is no Delete button. Show Full Details shows the derived key expression, the same way an external key's details do. Export to SD Card is the next button. It uses the account selected on this screen and then the same format choice and SD card file choice as an external key. A single-signature derivation also has the create-or-open wallet button. Creating a wallet uses the account selected on this screen and then opens the Wallet screen. If that single-signature wallet already exists, the button opens it and leaves its account unchanged. Back from that wallet returns to Bitcoin Wallets. The key screen and the Derive Key screen are not kept on the back stack. The same back stack is used when the button on an external key creates or opens its wallet. A multisig derivation has no wallet button, because a multisig wallet is assembled from keys rather than from one derived key.
 
 And finally there should be a red Delete Key button that should warn the user before deleting the key.
 Key deletion might cause some wallets to become unusable - because one of their key expressions will no longer be derivable for any account index. For example, if the key expression in a wallet's descriptor depends on a fingerprint with a seed and the seed is deleted, or if it depends on a fingerprint which has multiple Xpub key expressions and we delete all of them.
 If the key deletion would make a wallet unusable, we should warn the user that the wallet will also be deleted. When exactly one wallet is named, the warning uses its short name in quotes, for example Wallet "Grateful Ivory Impala 0A Native-Segwit".
 If a wallet will simply be affected by the key deletion (i.e. some account index will no longer be derivable), we warn about that as well, again quoting that wallet's short name when only one wallet is affected.
 
-### Scan QR code screen (for seed or xpub key expression)
+### Scan QR Code screen (for seed or xpub key expression)
 
 Research the SeedSigner project for the different formats. This should support both a single QR code and a sequence of QR codes such as BBQr, and a QR code that contains a compressed seed.
 
@@ -248,8 +249,8 @@ It is also allowed to be a wallet descriptor: a singlesig Native-Segwit or Tapro
 Notice that the wallet script-type (`wpkh`, `tr`, or `wsh(sortedmulti)`) must match the expected derivation path (`m/84h/0h/<account>h`, `m/86h/0h/<account>h`, or `m/48h/.../2h`). A descriptor of a kind this version does not support opens an error screen. That screen does not tell the user to go to the Bitcoin Wallets page.
 Notice that the data can use the "'" format instead of the "h" format for the derivation path, "0" instead of "<0;1>", and the checksum should be verified whenever we scan a wallet descriptor.
 Research online for different formats used by different wallets.
-A supported singlesig descriptor opens a screen that says this is a singlesig wallet descriptor and asks whether to load both the wallet and the key, or only the key. Both Wallet And Key continues as if the same content had been loaded with the plus button on Bitcoin Wallets. Only The Key continues with that descriptor's key expression.
-A supported multisig descriptor opens a screen that says this is a multisig wallet descriptor and asks whether to load the wallet and all the keys, or only a specific key. Both Wallet And All Keys continues as if the same content had been loaded with the plus button on Bitcoin Wallets. Below that button, after some space, a menu lists the key expressions in the same order as the descriptor. Each entry is the fingerprint in hex, a space, the first 10 characters of the extended public key, and `...`. Load Selected Key continues with the selected key expression.
+A supported singlesig descriptor opens a screen that says this is a singlesig wallet descriptor and asks whether to load both the wallet and the key, or only the key. Both Wallet and Key continues as if the same content had been loaded with the plus button on Bitcoin Wallets. Only the Key continues with that descriptor's key expression.
+A supported multisig descriptor opens a screen that says this is a multisig wallet descriptor and asks whether to load the wallet and all the keys, or only a specific key. Load Both Wallet and All Keys continues as if the same content had been loaded with the plus button on Bitcoin Wallets. Below that button, after a larger gap, a menu lists the key expressions in the same order as the descriptor. Each entry is the fingerprint in hex, a space, the first 10 characters of the extended public key, and `...`. Load Only Selected Key continues with the selected key expression.
 
 A bare key expression (`[fingerprint/path]xpub...`, including a `zpub`, `Zpub`, `vpub`, or `Vpub` spelling) is not stored immediately. BigSigner first checks:
 
@@ -259,7 +260,7 @@ A bare key expression (`[fingerprint/path]xpub...`, including a `zpub`, `Zpub`, 
 
 If one of those checks fails after a QR scan or an SD card file, BigSigner opens a screen titled Error loading key. The message is red. OK at the bottom leaves the flow and returns to Bitcoin Keys. A descriptor import from Bitcoin Wallets uses the same kind of screen, titled Error loading wallet, and OK returns to Bitcoin Wallets.
 
-When none of those apply, BigSigner opens Load External Key. The first screen has a centered red subtitle, Warning. A single-signature key says you are about to load an external key for a singlesig wallet, and that the wallet owner must verify the extended public key on their hardware wallet before funds are sent. A multisig key says you are about to load an external key for a multisig wallet, and that the co-signer must verify the extended public key (xpub) on their hardware wallet. Show Extended Public Key Details at the bottom of that screen opens a second Load External Key screen. It shows "Verify these details are backed up:" in a slightly larger size, the type, the account (with "(default)" when the account is 0, or the account number and "- non-default" in red otherwise), the derivation path starting with `m`, and "Verify this Extended Public Key on the other hardware wallet:" in that same larger size. Below that, a grey Format: label sits above a menu. The menu offers the canonical `xpub` or `tpub`, the SLIP-132 form when this path has one (`zpub`, `Zpub`, `vpub`, or `Vpub`), and the full key expression. The extended key or expression is shown below the menu in the same size used for the extended key on the External Key screen. Continue is at the bottom of that scroll. Only that second Continue stores the key, and then BigSigner opens its External Key screen. Back from the details returns to the warning. Back from the warning leaves the key unloaded.
+When none of those apply, BigSigner opens Load External Key. The first screen has a centered red subtitle, Warning. A single-signature key says you are about to load an external key for a singlesig wallet, and that the wallet owner must verify the extended public key on their hardware wallet before funds are sent. A multisig key says you are about to load an external key for a multisig wallet, and that the co-signer must verify the extended public key (xpub) on their hardware wallet. Show Extended Public Key Details at the bottom of that screen opens a second Load External Key screen. Its subtitle, Extended Public Key Details, is centered. While a wallet import is showing several new keys, that subtitle ends with the key's place in that sequence, such as 1/3. It shows "Verify this Extended Public Key on the other hardware wallet:" in that same larger size. A grey Format: label sits above a menu. The menu offers the canonical `xpub` or `tpub`, the SLIP-132 form when this path has one (`zpub`, `Zpub`, `vpub`, or `Vpub`), and the full key expression. The extended key or expression is shown below the menu in the same size used for the extended key on the External Key screen. Then it shows "Verify these details are backed up:" in that same larger size, the type, the account (with "(default)" when the account is 0, or the account number and "- non-default" in red otherwise), and the derivation path starting with `m`. The Type:, Account:, and Derivation Path: labels are grey, and their values stay in the body color. Continue is at the bottom of that scroll. Only that second Continue stores the key, and then BigSigner opens its External Key screen. Back from the details returns to the warning. Back from the warning leaves the key unloaded.
 
 If the data includes only an xpub without a fingerprint or derivation path (i.e. it's not a full key expression) - the user should be warned and then let them try again.
 
@@ -267,11 +268,11 @@ QR code scanning functionality will be needed in multiple places. I suggest to i
 
 While the scan or camera-entropy screen is open, the Raspberry Pi panel opens the camera and draws the live picture in the viewfinder on the screen. QR codes are read from those frames when zbar is installed. The emulator still shows the browser camera above the panel instead of inside the viewfinder.
 
-### Manual entry screen
+### Manual Entry screen
 
 Via a text-editing dialog.
 User should first choose if they want to enter a seed or a SingleSig/MultiSig Xpub key expression.
-If the user selects a seed, use the list of legit seed words from the BIP39 standard, and warn the user if they enter an invalid word (don't allow them the proceed to the next word or approve the dialog). The seed length is a dropdown of 12, 18, and 24 words. Words already entered are listed in one column.
+If the user selects a seed, use the list of legit seed words from the BIP39 standard, and warn the user if they enter an invalid word (don't allow them the proceed to the next word or approve the dialog). The seed length is a dropdown of 12, 18, and 24 words. 24 words is selected when the screen opens. Words already entered are listed in one column.
 If there are less than 8 ways to complete the word prefix, instead of showing the keyboard show the 8 words in two columns of 4 words each. and let the user select.
 Specter-DIY has a nice UX for this (although somewhat different from what I just described). Learn from it to get a good UX for this.
 Notice that the last word must be a checksum word, and the user should not be allowed to continue with an invalid word even if it is in the BIP39 standard.
@@ -280,19 +281,19 @@ Switching between 12, 18, and 24 words keeps the words already entered. Choosing
 
 If the user selects a SingleSig/MultiSig Xpub key expression, use the same mechanism that we mentioned in the QR code scanning section - except that in this case we don't expect the content to be a seed (or a compressed QR code of a seed).
 
-### Load from SD card screen
+### Load from SD Card screen
 
-Similar to QR code scanning, but simply read a text file from the SD card, trim spaces/newlines, and use the content as seed words, a key expression, or a wallet descriptor. A supported wallet descriptor uses the same choice screen as a descriptor scanned from Bitcoin Keys. The screen lists the card, including subfolders. A folder opens when tapped, and `..` goes up. The emulator treats the folder in `BIGSIGNER_SDCARD_PATH` as the card.
+Similar to QR code scanning, but simply read a text file from the SD card, trim spaces/newlines, and use the content as seed words, a key expression, or a wallet descriptor. A supported wallet descriptor uses the same choice screen as a descriptor scanned from Bitcoin Keys. The screen lists the card, including subfolders. A file or folder name that does not fit on one line wraps at the character that would overflow, for up to three lines. A name that still does not fit ends with `...` on the third line. A folder opens when tapped, and `..` goes up. The emulator treats the folder in `BIGSIGNER_SDCARD_PATH` as the card.
 Similar to QR code scanning, this mechanism should be generic as we may need the idea of loading a file from the SD card in multiple places - for example reading a PSBT from the SD card. The mechanism should first return the data and type, and then depending on the functionality verify the data type and warn the user if it's not one of the expected types.
 If the content type doesn't match, similar warning should appear (mentioning the expected type and the actual type).
 
 Also research for other binary/textual file formats that might be used to store Bitcoin seeds/key-expressions/wallet-descriptors/PSBTs/etc., and support them if possible. e.g. bsms files.
 
-### Generate new seed screen
+### Generate New Seed screen
 
 This screen should explain the user that to create a random seed, they need a safe source of randomness, and that BigSigner does not use a TRNG chip.
 
-Then the user should be able to select the seed length (12/18/24 words) that they want, and the source of randomness: dice/coins/camera.
+Then the user should be able to select the seed length (12/18/24 words) that they want, and the source of randomness: dice/coins/camera. 24 words is selected when the screen opens.
 
 Follow the SeedSigner/Specter-DIY projects for how many dice/coins are required for each length of seed that the user wants (12/18/24 words), and use their exact standardized algorithms.
 A sequence of dice/coins/camera entered on SeedSigner/Specter-DIY should produce the same seed as a sequence of dice/coins/camera entered on BigSigner.
@@ -304,11 +305,12 @@ Wallets can be created from a SingleSig Xpub or a Seed/Seed+Passphrase screen, a
 
 They could be also created from a hovering plus button on the bottom right corner of the screen of this screen. Clicking the button should open a menu of:
 
-- Scan desciptor QR code
-- Load descriptor from SD card
-- Select from existing multsig keys
+- Scan Descriptor QR Code
+- Load Descriptor from SD Card
+- Select from Existing SingleSig Key
+- Select from Existing MultiSig Keys
 
-Scan descriptor QR code and load descriptor from SD card should both expect a descriptor that belongs to one of the following formats:
+Scan Descriptor QR Code and Load Descriptor from SD Card should both expect a descriptor that belongs to one of the following formats:
 - SingleSig Native-Segwit wallet descriptor: `wpkh([{fingerprint}/84h/0h/{account}h]{xpub}/<0;1>/*)#{checksum}`
 - SingleSig Taproot wallet descriptor: `tr([{fingerprint}/86h/0h/0h]{xpub1}/<0;1>/*)#{checksum}`
 - Multisig wallet descriptor: `wsh(sortedmulti({m},[{fingerprint1}/48h/0h/{account1}h/2h]{xpub1}/<0;1>/*,[{fingerprint2}/48h/0h/{account2}h/2h]{xpub2}/<0;1>/*, ...))#{checksum}`
@@ -325,44 +327,47 @@ A wallet's identity ignores descriptor key order, checksums, account indexes, ex
 
 A wallet's short name is `<fingerprint name> Native-Segwit` or `<fingerprint name> Taproot` for a single-signature wallet. For multisig it is `<m>-of-<n> <fingerprint hex>,<fingerprint hex>,...` in the wallet's own key order.
 
-The descriptor that creates a multisig wallet sets that key order. The Wallet screen lists the keys in the saved order. A later descriptor does not reorder them. Messages that name account indexes as (X,Y,Z) use the order saved on the existing wallet. A descriptor that repeats one fingerprint is refused, because a wallet keeps one account index per fingerprint.
+The descriptor that creates a multisig wallet sets that key order. When this device creates the wallet from Select from Existing MultiSig Keys, the keys are ordered by the compressed public key of each key's first receive address, compared as raw bytes. That is the order Sparrow uses for the receive descriptor. A descriptor loaded from elsewhere keeps the order written in that descriptor. The Wallet screen lists the keys in the saved order. A later descriptor does not reorder them. Messages that name account indexes as (X,Y,Z) use the order saved on the existing wallet. A descriptor that repeats one fingerprint is refused, because a wallet keeps one account index per fingerprint.
 
-Scan descriptor QR code and Load descriptor from SD card follow one flow. A seed, a transaction, or a bare key expression is an error that names what it is and says it is not a wallet descriptor. An unsupported descriptor is an error that says it is not supported. OK returns to Bitcoin Wallets.
+Scan Descriptor QR Code and Load Descriptor from SD Card follow one flow. A seed, a transaction, or a bare key expression is an error that names what it is and says it is not a wallet descriptor. An unsupported descriptor is an error that says it is not supported. OK returns to Bitcoin Wallets.
 
-Each key expression is checked the way a lone key expression is checked. If it names a loaded seed but the derived extended key differs, the suspicious-key error is shown and nothing is stored. Before the first new key, one warning explains that the co-signers, or the singlesig wallet owner, must verify the extended public key. Its button is Show Extended Public Key Details. Each new key then has an Extended Public Key Details screen. Later keys in the same multisig skip the warning and open that details screen directly. Keys already loaded, or derivable from a loaded seed, are not shown.
+A descriptor may arrive as the text itself, as a crypto-output UR, or as a BBQr of that text. A UR is one code, or a fountain-coded sequence of codes. A BBQr is one code, or a numbered sequence, in hex, base32, or zlib. The camera stays on the scan screen until every part has been read, and the line under the viewfinder counts the parts. An SD card file is decoded the same way when the file is one complete code. One part of a sequence in a file asks for the camera. The same decoding applies when Bitcoin Keys scans a QR code.
 
-If this identity is already a wallet, the screen says Wallet "<short name>" was already loaded. With no new keys, it says this descriptor points to account-index X (default) when X is 0, or account-index X (non-default) otherwise. Several keys are account-indexes (X (default),Y (non-default)) in the wallet's key order. With new keys, those keys are added and the screen says the wallet was already loaded and that those account indexes can now be used, with the same note on each index. Continue opens the wallet and sets the accounts from the descriptor. If the wallet is new, it is added and opened. Back from that wallet returns to Bitcoin Wallets.
+Each key expression is checked the way a lone key expression is checked. If it names a loaded seed but the derived extended key differs, the suspicious-key error is shown and nothing is stored. A singlesig descriptor warns that the wallet owner must verify the extended public key. Its screen is titled Load External Key and its button is Show Extended Public Key Details. A multisig descriptor opens Load MultiSig Wallet when the wallet is not loaded yet, even when every key is already loaded or can be derived from a loaded seed. If that wallet is already loaded and every key is known, this screen is skipped. When some of its keys are already known, a line above Warning says how many of the wallet's keys were already loaded. When any keys are still new, Warning says you are about to load that many external keys for a multisig wallet, and the button is Show Extended Public Key Details. Each new key then has an Extended Public Key Details screen. The subtitle includes that key's place among the new keys, such as 2/3. Later keys in the same multisig skip the warning and open that details screen directly. Keys already loaded, or derivable from a loaded seed, are not shown. When every key is already known, there is no Warning and the button is Continue.
+
+If this identity is already a wallet, the screen says Wallet "<short name>" was already loaded. With no new keys, it says this descriptor points to account-index X (default) when X is 0, or account-index X (non-default) otherwise. Several keys are account-indexes X (default),Y (non-default) in the wallet's key order. With new keys, those keys are added and the screen says the wallet was already loaded and that you can now also use those account indexes, with the same note on each index. Go to Wallet opens the wallet and sets the accounts from the descriptor. If the wallet is new, it is added and opened. Back from that wallet returns to Bitcoin Wallets.
 
 After adding a wallet or clicking a wallet in the list, we should switch to it.
 
-Each card on Bitcoin Wallets shows the script first: Native Segwit, Taproot, or `<m>-of-<n>` followed by that kind. Under the title, a fingerprint icon introduces the fingerprints in the wallet's key order. They are monospace, separated by commas with no spaces. The line breaks after a comma when the next fingerprint does not fit. Two fingerprints fit on one line at this size. Three do not, so the third fingerprint starts the next line, and the comma stays at the end of the line before it. Under the fingerprints, each fingerprint name is two lines, broken after the second word. A key icon is on the left when that fingerprint's seed is loaded. An eye icon is on the left when the fingerprint is only an external key.
+Each card on Bitcoin Wallets shows the script first: Native-Segwit, Taproot, or `<m>-of-<n>` followed by that kind. Under the title, each fingerprint name is two lines, broken after the second word. A key icon is on the left when that fingerprint's seed is loaded. An eye icon is on the left when the fingerprint is only an external key. Under each name, that fingerprint's hex is on its own line. The fingerprint icon is indented so it sits under the start of the name text, and the hex follows it. Each later key has extra space above its name. A multisig card does not show one shared row of every fingerprint.
 
-In the plus button menu, "Select existing keys for a multisig wallet" shuold do the following:
+In the plus button menu, "Select from Existing SingleSig Key" opens a screen titled SingleSig Key. A menu chooses Native-Segwit or Taproot. The list shows seeds and single-signature keys of that script, one row per fingerprint, sorted by fingerprint nickname. A multisig key is not listed. Each row shows a grey key icon and Seed, or a grey eye icon and External Key, above the fingerprint name. Several accounts of one external key read External Keys (N accounts). That line uses the fingerprint row's size. The row also shows the fingerprint name and the fingerprint, with a checkbox, and the fingerprint line begins with "Fingerprint: ". One key can be selected. Create Wallet makes that singlesig wallet and opens it. A seed uses account 0. An external key uses its lowest account for that script. If that wallet is already loaded, the button is Go to Wallet and opens it.
+
+In the plus button menu, "Select from Existing MultiSig Keys" shuold do the following:
 - The screen is titled Native-Segwit Multisig. Let the user choose "m" (for the m-of-n).
-- List seeds and native-segwit multisig key expressions. A single-signature key is not listed, because it cannot be a cosigner. Show the fingerprint nicknames and fingerprints, with a checkbox next to each. The fingerprint line has a fingerprint icon and begins with "Fingerprint: ". User needs to select at least m keys.
-- Create the wallet from the wallet descriptor range of the selected fingerprints.
+- List seeds and native-segwit multisig key expressions, sorted by fingerprint nickname. A single-signature key is not listed, because it cannot be a cosigner. Above the fingerprint name, a seed shows a grey key icon and Seed. An external key shows a grey eye icon and External Key, or External Keys (N accounts) when that fingerprint has several accounts. That line uses the fingerprint row's size. Show the fingerprint nicknames and fingerprints, with a checkbox next to each. The fingerprint line has a fingerprint icon and begins with "Fingerprint: ". User needs to select at least m keys.
+- Create the wallet from the wallet descriptor range of the selected fingerprints. The descriptor lists those keys in the byte order of their first receive public keys. If that threshold and those keys are already a wallet, the button is Go to Wallet and opens it.
 
 ### Wallet screen
 
-Show all the information about the wallet. For each key, in order:
+Show all the information about the wallet. The type is one line at the top: "Type: " followed by Native-Segwit, Taproot, or `<m>-of-<n>` and that kind. For each key, in order:
 - The fingerprint name, broken after the second word, with a key icon for a seed or an eye icon for an external key
 - A fingerprint icon, then "Fingerprint: " and the fingerprint hex
-- "Type: " followed by Native-Segwit, Taproot, or `<m>-of-<n>` and that kind
 - An Account control
 
-The fingerprint nickname is shown without the account index. If the seed or seed+passphrase is loaded, the account control is a text field: tapping it opens a number keyboard, and any account index can be entered. That keyboard does not repeat the fingerprint name. If only xpubs are loaded and more than one account is available, it is a dropdown of those account indexes. Account 0 is labeled `0 (default)` in the field and in the menu. When only one account is available, the line reads `Account: N`, with ` (default)` after 0, and there is no dropdown. In a multisig wallet each key has its own control.
+The fingerprint nickname is shown without the account index. If the seed or seed+passphrase is loaded, the account control is a text field: tapping it opens a number keyboard, and any account index can be entered. That keyboard does not repeat the fingerprint name. If only xpubs are loaded and more than one account is available, it is a dropdown of those account indexes. Account 0 is labeled `0 (default)` in the field and in the menu. When only one account is available, the line reads `Account: N`, with ` (default)` after 0, and there is no dropdown. In a multisig wallet each key has its own control. A singlesig account change lasts while that wallet screen is open. Back from the wallet returns the account to the index it had when the wallet was opened.
 
-Below we should show the wallet descriptor (of the selected accounts) with xpubs replaced by 12 first letters followed by "...". Clicking that should show the full wallet descriptor, prettified (newlines and indentation after brackets), and below show it in a QR code. An export to SD card button should be avialable. This screen could be scrollable.
+Below we should show the wallet descriptor (of the selected accounts) with xpubs replaced by 12 first letters followed by "...". Clicking that should show the full wallet descriptor, prettified (newlines and indentation after brackets), and below show it in a QR code. This screen could be scrollable.
 
-Then there should be an Addresses button that will open the Wallet addresses screen.
+Addresses opens the wallet addresses screen. Show Descriptor follows it. That screen is titled Descriptor. The QR is above the descriptor, and the descriptor puts each key on its own indented line. On a multisig wallet, grey text after the descriptor says a Native-Segwit multisig descriptor can list its key expressions in any order, and the checksum changes with that order. The page scrolls. Brightness is under the text. `<` and `>` at the bottom switch the QR format, and the format name is between them. The formats are UR and Plain QR. UR is the default. It is a crypto-output Uniform Resource, written in capitals in the QR, the encoding Sparrow uses for a wallet descriptor. Plain QR is the descriptor text. After Plain QR, `>` returns to UR. On UR, `<` goes to Plain QR. Export to SD Card is the next button. It writes a BSMS 1.0 file: `BSMS 1.0`, the wallet descriptor with its checksum, `/0/*,/1/*`, and the first receive address. The next screen lists the SD card. Choosing a file asks to replace it. New File asks for a name and then writes that file. A name wider than the field scrolls sideways inside it. The passphrase field scrolls the same way. There is no format menu. Delete Wallet stays last and red.
 
-Then there should be a Sign transaction button that will open the Sign transaction screen.
+Then there should be a Sign Transaction button that will open the Sign transaction screen.
 
-Then there should be a Sign message button that will open the Sign message screen.
+Then there should be a Sign Message button that will open the Sign message screen.
 
-Then a Verify address button.
+Then a Verify Address button.
 
-Finally there should be a red delete button.
+Finally there should be a red Delete Wallet button.
 
 ### Wallet addresses screen
 

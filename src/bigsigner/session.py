@@ -120,7 +120,7 @@ class Session:
         warnings = _passphrase_warnings(stored_passphrase)
         message = "The seed was added successfully."
         if removed:
-            message += " Watch-only keys derived from this seed were removed."
+            message += " External keys derived from this seed were removed."
         return {"message": message, "warnings": warnings, "fingerprint": fingerprint}
 
     def add_text(self, text: str) -> dict:
@@ -276,7 +276,7 @@ class Session:
         stored = self._new_key("xpub", key.fingerprint, path=key.path, xpub=key.xpub, account=key.account)
         stored.role = key.role
         record.keys.append(stored)
-        return {"message": "The watch-only key was added.", "warnings": _branch_list(key), "fingerprint": key.fingerprint}
+        return {"message": "The watch-only key was added successfully.", "warnings": _branch_list(key), "fingerprint": key.fingerprint}
 
     def prepare_external_key(self, text: str):
         """Parse a key expression and refuse it when it must not be loaded. Nothing is stored."""
@@ -369,14 +369,14 @@ class Session:
                 if not self._key_already_known(key):
                     self._store_xpub(key)
             return {
-                "message": f"{name} is already loaded. You can also use {phrase}.",
+                "message": f"{name} is already loaded. You can now also use {phrase}.",
                 "warnings": wallet.warnings,
             }
         for key in wallet.keys:
             if not self._key_already_known(key):
                 self._store_xpub(key)
         created = self._create_wallet(wallet)
-        return {"message": "The multisig wallet was added.", "warnings": wallet.warnings, "wallet": created}
+        return {"message": "The multisig wallet was added successfully.", "warnings": wallet.warnings, "wallet": created}
 
     def _create_wallet(self, parsed):
         accounts = {key.fingerprint: key.account for key in parsed.keys}
@@ -468,7 +468,7 @@ class Session:
         elif plan["existing"] is not None:
             message = "The wallet is already loaded."
         elif plan["parsed"].multisig:
-            message = "The multisig wallet was added."
+            message = "The multisig wallet was added successfully."
         else:
             message = "The wallet was added successfully."
         return {
@@ -790,7 +790,7 @@ def account_index_phrase(order, accounts_by_fingerprint) -> str:
     values = [_account_index_label(accounts_by_fingerprint[fingerprint]) for fingerprint in order]
     if len(values) == 1:
         return f"account-index {values[0]}"
-    return f"account-indexes ({','.join(values)})"
+    return f"account-indexes {','.join(values)}"
 
 
 def _account_index_label(account) -> str:

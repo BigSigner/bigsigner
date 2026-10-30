@@ -19,7 +19,11 @@ def _lines():
 def _finish_wallet_wizard(app):
     for _ in range(16):
         if app.screen == "external-review":
-            _tap(app, "external-next")
+            app.render()
+            if any(hit["action"] == "external-known" for hit in app.hits):
+                _tap(app, "external-known")
+            else:
+                _tap(app, "external-next")
         elif app.screen == "external-details":
             _tap(app, "external-continue")
         elif app.screen == "wallet-import-note":
@@ -34,7 +38,7 @@ def test_the_seedsigner_bsms_file_loads_a_multisig_wallet(monkeypatch):
     app = App()
     app.screen = "wallets"
     _tap(app, "plus")
-    _tap(app, "Load descriptor from SD card")
+    _tap(app, "Load Descriptor from SD Card")
     _tap(app, "My SeedSigner Trezor Wallet.bsms")
     _finish_wallet_wizard(app)
     assert app.screen == "wallet"
@@ -51,7 +55,7 @@ def test_a_bsms_multisig_on_the_keys_page_offers_the_wallet_or_one_key(monkeypat
     app = App()
     app.screen = "keys"
     _tap(app, "plus")
-    _tap(app, "Load from SD card")
+    _tap(app, "Load from SD Card")
     _tap(app, "My SeedSigner Trezor Wallet.bsms")
     assert app.screen == "descriptor-choice"
     assert app.notice == ""
@@ -63,7 +67,7 @@ def test_a_bsms_multisig_on_the_keys_page_offers_the_wallet_or_one_key(monkeypat
     ]
     _tap(app, "dropdown-descriptor-key")
     _tap(app, "dropdown-pick-descriptor-key-0")
-    _tap(app, "Load Selected Key")
+    _tap(app, "Load Only Selected Key")
     assert app.screen == "external-review"
     assert app.wallet_plan is None
     assert app.pending_external.fingerprint.hex() == "f992cf24"
@@ -72,9 +76,9 @@ def test_a_bsms_multisig_on_the_keys_page_offers_the_wallet_or_one_key(monkeypat
     both = App()
     both.screen = "keys"
     _tap(both, "plus")
-    _tap(both, "Load from SD card")
+    _tap(both, "Load from SD Card")
     _tap(both, "My SeedSigner Trezor Wallet.bsms")
-    _tap(both, "Both Wallet And All Keys")
+    _tap(both, "Load Both Wallet and All Keys")
     _finish_wallet_wizard(both)
     assert both.screen == "wallet"
     assert both.session.wallets[0].multisig
@@ -128,9 +132,42 @@ def test_a_singlesig_bsms_file_is_a_descriptor(tmp_path, monkeypatch):
     app = App()
     app.screen = "wallets"
     _tap(app, "plus")
-    _tap(app, "Load descriptor from SD card")
+    _tap(app, "Load Descriptor from SD Card")
     _tap(app, "single.bsms")
     _finish_wallet_wizard(app)
     assert app.screen == "wallet"
     assert len(app.session.wallets) == 1
     assert not app.session.wallets[0].multisig
+
+
+def test_exporting_a_wallet_writes_a_bsms_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+    app = App()
+    first = app.session.add_mnemonic(ABANDON)
+    second = app.session.add_mnemonic(ABANDON, passphrase="second")
+    app.multisig_m = 2
+    app.multisig_selected = {first["fingerprint"], second["fingerprint"]}
+    app._create_selected_multisig()
+    app.notice = ""
+    app.render()
+    app.scroll["wallet"] = app.scroll_max["wallet"]
+    app.render()
+    labels = [
+        hit["label"]
+        for hit in sorted(app.hits, key=lambda hit: hit["box"][1])
+        if hit["action"] in ("addresses", "show-descriptor", "export-wallet", "delete-wallet")
+    ]
+    assert labels == ["Addresses", "Show Descriptor", "Export to SD Card", "Delete Wallet"]
+    _tap(app, "Export to SD Card")
+    assert app.screen == "sd"
+    _tap(app, "New File")
+    assert app.filename == "2-of-2-native-segwit.bsms"
+    _tap(app, "Save")
+    assert app.screen == "wallet"
+    assert app.notice == "Saved 2-of-2-native-segwit.bsms."
+    saved = (tmp_path / "2-of-2-native-segwit.bsms").read_text(encoding="utf-8")
+    descriptor = app.session.descriptor_text(app.wallet_index)
+    assert descriptor_from_bsms(saved, "main") == descriptor
+    lines = saved.strip().splitlines()
+    assert lines == ["BSMS 1.0", descriptor, "/0/*,/1/*", lines[3]]
+    assert lines[3].startswith("bc1")

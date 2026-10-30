@@ -28,7 +28,7 @@ def test_sd_card_folder_lists_subdirectories_and_loads_a_seed(tmp_path, monkeypa
     app = App()
     app.screen = "keys"
     _tap(app, "plus")
-    _tap(app, "Load from SD card")
+    _tap(app, "Load from SD Card")
     assert app.screen == "sd"
     app.render()
     assert any(hit["label"] == "seeds/" for hit in app.hits)
@@ -56,7 +56,7 @@ def test_a_file_that_is_not_a_key_opens_an_error_screen(tmp_path, monkeypatch):
     app = App()
     app.screen = "keys"
     _tap(app, "plus")
-    _tap(app, "Load from SD card")
+    _tap(app, "Load from SD Card")
     _tap(app, "note.txt")
     assert app.screen == "load-error"
     assert app.load_error == "That file is not a seed, key expression or wallet descriptor."
@@ -102,7 +102,7 @@ def test_a_singlesig_descriptor_from_keys_asks_before_loading_both(tmp_path, mon
     app = App()
     app.screen = "keys"
     _tap(app, "plus")
-    _tap(app, "Load from SD card")
+    _tap(app, "Load from SD Card")
     _tap(app, "wallet.txt")
     assert app.screen == "descriptor-choice"
     assert app.confirm is None
@@ -114,13 +114,13 @@ def test_a_singlesig_descriptor_from_keys_asks_before_loading_both(tmp_path, mon
     )
     app.render()
     labels = {hit["label"] for hit in app.hits}
-    assert "Both Wallet And Key" in labels
-    assert "Only The Key" in labels
+    assert "Both Wallet and Key" in labels
+    assert "Only the Key" in labels
     app.back_one()
     assert app.screen == "sd"
     assert app.session.wallets == []
     _tap(app, "wallet.txt")
-    _tap(app, "Only The Key")
+    _tap(app, "Only the Key")
     assert app.screen == "external-review"
     assert app.wallet_plan is None
     assert app.pending_external is not None
@@ -133,9 +133,9 @@ def test_a_singlesig_descriptor_from_keys_asks_before_loading_both(tmp_path, mon
     both = App()
     both.screen = "keys"
     _tap(both, "plus")
-    _tap(both, "Load from SD card")
+    _tap(both, "Load from SD Card")
     _tap(both, "wallet.txt")
-    _tap(both, "Both Wallet And Key")
+    _tap(both, "Both Wallet and Key")
     assert both.screen == "external-review"
     assert both.wallet_plan is not None
     assert both.back == ["wallets"]
@@ -150,7 +150,7 @@ def test_a_singlesig_descriptor_from_keys_asks_before_loading_both(tmp_path, mon
     scanned.accept_qr(descriptor)
     assert scanned.screen == "descriptor-choice"
     assert scanned._descriptor_choice_message().startswith("This is a singlesig wallet descriptor.")
-    _tap(scanned, "Only The Key")
+    _tap(scanned, "Only the Key")
     assert scanned.screen == "external-review"
     assert scanned.wallet_plan is None
 
@@ -161,7 +161,7 @@ def test_descriptor_load_rejects_a_seed_file(tmp_path, monkeypatch):
     app = App()
     app.screen = "wallets"
     _tap(app, "plus")
-    _tap(app, "Load descriptor from SD card")
+    _tap(app, "Load Descriptor from SD Card")
     assert app.sd_expect == "descriptor"
     _tap(app, "seed.txt")
     assert app.screen == "load-error"
@@ -202,7 +202,7 @@ def test_export_to_sd_card_chooses_a_format_then_a_file(tmp_path, monkeypatch):
     app._act("export-format-2")
     assert app.screen == "sd"
     app.render()
-    assert "New file" in {hit["label"] for hit in app.hits}
+    assert "New File" in {hit["label"] for hit in app.hits}
     app._act("sd-write:old.txt")
     assert app.confirm == "replace-file"
     assert app._confirm_message() == 'Replace "old.txt"?'
@@ -240,3 +240,80 @@ def test_export_to_sd_card_chooses_a_format_then_a_file(tmp_path, monkeypatch):
         if hit["action"] in ("show-qr", "export-key", "delete-key")
     ]
     assert [label for _top, label in sorted(buttons)] == ["Show Full Details", "Export to SD Card", "Delete Key"]
+
+
+def test_a_long_filename_wraps_at_the_overflowing_character(tmp_path, monkeypatch):
+    from PIL import ImageDraw
+
+    from bigsigner.ui.app import _filename_lines
+    from bigsigner.ui.canvas import MARGIN, TITLE_SIZE, WIDTH, font
+
+    short = "hello.txt"
+    spaced = "My SeedSigner Trezor " + "backup" * 8 + ".txt"
+    huge = "multisig-key-expression-" + "x" * 90 + ".txt"
+    for name in (short, spaced, huge):
+        (tmp_path / name).write_text("hello")
+    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+    app = App()
+    app.screen = "keys"
+    _tap(app, "plus")
+    _tap(app, "Load from SD Card")
+    image = app.render()
+    draw = ImageDraw.Draw(image)
+    face = font(TITLE_SIZE)
+    width = WIDTH - 2 * MARGIN - 32
+    short_lines = _filename_lines(draw, short, face, width)
+    spaced_lines = _filename_lines(draw, spaced, face, width)
+    huge_lines = _filename_lines(draw, huge, face, width)
+    assert short_lines == [short]
+    assert len(spaced_lines) > 1
+    _assert_packed(draw, face, width, spaced, spaced_lines)
+    assert len(huge_lines) == 3
+    assert huge_lines[-1].endswith("...")
+    _assert_packed(draw, face, width, huge, huge_lines)
+    boxes = {hit["label"]: hit["box"] for hit in app.hits}
+    assert boxes[short][3] - boxes[short][1] == 76
+    assert boxes[spaced][3] - boxes[spaced][1] > boxes[short][3] - boxes[short][1]
+    assert boxes[huge][3] - boxes[huge][1] >= boxes[spaced][3] - boxes[spaced][1]
+    _tap(app, huge)
+    assert app.screen == "load-error"
+
+
+def _assert_packed(draw, face, width, text, lines):
+    consumed = 0
+    for index, line in enumerate(lines):
+        assert draw.textlength(line, font=face) <= width
+        last = index == len(lines) - 1 and line.endswith("...")
+        body = line[:-3] if last else line
+        assert text.startswith(body, consumed)
+        consumed += len(body)
+        if last:
+            assert consumed < len(text)
+            assert draw.textlength(body + text[consumed] + "...", font=face) > width
+            continue
+        if consumed < len(text):
+            assert draw.textlength(line + text[consumed], font=face) > width
+    if not lines[-1].endswith("..."):
+        assert consumed == len(text)
+
+
+def test_a_long_filename_scrolls_sideways():
+    app = App()
+    app.screen = "export-name"
+    name = "native-segwit-singlesig-wallet-export.bsms"
+    app.filename = name
+    app.filename_cursor = len(name)
+    app.render()
+    assert app.hscroll == app.hscroll_max > 0
+    box = app._hscroll_box
+    y = (box[1] + box[3]) // 2
+    before = app.hscroll
+    app.pointer_down(box[0] + 40, y)
+    assert app.pointer_move(box[2] - 40, y)
+    assert app.hscroll < before
+    app.pointer_up(box[2] - 40, y)
+    assert app.filename_cursor == len(name)
+    app.render()
+    app.pointer_down(box[2] - 24, y)
+    app.pointer_up(box[2] - 24, y)
+    assert app.filename_cursor < len(name)

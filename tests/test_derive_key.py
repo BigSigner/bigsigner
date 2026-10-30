@@ -20,9 +20,9 @@ def test_a_seed_offers_three_derive_buttons_and_no_wallet_buttons():
     app.render()
     labels = {hit["label"] for hit in app.hits}
     actions = {hit["action"] for hit in app.hits}
-    assert "Derive a Native-Segwit SingleSig key" in labels
-    assert "Derive a Native-Segwit MultiSig key" in labels
-    assert "Derive a Taproot SingleSig key" in labels
+    assert "Derive a Native-Segwit SingleSig Key" in labels
+    assert "Derive a Native-Segwit MultiSig Key" in labels
+    assert "Derive a Taproot SingleSig Key" in labels
     height = next(hit["box"] for hit in app.hits if hit["action"] == "derive-taproot")
     native = next(hit["box"] for hit in app.hits if hit["action"] == "derive-native")
     multisig = next(hit["box"] for hit in app.hits if hit["action"] == "derive-multisig")
@@ -30,7 +30,7 @@ def test_a_seed_offers_three_derive_buttons_and_no_wallet_buttons():
     assert height[3] - height[1] > Frame().button_height("Derive a Taproot")
     assert "make-xpub-wallet" not in actions
     assert "derive-wallet" not in actions
-    assert not any(label.startswith("Create a SingleSig") or label.startswith("Go to SingleSig") for label in labels)
+    assert not any("SingleSig Wallet" in label for label in labels)
 
 
 def test_the_derive_screen_shows_the_account_selector_and_the_derived_key():
@@ -241,6 +241,7 @@ def test_a_singlesig_derivation_creates_a_wallet_at_the_selected_account():
     app._act("derive-inc")
     app._act("derive-wallet")
     assert app.screen == "wallet"
+    assert app.back == ["wallets"]
     assert len(app.session.wallets) == 1
     assert app.session.wallets[0].accounts[fingerprint] == 2
     assert "/2h" in app.session.descriptor_text(0)
@@ -248,10 +249,15 @@ def test_a_singlesig_derivation_creates_a_wallet_at_the_selected_account():
     assert len(app.session.fingerprints[fingerprint].keys) == 1
 
     app.back_one()
+    assert app.screen == "wallets"
+    assert app.back == []
+    app.screen = "key"
+    app._act("derive-native")
     app.render()
-    assert any(hit["label"] == "Go to SingleSig\nNative Segwit wallet" for hit in app.hits)
+    assert any(hit["label"] == "Go to Native-Segwit SingleSig Wallet" for hit in app.hits)
     app._act("derive-wallet")
     assert app.screen == "wallet"
+    assert app.back == ["wallets"]
     assert len(app.session.wallets) == 1
     assert app.session.wallets[0].accounts[fingerprint] == 2
 

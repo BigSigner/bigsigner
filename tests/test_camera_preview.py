@@ -35,5 +35,22 @@ def test_a_camera_frame_covers_the_viewfinder_and_leaves_the_header():
     assert image.getpixel((WIDTH // 2, HEIGHT - 20)) == (255, 255, 255)
 
 
+def test_a_missing_camera_replaces_the_scan_instruction():
+    app = App()
+    app.screen = "scan"
+    assert app.scan_prompt() == "Point the camera at one QR code."
+    app.camera_unavailable = True
+    assert app.scan_prompt() == "The camera is not available."
+    assert app.notice == ""
+    image = app.render()
+    assert image.getpixel((WIDTH // 2, HEIGHT - 20))[:3] != (12, 14, 18)
+
+    app.scan_kind = "descriptor"
+    app.camera_unavailable = False
+    assert app.scan_prompt() == "Point the camera at one wallet descriptor QR code."
+    app.camera_unavailable = True
+    assert app.scan_prompt() == "The camera is not available."
+
+
 def test_a_blank_picture_has_no_qr_text():
     assert read_qr(Image.new("RGB", (40, 40), "white")) is None

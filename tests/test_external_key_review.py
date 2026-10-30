@@ -89,18 +89,91 @@ def test_external_key_review_saves_screenshots():
     record.shot(app, "external-key")
     assert app.screen == "key"
     assert app.session.wallets == []
-    assert app.notice == "The watch-only key was added."
+    assert app.notice == "The watch-only key was added successfully."
     assert (record.folder / "index.html").is_file()
 
 
-def test_external_key_nondefault_account_saves_screenshots():
+def test_external_details_centers_the_heading_and_greys_the_labels():
+    from collections import Counter
+
+    from PIL import ImageDraw
+
+    from bigsigner.ui.canvas import HEADER, INK, MARGIN, MUTED, PAPER, RED, TITLE_SIZE, WIDTH, font, wrap
+
+    app = _open_details(expression(ABANDON, "m/48h/0h/0h/2h"))
+    image = app.render()
+    draw = ImageDraw.Draw(image)
+    face = font(TITLE_SIZE)
+    line_h = TITLE_SIZE + 8
+    room = WIDTH - 2 * MARGIN
+
+    def span(picture, top):
+        xs = [
+            x
+            for y in range(top, top + TITLE_SIZE)
+            for x in range(WIDTH)
+            if picture.getpixel((x, y))[:3] != PAPER
+        ]
+        assert xs
+        return min(xs), max(xs)
+
+    def dominant(picture, box):
+        counts = Counter(
+            picture.getpixel((x, y))[:3]
+            for y in range(box[1], box[3])
+            for x in range(box[0], box[2])
+            if picture.getpixel((x, y))[:3] != PAPER
+        )
+        assert counts
+        return counts.most_common(1)[0][0]
+
+    y = HEADER + 16
+    for _line in wrap(draw, "Extended Public Key Details", face, room):
+        left, right = span(image, y)
+        assert abs(left + right - WIDTH) <= 4
+        y += line_h
+    y += 8
+    prompt = "Verify this Extended Public Key on the other hardware wallet:"
+    y += line_h * len(wrap(draw, prompt, face, room))
+    y += 8 + line_h + 8 + 64 + 16
+    preview = app._external_preview(app.pending_external)
+    y += line_h * len(wrap(draw, preview, font(TITLE_SIZE, mono=True), room))
+    y += 16
+    y += line_h * len(wrap(draw, "Verify these details are backed up:", face, room))
+    y += 20
+    app.scroll["external-details"] = max(0, y - (HEADER + 24))
+    image = app.render()
+    y -= app.scroll["external-details"]
+    label_w = int(draw.textlength("Type: ", font=face))
+    assert dominant(image, (MARGIN, y + 4, MARGIN + label_w - 4, y + TITLE_SIZE - 2)) == MUTED
+    assert dominant(image, (MARGIN + label_w + 4, y + 4, MARGIN + label_w + 180, y + TITLE_SIZE - 2)) == INK
+    y += line_h
+    assert dominant(image, (MARGIN, y + 4, MARGIN + 140, y + TITLE_SIZE - 2)) == INK
+    y += line_h
+    account_w = int(draw.textlength("Account: ", font=face))
+    assert dominant(image, (MARGIN, y + 4, MARGIN + account_w - 4, y + TITLE_SIZE - 2)) == MUTED
+    assert dominant(image, (MARGIN + account_w + 4, y + 4, MARGIN + account_w + 160, y + TITLE_SIZE - 2)) == INK
+    y += line_h
+    path_w = int(draw.textlength("Derivation Path:", font=face))
+    assert dominant(image, (MARGIN, y + 4, MARGIN + path_w - 4, y + TITLE_SIZE - 2)) == MUTED
+    y += line_h
+    assert dominant(image, (WIDTH // 2 - 50, y + 4, WIDTH // 2 + 50, y + TITLE_SIZE - 2)) == INK
+
+    other_app = _open_details(expression(ABANDON, "m/84h/0h/7h"))
+    other_app.scroll["external-details"] = app.scroll["external-details"]
+    other = other_app.render()
+    assert dominant(other, (MARGIN, y - 2 * line_h + 4, MARGIN + account_w - 4, y - line_h + TITLE_SIZE - 2)) == MUTED
+    assert dominant(other, (MARGIN + account_w + 4, y - 2 * line_h + 4, MARGIN + account_w + 40, y - line_h - 2)) == RED
     app = _open_details(expression(ABANDON, "m/84h/0h/7h"))
+    app.scroll["external-details"] = other_app.scroll["external-details"]
     record = ScreenRecord(_folder("test_external_key_nondefault_account_saves_screenshots"))
     record.note("The account is 7, so the account line is red and marked non-default.")
     image = app.render()
     record.shot(app, "account-7")
     assert _has_red(image)
-    zero = _open_details(expression(ABANDON, "m/84h/0h/0h")).render()
+    zero_app = _open_details(expression(ABANDON, "m/84h/0h/0h"))
+    zero_app.scroll["external-details"] = other_app.scroll["external-details"]
+    zero = zero_app.render()
     assert not _has_red(zero)
 
 
@@ -161,7 +234,7 @@ def _load_key_file(app, record, folder, name, text):
     (folder / name).write_text(text + "\n")
     app.screen = "keys"
     record.click(app, "plus")
-    record.click(app, "Load from SD card")
+    record.click(app, "Load from SD Card")
     record.click(app, name)
 
 
@@ -252,7 +325,7 @@ def test_sd_card_key_expression_opens_the_review_saves_screenshots(tmp_path, mon
     record.note("Loaded a taproot key expression from a file on the SD card.")
     app.render()
     record.click(app, "plus")
-    record.click(app, "Load from SD card")
+    record.click(app, "Load from SD Card")
     record.click(app, "key.txt")
     record.shot(app, "warning")
     assert app.screen == "external-review"

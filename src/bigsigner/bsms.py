@@ -35,16 +35,27 @@ def descriptor_from_bsms(text: str, network: str) -> str:
         raise ParseError("This BSMS file's derivation paths do not match the descriptor.")
     branch = 0 if 0 in branches else 1
     try:
-        derived = (
-            Descriptor.from_string(body)
-            .derive(0, branch_index=branch)
-            .address(network=NETWORKS[{"main": "main", "regtest": "regtest"}.get(network, "test")])
-        )
+        derived = _address(body, network, branch)
     except Exception as exc:
         raise ParseError("This BSMS file's first address could not be checked.") from exc
     if derived.lower() != lines[3].lower():
         raise ParseError("This BSMS file's first address does not match the descriptor.")
     return descriptor
+
+
+def bsms_text(descriptor: str, network: str) -> str:
+    """A BSMS 1.0 file for a descriptor that uses receive and change."""
+    body, _digest = split_checksum(_normalize_expression(descriptor))
+    try:
+        address = _address(body, network, 0)
+    except Exception as exc:
+        raise ParseError("This wallet's first address could not be derived.") from exc
+    return "\n".join(["BSMS 1.0", descriptor.strip(), "/0/*,/1/*", address])
+
+
+def _address(body: str, network: str, branch: int) -> str:
+    name = {"main": "main", "regtest": "regtest"}.get(network, "test")
+    return Descriptor.from_string(body).derive(0, branch_index=branch).address(network=NETWORKS[name])
 
 
 def _records(text: str) -> list[str]:

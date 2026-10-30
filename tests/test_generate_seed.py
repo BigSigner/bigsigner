@@ -11,7 +11,11 @@ def _center(box):
 
 def test_new_seed_length_is_a_dropdown():
     app = App()
-    app.screen = "generate"
+    app._act("add-generate")
+    assert app.screen == "generate"
+    assert app.entropy_words == 24
+    app.render()
+    assert any(hit["label"] == "24 words" and hit["action"] == "dropdown-entropy-words" for hit in app.hits)
     app.entropy_words = 12
     app.render()
     assert not any(hit["action"] in {"gen-12", "gen-24"} for hit in app.hits)

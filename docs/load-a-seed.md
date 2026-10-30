@@ -24,10 +24,10 @@ The fingerprint is the first four bytes of the HASH160 of the master public key.
 
 The Seed Key screen does not create a wallet directly. It offers three buttons:
 
-- Derive a Native-Segwit SingleSig key (`m/84h/<coin>h/<account>h`)
-- Derive a Native-Segwit MultiSig key (`m/48h/<coin>h/<account>h/2h`)
-- Derive a Taproot SingleSig key (`m/86h/<coin>h/<account>h`)
+- Derive a Native-Segwit SingleSig Key (`m/84h/<coin>h/<account>h`)
+- Derive a Native-Segwit MultiSig Key (`m/48h/<coin>h/<account>h/2h`)
+- Derive a Taproot SingleSig Key (`m/86h/<coin>h/<account>h`)
 
 Each opens Derive Key. The account selector is the first control: minus on the left, plus on the right, and the account index in the middle. Tapping the index opens a keypad. The screen then shows the same details as an external key: the fingerprint name, the fingerprint, the type, the derivation path, and the first 20 characters of the extended public key. Those 20 characters change when the account changes. Nothing new is stored. There is no Delete button.
 
-Show Full Details shows the derived key expression, including its QR code. Export to SD Card is the next button. It asks for a format (Key Expression, the xpub or tpub, and the SLIP-132 form such as zpub when this path has one), then a file on the SD card. An existing file can be replaced, or New file can name a new one. The Key Expression file is `[fingerprint/derivation path]xpub/<0;1>/*`. The other formats are the key alone. A single-signature derivation also has a button that creates the wallet at the selected account, or opens that wallet if it already exists. A multisig derivation has no wallet button. A multisig wallet is loaded from a descriptor, or assembled from keys, rather than created from this one derived key.
+Show Full Details shows the derived key expression, including its QR code. Export to SD Card is the next button. It asks for a format (Key Expression, the xpub or tpub, and the SLIP-132 form such as zpub when this path has one), then a file on the SD card. An existing file can be replaced, or New File can name a new one. The Key Expression file is `[fingerprint/derivation path]xpub/<0;1>/*`. The other formats are the key alone. A single-signature derivation also has a button that creates the wallet at the selected account, or opens that wallet if it already exists. A multisig derivation has no wallet button. A multisig wallet is loaded from a descriptor, or assembled from keys, rather than created from this one derived key.
