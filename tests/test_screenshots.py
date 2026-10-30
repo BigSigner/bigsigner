@@ -72,15 +72,16 @@ def test_manual_seed_entry_saves_screenshots():
     record.shot(app, "keys")
     record.click(app, "plus")
     record.shot(app, "add-menu")
-    record.click(app, "Manual entry")
+    record.click(app, "Manual Entry")
     record.shot(app, "keyboard")
+    app.seed_length = 12
     type_word(app, "abandon", record, "suggestions")
     for _ in range(10):
         type_word(app, "abandon")
     record.shot(app, "checksum")
     type_word(app, "about")
     record.shot(app, "passphrase-ask")
-    record.click(app, "No passphrase")
+    record.click(app, "No Passphrase")
     record.shot(app, "saved")
     assert app.screen == "key"
     assert app.notice == "The seed was added successfully."
@@ -93,6 +94,7 @@ def test_duplicate_seed_warning_saves_screenshots():
     app = _keys(ABANDON)
     record = ScreenRecord(__folder("test_duplicate_seed_warning_saves_screenshots"))
     app.screen = "seed"
+    app.seed_length = 12
     app.seed_words = ["abandon"] * 11
     record.note(
         "Loaded the Abandon seed in code, opened manual entry, and filled the first 11 words in code."
@@ -100,7 +102,7 @@ def test_duplicate_seed_warning_saves_screenshots():
     record.shot(app, "checksum")
     type_word(app, "about")
     record.shot(app, "passphrase-ask")
-    record.click(app, "No passphrase")
+    record.click(app, "No Passphrase")
     record.shot(app, "already-loaded")
     assert app.screen == "passphrase-ask"
     assert app.notice == "This seed is already loaded."
@@ -118,7 +120,9 @@ def test_delete_key_warnings_save_screenshots():
     record.click(app, "derive-native")
     record.click(app, "derive-wallet")
     record.click(app, "back")
-    record.click(app, "back")
+    record.click(app, "menu")
+    record.click(app, "Bitcoin Keys")
+    record.click(app, app.session.fingerprints[app.selected_fp].nickname)
     app.notice_until = 0
     record.click(app, "delete-key")
     record.shot(app, "delete-wallet")
@@ -160,7 +164,7 @@ def test_camera_without_a_picture_saves_screenshots():
     record.note("Opened Bitcoin Keys in code.")
     record.shot(app, "keys")
     record.click(app, "plus")
-    record.click(app, "Generate new seed")
+    record.click(app, "Generate New Seed")
     record.shot(app, "generate")
     record.click(app, "Camera")
     record.shot(app, "camera")
@@ -177,7 +181,7 @@ def test_seed_qr_brightness_saves_screenshots():
     app._act("confirm-yes")
     app._act("seed-format-next")
     record = ScreenRecord(__folder("test_seed_qr_brightness_saves_screenshots"))
-    record.note("Opened the Text QR seed view in code.")
+    record.note("Opened the Compact SeedQR seed view in code.")
     record.shot(app, "default")
     default_quiet = _quiet_zone(record.image)
     default_page = record.image.getpixel((8, HEADER + 40))[:3]

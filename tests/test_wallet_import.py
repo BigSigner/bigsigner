@@ -147,14 +147,17 @@ def test_two_new_multisig_keys_are_verified_in_order():
     second = expression(LEGAL, "m/48h/0h/1h/2h")
     app.accept_qr(_multisig(first, second))
     assert app.screen == "external-review"
+    assert app._wallet_key_warning().startswith("You are about to load 2 external keys for a multisig wallet.")
     assert app._wallet_key_warning().endswith("extended public keys (xpubs) are indeed theirs.")
     app.render()
     assert any(hit["label"] == "Show Extended Public Key Details" for hit in app.hits)
     assert app.pending_external.fingerprint == root_of(ABANDON).my_fingerprint
     app._act("external-next")
     assert app.screen == "external-details"
+    assert app._external_details_title() == "Extended Public Key Details 1/2"
     app._act("external-continue")
     assert app.screen == "external-details"
+    assert app._external_details_title() == "Extended Public Key Details 2/2"
     assert app.pending_external.fingerprint == root_of(LEGAL).my_fingerprint
     app._act("external-continue")
     assert app.screen == "wallet"
@@ -165,6 +168,92 @@ def test_two_new_multisig_keys_are_verified_in_order():
     assert app.session.wallet_short_name_of(wallet) == (
         f"2-of-2 {root_of(ABANDON).my_fingerprint.hex()},{root_of(LEGAL).my_fingerprint.hex()}"
     )
+
+
+def test_a_multisig_import_counts_keys_that_are_already_known():
+    from PIL import Image, ImageDraw
+
+    from bigsigner.ui.canvas import TITLE_SIZE, WIDTH, font
+
+    app = App()
+    first = expression(ABANDON, "m/48h/0h/0h/2h")
+    second = expression(LEGAL, "m/48h/0h/0h/2h")
+    app.session.add_mnemonic(ABANDON.split())
+    app.screen = "scan"
+    app.scan_kind = "descriptor"
+    app.accept_qr(_multisig(first, second))
+    assert app.screen == "external-review"
+    assert app._known_keys_sentence() == "1 of the multisig wallet's 2 keys was already loaded."
+    assert app._wallet_key_warning().startswith("You are about to load 1 external key for a multisig wallet.")
+    app.render()
+    assert any(hit["label"] == "Show Extended Public Key Details" for hit in app.hits)
+    draw = ImageDraw.Draw(Image.new("RGB", (WIDTH, 40)))
+    _left, _top, right, _bottom = draw.textbbox((84, 28), "Load MultiSig Wallet", font=font(TITLE_SIZE))
+    assert right <= WIDTH - 16
+
+    both = App()
+    both.session.add_text(_multisig(first, second))
+    both.screen = "scan"
+    both.scan_kind = "descriptor"
+    both.accept_qr(_multisig(second, first))
+    assert both.screen == "wallet-import-note"
+    assert len(both.session.wallets) == 1
+
+    seeds = App()
+    seeds.session.add_mnemonic(ABANDON.split())
+    seeds.session.add_mnemonic(LEGAL.split())
+    seeds.screen = "scan"
+    seeds.scan_kind = "descriptor"
+    seeds.accept_qr(_multisig(first, second))
+    assert seeds.screen == "external-review"
+    assert seeds.session.wallets == []
+    assert seeds._known_keys_sentence() == "All of the multisig wallet's 2 keys were already loaded."
+    seeds.render()
+    assert any(hit["label"] == "Continue" and hit["action"] == "external-known" for hit in seeds.hits)
+
+
+def test_extended_public_key_details_counts_the_keys_being_reviewed():
+    from embit.bip39 import mnemonic_from_bytes
+
+    third = mnemonic_from_bytes(bytes([3]) + b"\x3c" * 15)
+    keys = [
+        expression(ABANDON, "m/48h/0h/0h/2h"),
+        expression(LEGAL, "m/48h/0h/0h/2h"),
+        expression(third, "m/48h/0h/0h/2h"),
+    ]
+    app = App()
+    app.screen = "scan"
+    app.scan_kind = "descriptor"
+    app.accept_qr(_multisig(*keys, threshold=2))
+    app._act("external-next")
+    titles = []
+    for _key in keys:
+        assert app.screen == "external-details"
+        titles.append(app._external_details_title())
+        app.render()
+        app._act("external-continue")
+    assert titles == [
+        "Extended Public Key Details 1/3",
+        "Extended Public Key Details 2/3",
+        "Extended Public Key Details 3/3",
+    ]
+
+    known = App()
+    known.session.add_text(keys[0])
+    known.screen = "scan"
+    known.scan_kind = "descriptor"
+    known.accept_qr(_multisig(*keys, threshold=2))
+    known._act("external-next")
+    assert known._external_details_title() == "Extended Public Key Details 1/2"
+    known._act("external-continue")
+    assert known._external_details_title() == "Extended Public Key Details 2/2"
+
+    single = App()
+    single.screen = "scan"
+    single.scan_kind = "descriptor"
+    single.accept_qr(_single(expression(ABANDON, "m/84h/0h/0h")))
+    single._act("external-next")
+    assert single._external_details_title() == "Extended Public Key Details"
 
 
 def test_multisig_wallet_import_verifies_each_new_key_saves_screenshots(tmp_path, monkeypatch):
@@ -179,7 +268,7 @@ def test_multisig_wallet_import_verifies_each_new_key_saves_screenshots(tmp_path
     )
     record.note("A new 2-of-2 descriptor is loaded from the SD card. Neither key is stored yet.")
     record.click(app, "plus")
-    record.click(app, "Load descriptor from SD card")
+    record.click(app, "Load Descriptor from SD Card")
     record.click(app, "wallet.txt")
     assert app.screen == "external-review"
     assert app._wallet_key_warning().endswith("extended public keys (xpubs) are indeed theirs.")
@@ -216,15 +305,17 @@ def test_an_existing_wallet_reports_descriptor_accounts_without_adding_another(t
     record.note("The same multisig was loaded from the SD card with its keys in the other order.")
     app.render()
     record.click(app, "plus")
-    record.click(app, "Load descriptor from SD card")
+    record.click(app, "Load Descriptor from SD Card")
     record.click(app, "wallet.txt")
     record.shot(app, "already-loaded")
     assert app.screen == "wallet-import-note"
     assert app.wallet_plan["new_keys"] == []
     assert len(app.session.wallets) == 1
     # Stored order is abandon, then legal. The swapped descriptor does not change that.
-    assert app._wallet_import_accounts() == "account-indexes (0 (default),7 (non-default))"
-    record.click(app, "wallet-import-continue")
+    assert app._wallet_import_accounts() == "account-indexes 0 (default),7 (non-default)"
+    app.render()
+    assert any(hit["label"] == "Go to Wallet" for hit in app.hits)
+    record.click(app, "Go to Wallet")
     assert app.screen == "wallet"
     assert app.back == ["wallets"]
     assert len(app.session.wallets) == 1
@@ -247,7 +338,7 @@ def test_new_accounts_on_an_existing_wallet_are_announced_after_verification():
     app._act("external-next")
     app._act("external-continue")
     assert app.screen == "wallet-import-note"
-    assert app._wallet_import_accounts() == "account-indexes (0 (default),8 (non-default))"
+    assert app._wallet_import_accounts() == "account-indexes 0 (default),8 (non-default)"
     assert len(app.session.fingerprints[root_of(LEGAL).my_fingerprint].keys) == 1
     app._act("wallet-import-continue")
     assert len(app.session.fingerprints[root_of(LEGAL).my_fingerprint].keys) == 2
@@ -282,7 +373,7 @@ def test_the_wallet_screen_keeps_the_descriptor_fingerprint_order():
     app.scan_kind = "descriptor"
     app.accept_qr(_multisig(expression(ABANDON, "m/48h/0h/4h/2h"), expression(LEGAL, "m/48h/0h/1h/2h")))
     assert app.screen == "wallet-import-note"
-    assert app._wallet_import_accounts() == "account-indexes (1 (non-default),4 (non-default))"
+    assert app._wallet_import_accounts() == "account-indexes 1 (non-default),4 (non-default)"
     app._act("wallet-import-continue")
     assert app.session.wallets[0].fingerprints == (legal, abandon)
     assert _account_dropdowns(app) == []

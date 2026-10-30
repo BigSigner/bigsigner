@@ -139,14 +139,18 @@ def _with_camera(app: App, camera: LiveCamera):
         camera.failed = False
         camera.reported = False
         camera.last_qr = None
+        app.camera_unavailable = False
         return image
     shot = camera.frame()
     if shot is None:
-        if camera.failed and not camera.reported:
-            camera.reported = True
-            app.set_notice("The camera is not available.")
+        if camera.failed and not app.camera_unavailable:
+            app.camera_unavailable = True
             image = app.render()
         return image
+    if app.camera_unavailable:
+        app.camera_unavailable = False
+        image = app.render()
+        box = app.camera_preview_box()
     if app.screen == "camera":
         app.remember_camera_frame(jpeg_bytes(shot))
     elif app.screen == "scan":

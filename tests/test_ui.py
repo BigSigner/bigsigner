@@ -14,7 +14,7 @@ from bigsigner.ui.app import (
     _zoom_grid_box,
     _zoom_index_size,
 )
-from bigsigner.ui.canvas import HEADER, HEIGHT, INK, LINE, MARGIN, NAVY, PAPER, TITLE_SIZE, WHITE, WIDTH, font, wrap
+from bigsigner.ui.canvas import BODY_SIZE, HEADER, HEIGHT, INK, LINE, MARGIN, MUTED, NAVY, PAPER, TITLE_SIZE, WHITE, WIDTH, font, wrap
 
 PINK = (255, 20, 147)
 
@@ -184,12 +184,29 @@ def test_menu_highlights_the_page_that_owns_the_back_stack():
 
 
 def test_the_sd_card_screen_shows_the_logo_above_the_text():
+    from bigsigner import __version__
+
+    from bigsigner.ui.canvas import logo
+
     app = App()
     app.screen = "warning"
     image = app.render()
-    # The logo is the orange mark. The sentence starts below it, and Continue stays.
+    # The logo is the orange mark. The version sits under it, and Continue stays.
     assert image.getpixel((WIDTH // 2, HEADER + 60))[0] > 180
     assert image.getpixel((MARGIN + 8, HEADER + 220))[:3] == PAPER
+    version = f"Version {__version__}"
+    face = font(24)
+    version_width = int(ImageDraw.Draw(image).textlength(version, font=face))
+    version_left = (WIDTH - version_width) // 2
+    version_y = HEADER + 24 + logo(WIDTH - 48, 180).height + 12
+    ink = [
+        image.getpixel((x, y))[:3]
+        for y in range(version_y, version_y + 24)
+        for x in range(version_left, version_left + version_width)
+        if image.getpixel((x, y))[:3] != PAPER
+    ]
+    assert ink
+    assert max(ink, key=ink.count) == MUTED
     assert any(hit["action"] == "warning-ok" for hit in app.hits)
 
 
@@ -441,17 +458,17 @@ def test_main_screens_save_screenshots():
     record.click(app, "Addresses")
     record.shot(app, "addresses")
     record.click(app, "back")
-    record.click(app, "Show descriptor")
+    record.click(app, "Show Descriptor")
     record.shot(app, "qr")
-    record.click(app, "Zoom In")
-    record.shot(app, "qr-zoom")
+    record.click(app, ">")
+    record.shot(app, "qr-plain")
     frames = sorted(record.folder.glob("*.png"))
     plain = next(path for path in frames if "remove-sd" in path.name)
     marked = next(path for path in frames if path.name > plain.name)
     assert plain.stat().st_size > 1000
-    zooms = list(record.folder.glob("*-qr-zoom.png"))
-    assert len(zooms) == 1
-    assert zooms[0].stat().st_size > 1000
+    plains = list(record.folder.glob("*-qr-plain.png"))
+    assert len(plains) == 1
+    assert plains[0].stat().st_size > 1000
     before = {pixel[:3] for pixel in Image.open(plain).getdata()}
     after = {pixel[:3] for pixel in Image.open(marked).getdata()}
     assert PINK not in before
@@ -533,20 +550,33 @@ def test_a_singlesig_xpub_can_create_and_reopen_its_wallet():
     app.selected_fp = added["fingerprint"]
     app.screen = "key"
     app.render()
-    assert any(hit["label"] == "Go to SingleSig\nNative Segwit wallet" for hit in app.hits)
+    assert any(hit["label"] == "Go to Native-Segwit SingleSig Wallet" for hit in app.hits)
     app.session.delete_wallet(0)
     app.render()
-    assert any(hit["label"] == "Create a SingleSig\nNative Segwit wallet" for hit in app.hits)
+    assert any(hit["label"] == "Create a Native-Segwit SingleSig Wallet" for hit in app.hits)
+    draw = ImageDraw.Draw(Image.new("RGB", (WIDTH, 8)))
+    face = font(BODY_SIZE)
+    limit = WIDTH - 2 * MARGIN - 32
+    for phrase in (
+        "Create a Native-Segwit SingleSig Wallet",
+        "Go to Native-Segwit SingleSig Wallet",
+        "Create a Taproot SingleSig Wallet",
+        "Go to Taproot SingleSig Wallet",
+    ):
+        lines = wrap(draw, phrase, face, limit)
+        assert all("Native-Segwit" in line or "Native" not in line for line in lines)
     app._act("make-xpub-wallet")
     assert app.screen == "wallet"
+    assert app.back == ["wallets"]
     assert len(app.session.wallets) == 1
     assert app.session.wallets[0].accounts[added["fingerprint"]] == 7
     assert "/7h" in app.session.descriptor_text(0)
     app.screen = "key"
     app.render()
-    assert any(hit["label"] == "Go to SingleSig\nNative Segwit wallet" for hit in app.hits)
+    assert any(hit["label"] == "Go to Native-Segwit SingleSig Wallet" for hit in app.hits)
     app._act("make-xpub-wallet")
     assert app.screen == "wallet"
+    assert app.back == ["wallets"]
     assert len(app.session.wallets) == 1
 
     multisig = App()
@@ -557,7 +587,7 @@ def test_a_singlesig_xpub_can_create_and_reopen_its_wallet():
     assert not any(hit["action"] == "make-xpub-wallet" for hit in multisig.hits)
 
 
-def test_the_key_screen_shows_a_twelve_character_xpub_prefix():
+def test_the_key_screen_shows_a_nineteen_character_xpub_prefix():
     from test_domain import expression
 
     from bigsigner.ui.canvas import MARGIN
@@ -568,8 +598,9 @@ def test_the_key_screen_shows_a_twelve_character_xpub_prefix():
     app.screen = "key"
     image = app.render()
     xpub = app.session.fingerprints[added["fingerprint"]].keys[0].xpub.to_string()
-    preview = xpub[:12] + "\u2026"
-    assert preview == "xpub6CatWdiZ\u2026"
+    preview = xpub[:19] + "\u2026"
+    assert preview.startswith("xpub6CatWdiZ")
+    assert preview == xpub[:19] + "\u2026"
     assert not any(hit["action"] == "toggle-slip" for hit in app.hits)
     assert any(hit["label"] == "Show Full Details" for hit in app.hits)
     from bigsigner.ui.canvas import TITLE_SIZE
@@ -714,10 +745,10 @@ def test_seed_screen_labels_banner_and_wallet_buttons():
     app.scroll["key"] = 10_000
     image = app.render()
     labels = [hit["label"] for hit in app.hits]
-    assert "Derive a Native-Segwit SingleSig key" in labels
-    assert "Derive a Native-Segwit MultiSig key" in labels
-    assert "Derive a Taproot SingleSig key" in labels
-    assert not any(label.startswith("Create a SingleSig") or label.startswith("Go to SingleSig") for label in labels)
+    assert "Derive a Native-Segwit SingleSig Key" in labels
+    assert "Derive a Native-Segwit MultiSig Key" in labels
+    assert "Derive a Taproot SingleSig Key" in labels
+    assert not any("SingleSig Wallet" in label for label in labels)
     assert all("hidden" not in label.lower() for label in labels)
 
     def toast_rows(picture):
@@ -764,16 +795,10 @@ def test_seed_screen_labels_banner_and_wallet_buttons():
     assert app.screen == "derive"
     tap(app, "derive-wallet")
     assert app.screen == "wallet"
+    assert app.back == ["wallets"]
     app.back_one()
-    app.render()
-    labels = [hit["label"] for hit in app.hits]
-    assert "Go to SingleSig\nNative Segwit wallet" in labels
-    assert "delete-key" not in {hit["action"] for hit in app.hits}
-    app.back_one()
-    app.scroll["key"] = 10_000
-    app.render()
-    labels = [hit["label"] for hit in app.hits]
-    assert "Derive a Taproot SingleSig key" in labels
+    assert app.screen == "wallets"
+    assert app.back == []
 
 
 def test_seed_account_is_typed_and_xpub_account_is_a_dropdown():
@@ -834,8 +859,31 @@ def test_seed_account_is_typed_and_xpub_account_is_a_dropdown():
     assert "/0h" in watch.session.descriptor_text(0)
 
 
-def test_seed_qr_switches_between_standard_and_compact():
-    from bigsigner.seedqr import compact_bytes, standard_digits
+def test_leaving_a_singlesig_wallet_forgets_the_account_change():
+    app = App()
+    added = app.session.add_mnemonic(ABANDON.split())
+    fingerprint = added["fingerprint"]
+    app.selected_fp = fingerprint
+    app.screen = "key"
+    app._act("derive-native")
+    app._act("derive-wallet")
+    assert app.session.wallets[0].accounts[fingerprint] == 0
+    app._act(f"account-inc-{fingerprint.hex()}")
+    assert app.session.wallets[0].accounts[fingerprint] == 1
+    app._act("addresses")
+    app._act("back")
+    assert app.screen == "wallet"
+    assert app.session.wallets[0].accounts[fingerprint] == 1
+    app._act("back")
+    assert app.screen == "wallets"
+    assert app.session.wallets[0].accounts[fingerprint] == 0
+    app._act("open-wallet-0")
+    assert app.screen == "wallet"
+    assert app.session.wallets[0].accounts[fingerprint] == 0
+
+
+def test_seed_qr_switches_between_compact_and_text():
+    from bigsigner.seedqr import compact_bytes
 
     app = App()
     added = app.session.add_mnemonic(ABANDON.split())
@@ -847,19 +895,17 @@ def test_seed_qr_switches_between_standard_and_compact():
     assert app.seed_format == 0
     app.render()
     assert not any(hit["action"] == "zoom-in" for hit in app.hits)
-    app._act("seed-format-prev")
-    assert app.seed_format == 3
-    assert app._seed_qr_payload() == standard_digits(ABANDON)
-    app._act("seed-format-prev")
+    app._act("seed-format-next")
+    assert app.seed_format == 1
     assert app._seed_qr_payload() == compact_bytes(ABANDON)
-    app._act("seed-format-prev")
-    assert app._seed_qr_payload() == ABANDON.upper()
     app.render()
     assert any(hit["action"] == "zoom-in" for hit in app.hits)
     app._act("seed-format-next")
-    app._act("seed-format-next")
+    assert app._seed_qr_payload() == ABANDON.upper()
     app._act("seed-format-next")
     assert app.seed_format == 0
+    app._act("seed-format-prev")
+    assert app._seed_qr_payload() == ABANDON.upper()
 
 
 def test_zoomed_qr_has_a_title_and_a_direction_pad():
@@ -996,12 +1042,12 @@ def test_seeds_are_listed_above_external_keys():
     app.render()
     seed_box = next(hit["box"] for hit in app.hits if hit["action"] == f"open-fp-{seed['fingerprint'].hex()}")
     external_box = next(
-        hit["box"] for hit in app.hits if hit["action"] == f"open-fp-{external['fingerprint'].hex()}"
+        hit["box"] for hit in app.hits if hit["action"] == f"open-fp-{external['fingerprint'].hex()}-0"
     )
     assert seed_box[1] < external_box[1]
-    assert app._external_key_line(app.session.fingerprints[external["fingerprint"]].keys[0]) == (
-        "Native-Segwit MultiSig Account #0"
-    )
+    titles = [title for title, _icon, _awesome, items in app._key_sections() if items]
+    assert titles == ["Seeds", "MultiSig External Keys"]
+    assert app._external_script(app.session.fingerprints[external["fingerprint"]].keys[0]) == "Native-Segwit"
 
 
 def test_keys_are_listed_in_the_order_they_were_added():
@@ -1024,16 +1070,70 @@ def test_keys_are_listed_in_the_order_they_were_added():
 
     listed = App()
     early = listed.session.add_text(expression(ABANDON, "m/48h/0h/7h/2h"))
-    second = listed.session.add_text(expression(other, "m/84h/0h/0h"))
+    other_key = listed.session.add_text(expression(other, "m/84h/0h/0h"))
+    listed.session.add_text(expression(ABANDON, "m/86h/0h/4h"))
     listed.session.add_text(expression(ABANDON, "m/48h/0h/0h/2h"))
-    record = listed.session.fingerprints[early["fingerprint"]]
-    record.keys.reverse()
-    assert [key.account for key in listed._external_keys(record)] == [7, 0]
+    listed.session.add_text(expression(ABANDON, "m/84h/0h/1h"))
     listed.screen = "keys"
     listed.render()
-    early_box = next(hit["box"] for hit in listed.hits if hit["action"] == f"open-fp-{early['fingerprint'].hex()}")
-    second_box = next(hit["box"] for hit in listed.hits if hit["action"] == f"open-fp-{second['fingerprint'].hex()}")
-    assert early_box[1] < second_box[1]
+    sections = {title: items for title, _icon, _awesome, items in listed._key_sections() if items}
+    assert list(sections) == ["SingleSig External Keys", "MultiSig External Keys"]
+    fingerprint = early["fingerprint"]
+    singles = [item for item in sections["SingleSig External Keys"] if item[0] == fingerprint]
+    assert [item[2].role for item in singles] == ["singlesig_native", "singlesig_taproot"]
+    assert [item[2].account for item in singles] == [1, 4]
+    multis = [item for item in sections["MultiSig External Keys"] if item[0] == fingerprint]
+    assert [item[2].account for item in multis] == [0, 7]
+    visible = {
+        hit["action"]: hit["box"][1]
+        for hit in listed.hits
+        if hit["action"].startswith("open-fp-")
+    }
+    order = []
+    for items in sections.values():
+        for fingerprint, _record, _key, index in items:
+            action = f"open-fp-{fingerprint.hex()}-{index}"
+            if action in visible:
+                order.append(visible[action])
+    assert order == sorted(order)
+    assert len(visible) >= 2
+    listed._act(f"open-fp-{fingerprint.hex()}-2")
+    assert listed.screen == "key"
+    assert listed.selected_key_index == 2
+    assert listed._stored_key()[1].account == 0
+    assert listed._external_kind(listed._stored_key()[1]) == "Native-Segwit MultiSig"
+
+
+def test_the_plus_button_centers_its_icon():
+    from bigsigner.ui.app import _PLUS_DIAMETER
+    from bigsigner.ui.canvas import BLUE
+
+    def centers(menu: bool):
+        app = App()
+        app.screen = "keys"
+        app.add_menu = menu
+        image = app.render()
+        box = next(hit["box"] for hit in app.hits if hit["action"] == "toggle-add")
+        assert box[2] - box[0] == box[3] - box[1] == _PLUS_DIAMETER == 94
+
+        def center(predicate):
+            points = [
+                (x, y)
+                for y in range(box[1] - 2, box[3] + 3)
+                for x in range(box[0] - 2, box[2] + 3)
+                if predicate(image.getpixel((x, y))[:3])
+            ]
+            return (
+                (min(x for x, _y in points) + max(x for x, _y in points)) / 2,
+                (min(y for _x, y in points) + max(y for _x, y in points)) / 2,
+            )
+
+        return center(lambda pixel: pixel == BLUE), center(lambda pixel: min(pixel) > 200)
+
+    for menu in (False, True):
+        circle, icon = centers(menu)
+        assert abs(icon[0] - circle[0]) <= 1
+        assert abs(icon[1] - circle[1]) <= 1
 
 
 def test_key_list_scrolls_by_dragging():

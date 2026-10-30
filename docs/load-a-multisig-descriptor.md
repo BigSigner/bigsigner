@@ -43,7 +43,7 @@ BigSigner does not decide this by editing the descriptor text and splitting on c
 
 A 2-of-3 and a 3-of-3 of the same people are different wallets. So are native SegWit and Taproot for one fingerprint.
 
-The order of the fingerprints is a separate fact from that identity. The descriptor that first creates the wallet is stored in that order. The Wallet screen lists the keys in that saved order, and so does the descriptor it shows. A later descriptor of the same wallet, with the keys written in another order, does not change it. Account-index tuples in messages, such as account-indexes (0,7), follow that saved order too, not the order of the descriptor being loaded.
+The order of the fingerprints is a separate fact from that identity. The descriptor that first creates the wallet is stored in that order. The Wallet screen lists the keys in that saved order, and so does the descriptor it shows. A later descriptor of the same wallet, with the keys written in another order, does not change it. Account-index tuples in messages, such as account-indexes 0 (default),7 (non-default), follow that saved order too, not the order of the descriptor being loaded.
 
 ## Short name
 
@@ -51,15 +51,15 @@ Messages name a wallet briefly. A single-signature wallet is the fingerprint's n
 
 ## Importing a descriptor
 
-From Bitcoin Wallets, Scan descriptor QR code and Load descriptor from SD card use the same steps.
+From Bitcoin Wallets, Scan Descriptor QR Code and Load Descriptor from SD Card use the same steps.
 
 If the file is a seed, a transaction, or a key expression, the error screen says what it is and that it is not a wallet descriptor. If it is a descriptor of a kind this version does not accept, the error says the wallet descriptor is not supported. OK returns to Bitcoin Wallets.
 
 Each key is then checked as if it were being loaded on its own. A key that names a loaded seed but does not match the extended key that seed derives stops the import. The error is the same suspicious-key screen used for a key expression. Nothing from the descriptor is stored.
 
-Before the first new key, one warning says this is an external key for a multisig wallet and that the co-signers must verify the extended public keys on their hardware wallets. A singlesig descriptor says the wallet owner must verify it before funds are sent. The button is Show Extended Public Key Details. Each new key then has an Extended Public Key Details screen. Further new keys in the same multisig open that screen directly, without the warning again. Keys that are already loaded, or that the loaded seed can derive, are skipped.
+A multisig descriptor opens a screen titled Load MultiSig Wallet when the wallet is not loaded yet, even when every key is already loaded or can be derived from a loaded seed. If that wallet is already loaded and every key is known, this screen is skipped. When some keys are already known, a line above Warning says how many of the wallet's keys were already loaded. When any keys are still new, Warning says you are about to load that many external keys for a multisig wallet, and the button is Show Extended Public Key Details. Each new key then has an Extended Public Key Details screen. The subtitle ends with that key's place among the new keys, such as 1/3. Further new keys in the same multisig open that screen directly, without the warning again. Keys that are already loaded, or that the loaded seed can derive, are skipped. When every key is already known, there is no Warning and the button is Continue. A singlesig descriptor says the wallet owner must verify it before funds are sent, on a screen titled Load External Key.
 
-If that set of fingerprints and threshold is already a wallet, the screen says Wallet "<short name>" was already loaded. When every key was already known, it says this descriptor points to account-index X (default) when that index is 0, or account-index X (non-default) otherwise. Several keys are written as account-indexes (X (default),Y (non-default)), in the wallet's own key order and without the fingerprints. When some keys are new, it says those account indexes can now be used, with the same note on each index. Continue stores any new keys, switches the accounts, and opens the wallet. Back leaves without storing them.
+If that set of fingerprints and threshold is already a wallet, the screen says Wallet "<short name>" was already loaded. When every key was already known, it says this descriptor points to account-index X (default) when that index is 0, or account-index X (non-default) otherwise. Several keys are written as account-indexes X (default),Y (non-default), in the wallet's own key order and without the fingerprints. When some keys are new, it says you can now also use those account indexes, with the same note on each index. Go to Wallet stores any new keys, switches the accounts, and opens the wallet. Back leaves without storing them.
 
 If the wallet is new, it is added and opened. Back from the wallet returns to Bitcoin Wallets, not to the scan or the file list.
 

@@ -9,7 +9,7 @@ def _open_scan():
     app.screen = "keys"
     app.render()
     _tap(app, "plus")
-    _tap(app, "Scan QR code")
+    _tap(app, "Scan QR Code")
     assert app.screen == "scan"
     assert "not available" not in app.notice
     return app
@@ -28,6 +28,28 @@ def _tap(app, label):
 def test_plus_menu_opens_the_scan_screen():
     app = _open_scan()
     app.render()
+
+
+def test_a_tap_above_scan_qr_still_opens_the_scanner():
+    app = App()
+    app.screen = "keys"
+    app.render()
+    _tap(app, "plus")
+    app.render()
+    scan = next(hit for hit in app.hits if hit["action"] == "add-scan")
+    left, top, right, _bottom = scan["box"]
+    app.tap((left + right) // 2, top + 8)
+    assert app.screen == "scan"
+
+
+def test_a_tap_on_the_dimmed_page_closes_the_add_menu():
+    app = App()
+    app.screen = "keys"
+    app.add_menu = True
+    app.render()
+    app.tap(40, 160)
+    assert app.add_menu is False
+    assert app.screen == "keys"
 
 
 def test_scanned_words_and_seedqr_open_the_key():
@@ -89,8 +111,11 @@ def test_key_scan_offers_a_multisig_descriptor_choice():
     assert app.session.wallets == []
     app.render()
     labels = {hit["label"] for hit in app.hits}
-    assert "Both Wallet And All Keys" in labels
-    assert "Load Selected Key" in labels
+    assert "Load Both Wallet and All Keys" in labels
+    assert "Load Only Selected Key" in labels
+    both_box = next(hit["box"] for hit in app.hits if hit["action"] == "descriptor-both")
+    menu_box = next(hit["box"] for hit in app.hits if hit["action"] == "dropdown-descriptor-key")
+    assert menu_box[1] - both_box[3] >= 64
     _tap(app, "dropdown-descriptor-key")
     assert app.open_dropdown == "descriptor-key"
     app.render()
@@ -99,7 +124,7 @@ def test_key_scan_offers_a_multisig_descriptor_choice():
     _tap(app, "dropdown-pick-descriptor-key-1")
     assert app.descriptor_key_index == 1
     assert app.open_dropdown is None
-    _tap(app, "Load Selected Key")
+    _tap(app, "Load Only Selected Key")
     assert app.screen == "external-review"
     assert app.wallet_plan is None
     assert app.pending_external.fingerprint == parsed.keys[1].fingerprint
@@ -109,7 +134,7 @@ def test_key_scan_offers_a_multisig_descriptor_choice():
     both.screen = "scan"
     both.scan_kind = "key"
     both.accept_qr(descriptor)
-    _tap(both, "Both Wallet And All Keys")
+    _tap(both, "Load Both Wallet and All Keys")
     assert both.screen == "external-review"
     assert both.wallet_plan is not None
     assert both.back == ["wallets"]

@@ -88,8 +88,6 @@ def test_seed_entry_starts_with_a_keyboard():
     bottom = next(hit["box"] for hit in app.hits if hit["label"] == "b")
     assert bottom[3] == HEIGHT
     assert bottom[1] < app._seed_keyboard_top() + 2 * (64 + 6)
-    app.seed_length = 24
-    app.render()
     assert any(hit["label"] == "24 words" and hit["action"] == "dropdown-seed-length" for hit in app.hits)
 
 
@@ -156,6 +154,8 @@ def test_last_word_choices_match_the_checksum_without_rescanning_every_letter():
     from bigsigner.ui.app import _WORD_INDEX, _phrase_checksum_ok
 
     app = App()
+    app.screen = "seed"
+    app.seed_length = 12
     app.seed_words = ["abandon"] * 11
     choices = app._seed_choices()
     again = app._seed_choices()
@@ -171,6 +171,7 @@ def test_last_word_choices_match_the_checksum_without_rescanning_every_letter():
 def test_last_word_must_match_the_checksum():
     app = App()
     app.screen = "seed"
+    app.seed_length = 12
     app.seed_words = ["abandon"] * 11
     matches = app._seed_matches()
     assert "about" in matches
@@ -281,7 +282,25 @@ def test_a_24_word_seed_scrolls_the_word_cards():
     assert image.getpixel((MARGIN + 24, HEIGHT - 120))[:3] == WHITE
 
 
-def test_a_long_passphrase_field_shows_its_last_characters():
+def test_a_passphrase_warning_sits_under_the_field():
+    from bigsigner.ui.canvas import HEADER, RED, WIDTH
+
+    app = App()
+    app.screen = "passphrase"
+    app.passphrase_text = "ss "
+    app.passphrase_cursor = len(app.passphrase_text)
+    image = app.render()
+    field = app._pass_field_box
+    assert field[1] == HEADER + 16
+    red_rows = [
+        y
+        for y in range(HEADER, 470)
+        if any(image.getpixel((x, y))[:3] == RED for x in range(WIDTH))
+    ]
+    assert red_rows
+    assert min(red_rows) > field[3]
+    save = next(hit["box"] for hit in app.hits if hit["action"] == "passphrase-save")
+    assert save[1] > max(red_rows)
     from bigsigner.ui.canvas import BLUE, INK, TITLE_SIZE, font
 
     phrase = "abcdefghijklmnopqrstuvwxy"
@@ -290,15 +309,10 @@ def test_a_long_passphrase_field_shows_its_last_characters():
     app.passphrase_text = phrase
     app.passphrase_cursor = len(phrase)
     image = app.render()
+    assert app.hscroll == app.hscroll_max > 0
     face = font(TITLE_SIZE, mono=True)
     draw = ImageDraw.Draw(image)
-    room = WIDTH - 2 * MARGIN - 28
-    shown, shown_cursor, start = app._passphrase_window(draw, face, room)
-    assert start > 0
-    assert phrase.endswith(shown)
-    assert shown_cursor == len(shown)
-    assert draw.textbbox((0, 0), shown, font=face)[2] <= room
-    assert not shown.startswith("a")
+    assert draw.textlength(phrase, font=face) > WIDTH - 2 * MARGIN - 28
     right_ink = [
         x
         for y in range(HEADER, 360)
@@ -314,7 +328,7 @@ def test_passphrase_copy_uses_the_same_words():
     app.selected_fp = added["fingerprint"]
     app.screen = "key"
     app.render()
-    assert any("with a passphrase" in hit["label"] for hit in app.hits)
+    assert any(hit["label"] == "Create a Copy of This Seed with a Passphrase" for hit in app.hits)
     app._act("copy-passphrase")
     assert app.screen == "passphrase"
     for letter in "secret":

@@ -66,6 +66,11 @@ Copyright (c) 2011 Lincoln Loop. BSD License. The Javascript origin by
 Kazuhiko Arase is MIT licensed. "QR Code" is a trademark of DENSO WAVE
 INCORPORATED. See src/bigsigner/licenses.py.
 
+Bytewords
+The 256-word list is copied from Blockchain Commons URKit.
+Copyright (c) 2020 Blockchain Commons, LLC. BSD-2-Clause Plus Patent License.
+See src/bigsigner/licenses.py.
+
 DejaVu fonts
 Based on the Bitstream Vera fonts, Copyright (c) 2003 Bitstream, Inc.
 DejaVu changes are in the public domain. See src/bigsigner/licenses.py.

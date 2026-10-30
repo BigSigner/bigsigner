@@ -60,7 +60,7 @@ These variables are for development. Do not set them on a device that holds real
 | --- | --- |
 | `BIGSIGNER_EMULATOR` | Set to `1` to force the browser emulator. Without it, a machine with `/dev/fb0` uses the panel. |
 | `BIGSIGNER_PORT` | Emulator port. The default is `8765`. |
-| `BIGSIGNER_SDCARD_PATH` | A folder treated as the microSD card, including its subfolders. Load from SD card reads text files from it. |
+| `BIGSIGNER_SDCARD_PATH` | A folder treated as the microSD card, including its subfolders. Load from SD Card reads text files from it. |
 | `BIGSIGNER_INITIAL_SEED` | A 12, 18, or 24 word mnemonic loaded when the boot screen is left. Commas are treated as spaces. An invalid value is printed and shown on screen. |
 | `BIGSIGNER_INITIAL_WALLET_DESCRIPTOR` | A wallet descriptor loaded when the boot screen is left, after the initial seed. It is imported the same way as a descriptor from the Bitcoin Wallets page, including a BSMS 1.0 file. An invalid value is printed and shown on screen. |
 | `BIGSIGNER_CPU_SERIAL` | A string mixed into camera entropy. The default is `bigsigner-emulator`. |

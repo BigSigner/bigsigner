@@ -8,6 +8,7 @@ does not use this module.
 """
 
 import io
+import threading
 
 from PIL import Image
 
@@ -100,13 +101,22 @@ class _Picamera2:
 class _LegacyPicamera:
     """The firmware camera through picamera 1.x, as on bigsigner-os.
 
-    The video port gives a frame without the still-capture pause. The sensor
-    needs a moment after start before its exposure settles.
+    Frames are captured on a background thread, the way SeedSigner's video
+    stream does. A capture on the UI thread blocks the whole panel, and a
+    sensor that pauses hits picamera's 60 second timeout before the page
+    accepts a tap again. The screen keeps the newest picture and stays
+    responsive while the next one is read.
     """
 
     def __init__(self, camera):
         self._camera = camera
-        self._buffer = io.BytesIO()
+        self._latest = None
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._closed = threading.Event()
+        self._error = None
+        self._thread = threading.Thread(target=self._run, name="bigsigner-camera", daemon=True)
+        self._thread.start()
 
     @classmethod
     def open(cls):
@@ -115,18 +125,47 @@ class _LegacyPicamera:
         except ImportError:
             return None
         camera = PiCamera(resolution=CAPTURE_SIZE, framerate=15)
+        # A stalled sensor must give up quickly. The default wait is 60 seconds.
+        # The value is a class attribute; picamera rejects setting it on the camera.
+        PiCamera.CAPTURE_TIMEOUT = 2
         return cls(camera)
 
-    def frame(self) -> Image.Image:
-        buffer = self._buffer
-        buffer.seek(0)
-        buffer.truncate()
-        self._camera.capture(buffer, format="rgb", use_video_port=True)
-        width, height = CAPTURE_SIZE
-        return Image.frombuffer("RGB", (width, height), buffer.getvalue(), "raw", "RGB", 0, 1).copy()
+    def _run(self):
+        misses = 0
+        try:
+            while not self._stop.is_set():
+                buffer = io.BytesIO()
+                try:
+                    self._camera.capture(buffer, format="rgb", use_video_port=True)
+                except Exception as exc:
+                    misses += 1
+                    if misses < 3 and not self._stop.is_set():
+                        continue
+                    self._error = exc
+                    return
+                misses = 0
+                width, height = CAPTURE_SIZE
+                image = Image.frombuffer(
+                    "RGB", (width, height), buffer.getvalue(), "raw", "RGB", 0, 1
+                ).copy()
+                with self._lock:
+                    self._latest = image
+        finally:
+            try:
+                self._camera.close()
+            except Exception:
+                pass
+            self._closed.set()
+
+    def frame(self) -> Image.Image | None:
+        if self._error is not None:
+            raise self._error
+        with self._lock:
+            return self._latest
 
     def close(self):
-        self._camera.close()
+        self._stop.set()
+        self._closed.wait(timeout=4)
 
 
 def paste_preview(image: Image.Image, shot: Image.Image, box: tuple[int, int, int, int]):

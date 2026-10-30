@@ -1,0 +1,19 @@
+---
+description: Title Case for BigSigner button labels
+globs: src/bigsigner/ui/**/*.py
+alwaysApply: false
+---
+
+# Button labels
+
+Button labels use Title Case. Capitalize each word.
+
+These words stay lowercase unless they are the first or last word: a, an, the, and, or, to, of, for, with, from, in.
+
+A word that is written in capitals in ordinary English stays in capitals. OK, QR, and SD stay as they are, including inside a longer label.
+
+A technical token keeps its own spelling. The export choice stays `xpub only`. Product terms keep their spelling: SingleSig, MultiSig, Native-Segwit, Taproot. Native-Segwit is written with a hyphen.
+
+The passphrase keyboard modes stay the literal strings `abc`, `ABC`, `.?123`, and `#+=`.
+
+Examples: Show Full Details, Export to SD Card, Both Wallet and Key, Only the Key, Enter a Passphrase, Load from SD Card, Derive a Native-Segwit SingleSig Key, Go to Native-Segwit SingleSig Wallet, Use This Account, Create a Copy of This Seed with a Passphrase.

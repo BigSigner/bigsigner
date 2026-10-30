@@ -20,11 +20,13 @@ from ..paths import MULTISIG_NATIVE, SINGLESIG_NATIVE, SINGLESIG_TAPROOT, format
 from ..psbt_review import ReviewError, review_psbt, sign_with
 from ..qr import qr_matrix
 from ..session import Session, SessionError, _passphrase_warnings, _public_for, account_index_phrase
-from ..scan import import_scanned
+from ..bsms import bsms_text
+from ..scan import QrSequence, import_scanned
 from ..sdcard import SdError, child_path, file_exists, list_folder, parent_path, read_text, write_text
 from ..licenses import NOTICES
-from ..seedqr import compact_bytes, standard_digits
+from ..seedqr import compact_bytes
 from ..slip132 import display_form, label_of
+from ..ur import descriptor_ur
 from .canvas import (
     BLUE,
     HEADER,
@@ -58,6 +60,8 @@ NAME_ON_WALLET_CARD = TITLE_SIZE
 # 32px leaves the widest fingerprint-name line inside the card. 36px does not.
 _WALLET_CARD_ICON = NAME_ON_WALLET_CARD
 _WALLET_CARD_GAP = 10
+# Space above a later key's name. The first key stays under the title.
+_WALLET_KEY_GAP = 20
 NAME_ON_WALLET = TITLE_SIZE
 NAME_ON_MULTISIG = TITLE_SIZE
 # The fingerprint line shares the row with the checkbox. 28 is the largest size that stays on one line.
@@ -72,9 +76,11 @@ SEED_CARD_FONT = 36
 # A singlesig account xpub shares its first 16 characters with nearby accounts.
 # 20 characters is the longest prefix that still fits on one centered line, and it changes with the account.
 XPUB_ACCOUNT_PREVIEW = 20
-# Floating plus button. About 15% smaller than the 122px circle and 64px glyph.
-_PLUS_DIAMETER = 104
-_PLUS_GLYPH = 54
+# External Key screen. Nineteen letters and the ellipsis fit on one centered line.
+XPUB_KEY_PREVIEW = 19
+# Floating plus button. About 10% smaller than the previous 104px circle.
+_PLUS_DIAMETER = 94
+_PLUS_GLYPH = 49
 _PLUS_CLEARANCE = 28 + _PLUS_DIAMETER
 
 
@@ -127,8 +133,14 @@ SCROLL_HOLD = 0.4
 # Touch reports that stop for this long end the gesture. A short one inside
 # the box is a click.
 SCROLL_GAP = 0.08
-SEED_FORMATS = ("words", "text", "compact", "standard")
-SEED_FORMAT_NAMES = ("Words", "Text QR", "Compact SeedQR", "Standard SeedQR")
+SEED_FORMATS = ("words", "compact", "text")
+SEED_FORMAT_NAMES = ("Words", "Compact SeedQR", "Text QR")
+DESCRIPTOR_FORMATS = ("ur", "plain")
+DESCRIPTOR_FORMAT_NAMES = ("UR", "Plain QR")
+MULTISIG_DESCRIPTOR_NOTE = (
+    "A Native-Segwit multisig descriptor can list its key expressions in any order. "
+    "The checksum changes with that order."
+)
 QR_BRIGHTNESS_MAX = 4
 QR_BRIGHTNESS_DEFAULT = 2
 # 46 px is 4.97 mm on the Waveshare 4-inch panel (0.108 mm pixels), the nearest size to 5 mm.
@@ -155,15 +167,15 @@ class App:
         self.notice_until = None
         self.warnings = []
         self.selected_fp = None
+        self.selected_key_index = 0
         self.wallet_index = 0
+        self._wallet_account_visit = None
         self.draft = ""
         self.menu = False
         self.add_menu = False
         self.hits = []
         self.qr_zoom = None
         self.qr_text = ""
-        self.qr_is_seed = False
-        self.qr_compact = False
         self.qr_kind = "plain"
         self.key_qr_index = 0
         self.qr_scroll = 0
@@ -178,9 +190,10 @@ class App:
         self._qr_strip_due = False
         self.seed_format = 0
         self.qr_brightness = QR_BRIGHTNESS_DEFAULT
+        self.descriptor_format = 0
         self.review = None
         self.psbt_text = ""
-        self.seed_length = 12
+        self.seed_length = 24
         self.seed_words = []
         self.word_prefix = ""
         self.word_cursor = 0
@@ -221,9 +234,11 @@ class App:
         self.passphrase_cursor = 0
         self.passphrase_mode = "lower"
         self.confirm = None
-        self.entropy_words = 12
+        self.entropy_words = 24
         self.open_dropdown = None
         self.scan_kind = "key"
+        self.qr_sequence = QrSequence()
+        self.camera_unavailable = False
         self.sd_dir = ""
         self.sd_expect = "key"
         self.sd_mode = "load"
@@ -234,6 +249,10 @@ class App:
         self.export_back = []
         self.filename = ""
         self.filename_cursor = 0
+        self.hscroll = 0
+        self.hscroll_max = 0
+        self._hscroll_box = None
+        self._hscroll_key = None
         self.account_fp = None
         self.account_text = ""
         self.account_for = "wallet"
@@ -244,6 +263,8 @@ class App:
         self.descriptor_key_index = 0
         self.multisig_m = 2
         self.multisig_selected = set()
+        self.singlesig_role = SINGLESIG_NATIVE
+        self.singlesig_selected = None
         self.pending_external = None
         self.external_format = "xpub"
         self.load_error = ""
@@ -296,6 +317,7 @@ class App:
         self.dirty = None
         self.keyboard_top = None
         self._still_boxes = []
+        self._hscroll_box = None
         # A remembered picture is only valid while that screen is showing.
         # Coming back and patching a band would leave the other screen on the panel.
         if self.screen != "derive":
@@ -338,6 +360,7 @@ class App:
             "export-format": self._export_format,
             "export-name": self._export_name,
             "multisig": self._multisig,
+            "singlesig": self._singlesig,
             "load-error": self._load_error,
             "descriptor-choice": self._descriptor_choice,
             "wallet-import-note": self._wallet_import_note,
@@ -367,7 +390,9 @@ class App:
                 return
 
     def pointer_down(self, x: int, y: int):
-        if self._in_seed_grid(x, y):
+        if self._in_hscroll_field(x, y):
+            panel = "hfield"
+        elif self._in_seed_grid(x, y):
             panel = "seed"
         elif self._in_qr_panel(x, y):
             panel = "qr"
@@ -383,6 +408,8 @@ class App:
             self._grid_origin = self.qr_scroll
         elif panel == "entropy":
             self._grid_origin = self.entropy_scroll
+        elif panel == "hfield":
+            self._grid_origin = self.hscroll
         else:
             self._grid_origin = self.seed_grid_scroll
 
@@ -399,6 +426,29 @@ class App:
             return False
         left, top, right, bottom = box
         return left <= x < right and top <= y < bottom
+
+    def _in_hscroll_field(self, x: int, y: int) -> bool:
+        box = self._hscroll_box
+        if box is None or self.hscroll_max <= 0:
+            return False
+        left, top, right, bottom = box
+        return left <= x < right and top <= y < bottom
+
+    def _move_hscroll(self, dx: int, dy: int, dragging: bool, origin_x: int, origin_y: int, panel: str) -> bool:
+        """Drag a wide text field sideways. A short press still moves the cursor."""
+        if not dragging and abs(dx) <= SCROLL_DELTA_X and abs(dy) <= SCROLL_DELTA_Y:
+            if time.monotonic() - self._press_at >= SCROLL_HOLD:
+                self._press = (origin_x, origin_y, 0, True, panel)
+            return False
+        if abs(dx) <= abs(dy):
+            self._press = (origin_x, origin_y, 0, True, panel)
+            return False
+        self._press = (origin_x, origin_y, 0, True, panel)
+        scroll = max(0, min(self.hscroll_max, int(self._grid_origin - dx)))
+        if scroll == self.hscroll:
+            return False
+        self.hscroll = scroll
+        return True
 
     def finger_down(self) -> bool:
         return self._press is not None
@@ -417,6 +467,8 @@ class App:
         # Plus and minus are clicks even when the finger slides off them.
         if self._in_still_box(origin_x, origin_y):
             return False
+        if panel == "hfield":
+            return self._move_hscroll(dx, dy, dragging, origin_x, origin_y, panel)
         if not dragging and abs(dx) <= SCROLL_DELTA_X and abs(dy) <= SCROLL_DELTA_Y:
             if time.monotonic() - self._press_at >= SCROLL_HOLD:
                 self._press = (origin_x, origin_y, origin_scroll, True, panel)
@@ -506,6 +558,8 @@ class App:
     def go(self, screen: str):
         self.back.append(self.screen)
         self.screen = screen
+        if screen == "scan":
+            self.qr_sequence.reset()
         if screen == "key":
             self.scroll["key"] = 0
         self.menu = False
@@ -516,7 +570,10 @@ class App:
         leaving_lit_qr = self.screen == "seed-show" or (
             self.screen == "qr" and self.qr_kind in ("key", "descriptor")
         )
+        leaving_wallet = self.screen == "wallet"
         self.screen = self.back.pop() if self.back else "keys"
+        if leaving_wallet:
+            self._restore_wallet_accounts()
         if self.screen in ("keys", "wallets"):
             self.wallet_plan = None
             self.pending_external = None
@@ -560,12 +617,24 @@ class App:
             self.go("scan")
         elif action == "wallet-sd":
             self._open_sd("descriptor")
+        elif action == "wallet-singlesig":
+            self.add_menu = False
+            self.singlesig_role = SINGLESIG_NATIVE
+            self.singlesig_selected = None
+            self.open_dropdown = None
+            self.scroll["singlesig"] = 0
+            self.go("singlesig")
         elif action == "wallet-multisig":
             self.add_menu = False
             self.multisig_m = 2
             self.multisig_selected = set()
             self.open_dropdown = None
             self.go("multisig")
+        elif action.startswith("pick-ss-"):
+            fingerprint = bytes.fromhex(action[len("pick-ss-") :])
+            self.singlesig_selected = None if fingerprint == self.singlesig_selected else fingerprint
+        elif action == "ss-create":
+            self._create_selected_singlesig()
         elif action.startswith("toggle-ms-"):
             fingerprint = bytes.fromhex(action[len("toggle-ms-") :])
             if fingerprint in self.multisig_selected:
@@ -591,6 +660,8 @@ class App:
             self._open_export("stored")
         elif action == "export-derived":
             self._open_export("derive")
+        elif action == "export-wallet":
+            self._open_wallet_export()
         elif action.startswith("export-format-"):
             self._choose_export_format(int(action[len("export-format-") :]))
         elif action == "export-new":
@@ -609,7 +680,7 @@ class App:
             self._save_account()
         elif action == "add-generate":
             self.add_menu = False
-            self.entropy_words = 12
+            self.entropy_words = 24
             self.entropy_digits = ""
             self.pending_mnemonic = ""
             self.open_dropdown = None
@@ -620,6 +691,10 @@ class App:
             name, key = action[len("dropdown-pick-") :].rpartition("-")[::2]
             if name == "entropy-words":
                 self.entropy_words = int(key)
+            elif name == "singlesig-script":
+                self.singlesig_role = SINGLESIG_TAPROOT if key == "taproot" else SINGLESIG_NATIVE
+                if self.singlesig_selected not in self._singlesig_candidates():
+                    self.singlesig_selected = None
             elif name == "multisig-m":
                 self.multisig_m = int(key)
             elif name == "network" and key != self.session.network:
@@ -678,6 +753,8 @@ class App:
             self.back = []
             self.menu = False
             self.add_menu = False
+        elif action == "external-known":
+            self._continue_loaded_multisig()
         elif action == "external-next":
             if self.pending_external is None:
                 return
@@ -694,6 +771,8 @@ class App:
         elif action == "back":
             self.back_one()
         elif action.startswith("nav-"):
+            if self.screen == "wallet":
+                self._restore_wallet_accounts()
             self.screen = action[4:]
             self.back = []
             self.menu = False
@@ -702,6 +781,7 @@ class App:
             self.seed_words = []
             self.word_prefix = ""
             self.word_cursor = 0
+            self.seed_length = 24
             self.seed_grid_stick = True
             self.go("seed")
         elif action == "add-text":
@@ -725,13 +805,18 @@ class App:
         elif action == "save-text":
             self._save_text()
         elif action.startswith("open-fp-"):
-            self.selected_fp = bytes.fromhex(action[8:])
+            rest = action[len("open-fp-") :]
+            hex_fp, separator, index_text = rest.partition("-")
+            self.selected_fp = bytes.fromhex(hex_fp)
+            self.selected_key_index = int(index_text) if separator else 0
             self.slip_labels = False
             self.show_secret = False
             self.show_passphrase = False
             self.go("key")
         elif action.startswith("open-wallet-"):
             self.wallet_index = int(action[12:])
+            self.scroll["wallet"] = 0
+            self._remember_wallet_accounts()
             self.go("wallet")
         elif action == "derive-native":
             self._open_derive(SINGLESIG_NATIVE)
@@ -802,18 +887,14 @@ class App:
             self._show_qr()
         elif action == "show-descriptor":
             self._open_descriptor_qr()
-        elif action == "qr-format":
-            if self.qr_is_seed:
-                self.qr_compact = not self.qr_compact
-                self.qr_zoom = None
         elif action == "seed-format-next":
             self._step_seed_format(1)
         elif action == "seed-format-prev":
             self._step_seed_format(-1)
         elif action == "qr-form-next":
-            self._step_key_qr(1)
+            self._step_qr_format(1)
         elif action == "qr-form-prev":
-            self._step_key_qr(-1)
+            self._step_qr_format(-1)
         elif action == "zoom-close":
             self.qr_zoom = None
         elif action == "brightness-down":
@@ -1031,6 +1112,25 @@ class App:
         self.export_back = list(self.back)
         self.go("export-format")
 
+    def _open_wallet_export(self):
+        if self.wallet_index >= len(self.session.wallets):
+            self.set_notice("This wallet is no longer loaded.")
+            return
+        try:
+            descriptor = self.session.descriptor_text(self.wallet_index)
+            text = bsms_text(descriptor, self.session.network)
+        except (SessionError, ParseError) as exc:
+            self.set_notice(str(exc))
+            return
+        self.export_label = "BSMS"
+        self.export_text = text
+        self.export_return = self.screen
+        self.export_back = list(self.back)
+        self.sd_mode = "export"
+        self.sd_dir = ""
+        self.scroll["sd"] = 0
+        self.go("sd")
+
     def _choose_export_format(self, index: int):
         formats = self._key_qr_formats()
         if index < 0 or index >= len(formats):
@@ -1056,6 +1156,9 @@ class App:
         self.go("export-name")
 
     def _suggested_export_name(self) -> str:
+        if self.export_label == "BSMS" and self.wallet_index < len(self.session.wallets):
+            title = self._wallet_title(self.session.wallets[self.wallet_index])
+            return "-".join(title.lower().split()) + ".bsms"
         record = self.session.fingerprints.get(self.selected_fp)
         fingerprint = "key" if record is None else record.fingerprint.hex()
         label = self.export_label.split()[0].lower() if self.export_label else "key"
@@ -1105,50 +1208,9 @@ class App:
     def _export_name(self, frame: Frame):
         frame.header("New file", "back")
         box = (MARGIN, HEADER + 16, WIDTH - MARGIN, HEADER + 88)
-        frame.draw.rounded_rectangle(box, radius=12, fill=WHITE, outline=LINE)
-        text_x = box[0] + 16
-        face = font(TITLE_SIZE, mono=True)
-        shown, shown_cursor, start = self._filename_window(frame.draw, face, box[2] - text_x - 12)
-        ink = INK if self.filename else MUTED
-        _left, text_top, _right, text_bottom = frame.draw.textbbox((0, 0), shown or "Ag", font=face)
-        text_y = box[1] + (72 - (text_bottom - text_top)) / 2 - text_top
-        frame.draw.text((text_x, text_y), shown, font=face, fill=ink)
-        if self.filename:
-            caret_x = text_x + _text_ink_width(frame.draw, shown[:shown_cursor], face)
-            frame.draw.line((caret_x, box[1] + 14, caret_x, box[3] - 14), fill=BLUE, width=2)
-            self._filename_cursor_hits(frame, box, shown, start)
+        self._paint_hscroll_field(frame, box, self.filename, self.filename_cursor, "File name")
         frame.button(box[3] + 12, "Save", "export-save-new")
         self._passphrase_keyboard(frame)
-
-    def _filename_window(self, draw, face, width: int) -> tuple[str, int, int]:
-        text = self.filename
-        cursor = max(0, min(self.filename_cursor, len(text)))
-        if not text:
-            return "File name", 0, 0
-        if _text_ink_width(draw, text, face) <= width:
-            return text, cursor, 0
-        start = cursor
-        while start > 0 and _text_ink_width(draw, text[start - 1 : cursor], face) <= width:
-            start -= 1
-        end = cursor
-        while end < len(text) and _text_ink_width(draw, text[start : end + 1], face) <= width:
-            end += 1
-        return text[start:end], cursor - start, start
-
-    def _filename_cursor_hits(self, frame: Frame, box, shown: str, start: int):
-        face = font(TITLE_SIZE, mono=True)
-        text_x = box[0] + 16
-        widths = [_text_ink_width(frame.draw, shown[:i], face) for i in range(len(shown) + 1)]
-        edges = [box[0]]
-        for index in range(len(shown)):
-            edges.append(text_x + (widths[index] + widths[index + 1]) / 2)
-        edges.append(box[2])
-        for index in range(len(shown) + 1):
-            frame.hit(
-                (edges[index], box[1], edges[index + 1], box[3]),
-                f"passcur-{start + index}",
-                f"passcur-{start + index}",
-            )
 
     def _sd(self, frame: Frame):
         try:
@@ -1169,31 +1231,46 @@ class App:
                 verb = "sd-write" if exporting else "sd-read"
                 rows.append((entry["name"], f"{verb}:{relative}"))
         list_top = HEADER + 60
-        height = 76
-        placed = [(list_top + index * (height + 8), label, action) for index, (label, action) in enumerate(rows)]
-        end = placed[-1][0] + height + 8 if placed else list_top
-        button_h = frame.button_height("New file") if exporting else 0
+        name_width = WIDTH - 2 * MARGIN - 32
+        face = font(TITLE_SIZE)
+        placed = []
+        top = list_top
+        for label, action in rows:
+            lines = _filename_lines(frame.draw, label, face, name_width)
+            height = _sd_row_height(len(lines))
+            placed.append((top, height, lines, label, action))
+            top += height + 8
+        end = top if placed else list_top
+        button_h = frame.button_height("New File") if exporting else 0
         clearance = button_h + 28 if exporting else 96
         offset = self._scroll_offset("sd", end, clearance=clearance)
-        for top, label, action in placed:
-            self._sd_row(frame, top - offset, list_top, height, label, action)
+        for row_top, height, lines, label, action in placed:
+            self._sd_row(frame, row_top - offset, list_top, height, lines, label, action)
         if exporting:
-            frame.button(HEIGHT - 16 - button_h, "New file", "export-new")
+            frame.button(HEIGHT - 16 - button_h, "New File", "export-new")
         frame.header("Choose a file" if exporting else "SD card", "back")
         frame.draw.rectangle((0, HEADER, WIDTH, list_top), fill=PAPER)
         shown = _one_line(frame, self.sd_dir or "/", TITLE_SIZE, WIDTH - 2 * MARGIN)
         frame.text(shown, MARGIN, HEADER + 12, size=TITLE_SIZE, fill=MUTED, mono=True)
         if not entries:
-            message_y = list_top if not placed else placed[0][0] - offset + height + 12
+            if placed:
+                row_top, height, _lines, _label, _action = placed[0]
+                message_y = row_top - offset + height + 12
+            else:
+                message_y = list_top
             message = "This folder is empty." if self.sd_dir else "This SD card is empty."
             frame.text(message, MARGIN, message_y, size=TITLE_SIZE)
 
-    def _sd_row(self, frame: Frame, top: int, list_top: int, height: int, label: str, action: str):
+    def _sd_row(self, frame: Frame, top: int, list_top: int, height: int, lines: list[str], label: str, action: str):
         if top >= HEIGHT or top + height <= list_top:
             return
         frame.draw.rounded_rectangle((MARGIN, top, WIDTH - MARGIN, top + height), radius=14, fill=WHITE, outline=LINE)
-        shown = _one_line(frame, label, TITLE_SIZE, WIDTH - 2 * MARGIN - 32)
-        frame.text(shown, MARGIN + 16, top + 20, size=TITLE_SIZE)
+        y = top + 20
+        face = font(TITLE_SIZE)
+        for line in lines:
+            if y + TITLE_SIZE > list_top:
+                frame.draw.text((MARGIN + 16, y), line, font=face, fill=INK)
+            y += TITLE_SIZE + 8
         frame.hit((MARGIN, max(top, list_top), WIDTH - MARGIN, min(top + height, HEIGHT)), action, label)
 
     def camera_preview_box(self):
@@ -1219,15 +1296,29 @@ class App:
             return
         frame.draw.rectangle(box, fill=(12, 14, 18))
 
+    def scan_prompt(self) -> str:
+        """The line under the viewfinder. A missing camera replaces the instruction."""
+        if self.camera_unavailable:
+            return "The camera is not available."
+        if self.qr_sequence.expected > 1 and self.qr_sequence.received:
+            if self.qr_sequence.received < self.qr_sequence.expected:
+                return f"Scanned {self.qr_sequence.received} of {self.qr_sequence.expected} parts."
+            return "Reading the QR sequence."
+        if self.scan_kind == "descriptor":
+            return "Point the camera at one wallet descriptor QR code."
+        return "Point the camera at one QR code."
+
     def _scan(self, frame: Frame):
         descriptor = self.scan_kind == "descriptor"
         frame.header("Scan descriptor" if descriptor else "Scan QR", "back")
         self._viewfinder(frame)
-        if descriptor:
-            message = "Point the camera at one wallet descriptor QR code."
-        else:
-            message = "Point the camera at one QR code."
-        frame.text(message, MARGIN, HEIGHT - 96, size=TITLE_SIZE)
+        frame.text(
+            self.scan_prompt(),
+            MARGIN,
+            HEIGHT - 96,
+            size=TITLE_SIZE,
+            fill=RED if self.camera_unavailable else INK,
+        )
 
     def _show_load_error(self, message: str, expect: str):
         """Replace a scan or SD-card failure toast with its own screen."""
@@ -1252,7 +1343,16 @@ class App:
         """Import a payload read from a QR code. Ignored unless the scan screen is open."""
         if self.screen != "scan":
             return
-        self._import_payload(text, self.scan_kind, "QR code")
+        try:
+            payload = self.qr_sequence.take(text, self.session.network, "QR code", self.scan_kind)
+        except SessionError as exc:
+            self.qr_sequence.reset()
+            self._show_load_error(str(exc), self.scan_kind)
+            return
+        if payload is None:
+            return
+        self.qr_sequence.reset()
+        self._import_payload(payload, self.scan_kind, "QR code")
 
     def _import_payload(self, text: str, expect: str, source: str):
         try:
@@ -1292,6 +1392,11 @@ class App:
         fingerprint = added.get("fingerprint")
         if fingerprint is not None and (prefer_key or "wallet" not in added["message"].lower()):
             self.selected_fp = fingerprint
+            record = self.session.fingerprints.get(fingerprint)
+            if prefer_key and record is not None and record.keys:
+                self.selected_key_index = len(record.keys) - 1
+            else:
+                self.selected_key_index = 0
             self.back = ["keys"]
             self.scroll["key"] = 0
             self.screen = "key"
@@ -1489,62 +1594,96 @@ class App:
         mark = logo(WIDTH - 48, 180)
         logo_top = HEADER + 24
         frame.image.paste(mark, ((WIDTH - mark.width) // 2, logo_top), mark)
+        version = f"Version {__version__}"
+        version_size = 24
+        version_y = logo_top + mark.height + 12
+        face = font(version_size)
+        version_width = frame.draw.textlength(version, font=face)
+        frame.draw.text(((WIDTH - version_width) / 2, version_y), version, font=face, fill=MUTED)
         frame.text(
             "It is now safe to remove the SD card to guarantee nothing will be saved on permanent storage.",
             MARGIN,
-            logo_top + mark.height + 28,
+            version_y + version_size + 24,
             size=BODY_SIZE,
         )
         frame.button(HEIGHT - 110, "Continue", "warning-ok")
 
     def _keys(self, frame: Frame):
         y = HEADER + 24
-        seeds = []
-        external = []
-        for fingerprint, record in self.session.fingerprints.items():
-            if any(key.has_seed for key in record.keys):
-                seeds.append((fingerprint, record))
-            else:
-                external.append((fingerprint, record))
-        seeds.sort(key=lambda item: self._card_added(item[1], True))
-        external.sort(key=lambda item: self._card_added(item[1], False))
+        sections = self._key_sections()
         placed = []
-        if not seeds and not external:
+        if not any(items for _title, _icon, _awesome, items in sections):
             frame.text("No keys found. Press the plus button to add a new key.", MARGIN, y, size=BODY_SIZE)
-        sections = (
-            ("Seeds", Icons.KEY, False, seeds),
-            ("External Keys", Icons.EYE, True, external),
-        )
+        label_face = font(TITLE_SIZE)
         for title, icon, awesome, items in sections:
             if not items:
                 continue
-            placed.append(("label", y, title, icon, awesome))
-            y += TITLE_SIZE + 20
-            for fingerprint, record in items:
-                placed.append(("card", y, fingerprint, record))
-                y += self._key_card_height(frame, record) + 12
+            text_x = MARGIN + TITLE_SIZE + 12
+            lines = wrap(frame.draw, title, label_face, WIDTH - MARGIN - text_x) or [""]
+            placed.append(("label", y, title, icon, awesome, len(lines)))
+            y += len(lines) * (TITLE_SIZE + 8) + 12
+            for fingerprint, record, key, index in items:
+                placed.append(("card", y, fingerprint, record, key, index))
+                y += self._key_card_height(frame, record, key) + 12
         offset = self._scroll_offset("keys", y if placed else HEADER + 24, clearance=_PLUS_CLEARANCE)
         for item in placed:
             if item[0] == "label":
-                text_x = frame.leading_icon(item[3], MARGIN, item[1] - offset, TITLE_SIZE, INK, awesome=item[4])
-                frame.text(item[2], text_x, item[1] - offset, size=TITLE_SIZE)
+                _kind, top, title, icon, awesome, _line_count = item
+                text_x = frame.leading_icon(icon, MARGIN, top - offset, TITLE_SIZE, INK, awesome=awesome)
+                frame.text(title, text_x, top - offset, size=TITLE_SIZE)
             else:
-                self._key_card(frame, item[1] - offset, item[2], item[3])
+                _kind, top, fingerprint, record, key, index = item
+                self._key_card(frame, top - offset, fingerprint, record, key, index)
         frame.header("Bitcoin Keys", "menu")
         if self.add_menu:
             self._speed_dial(
                 frame,
                 (
-                    ("Scan QR code", "add-scan"),
-                    ("Manual entry", "add-manual"),
-                    ("Load from SD card", "add-sd"),
-                    ("Generate new seed", "add-generate"),
+                    ("Scan QR Code", "add-scan"),
+                    ("Manual Entry", "add-manual"),
+                    ("Load from SD Card", "add-sd"),
+                    ("Generate New Seed", "add-generate"),
                 ),
             )
         self._plus(frame, "toggle-add", Icons.CLOSE if self.add_menu else Icons.PLUS)
 
-    def _key_card_height(self, frame: Frame, record) -> int:
-        return self._key_card_body(frame, 0, record, None, paint=False) - 0
+    def _key_sections(self):
+        """Seeds, then single-sig external keys, then multisig external keys."""
+        seeds = []
+        singles = []
+        multis = []
+        for fingerprint, record in self.session.fingerprints.items():
+            if any(key.has_seed for key in record.keys):
+                seeds.append((fingerprint, record, None, 0))
+                continue
+            for index, key in enumerate(record.keys):
+                if key.has_seed:
+                    continue
+                bucket = multis if getattr(key, "role", None) == MULTISIG_NATIVE else singles
+                bucket.append((fingerprint, record, key, index))
+        seeds.sort(key=lambda item: self._card_added(item[1], True))
+        singles.sort(key=self._external_card_sort)
+        multis.sort(key=self._external_card_sort)
+        return (
+            ("Seeds", Icons.KEY, False, seeds),
+            ("SingleSig External Keys", Icons.EYE, True, singles),
+            ("MultiSig External Keys", Icons.EYE, True, multis),
+        )
+
+    def _external_card_sort(self, item):
+        _fingerprint, record, key, _index = item
+        script = 1 if getattr(key, "role", None) == SINGLESIG_TAPROOT else 0
+        account = 0 if key.account is None else key.account
+        return (record.nickname.casefold(), script, account)
+
+    def _key_card_height(self, frame: Frame, record, key=None) -> int:
+        return self._key_card_body(frame, 0, record, None, paint=False, only=key) - 0
+
+    def _external_script(self, key) -> str:
+        """Native-Segwit or Taproot. The section title already says single-sig or multisig."""
+        if getattr(key, "role", None) == SINGLESIG_TAPROOT:
+            return "Taproot"
+        return "Native-Segwit"
 
     def _external_kind(self, key) -> str:
         if getattr(key, "role", None) == SINGLESIG_TAPROOT:
@@ -1553,28 +1692,26 @@ class App:
             return "Native-Segwit MultiSig"
         return "Native-Segwit SingleSig"
 
-    def _external_key_line(self, key) -> str:
-        return f"{self._external_kind(key)} Account #{key.account}"
-
     def _card_added(self, record, seeds: bool) -> int:
         return min(key.added for key in record.keys if key.has_seed is seeds)
 
     def _external_keys(self, record):
         return sorted((key for key in record.keys if not key.has_seed), key=lambda key: key.added)
 
-    def _key_card(self, frame: Frame, top: int, fingerprint: bytes, record):
-        height = self._key_card_height(frame, record)
+    def _key_card(self, frame: Frame, top: int, fingerprint: bytes, record, key=None, key_index: int = 0):
+        height = self._key_card_height(frame, record, key)
         if top >= HEIGHT or top + height <= HEADER:
             return
         frame.draw.rounded_rectangle((MARGIN, top, WIDTH - MARGIN, top + height), radius=16, fill=WHITE, outline=LINE)
-        self._key_card_body(frame, top, record, fingerprint, paint=True)
+        self._key_card_body(frame, top, record, fingerprint, paint=True, only=key)
+        action = f"open-fp-{fingerprint.hex()}" if key is None else f"open-fp-{fingerprint.hex()}-{key_index}"
         frame.hit(
             (MARGIN, max(top, HEADER), WIDTH - MARGIN, min(top + height, HEIGHT)),
-            f"open-fp-{fingerprint.hex()}",
+            action,
             record.nickname,
         )
 
-    def _key_card_body(self, frame: Frame, top: int, record, fingerprint: bytes | None, paint: bool) -> int:
+    def _key_card_body(self, frame: Frame, top: int, record, fingerprint: bytes | None, paint: bool, only=None) -> int:
         inset = MARGIN + 16
         right = WIDTH - MARGIN - 16
         y = top + _CARD_PAD
@@ -1601,8 +1738,9 @@ class App:
                 y += len(lines) * (NAME_ON_CARD + 8)
         else:
             kind_width = right - inset
-            for key in self._external_keys(record):
-                kind = self._external_kind(key)
+            keys = [only] if only is not None else self._external_keys(record)
+            for key in keys:
+                kind = self._external_script(key)
                 account = f"Account #{key.account}"
                 if paint:
                     y = frame.text(kind, inset, y, size=NAME_ON_CARD, fill=MUTED, width=kind_width)
@@ -1621,9 +1759,18 @@ class App:
         frame.draw.text((x, y), value, font=value_face, fill=fill)
         return y + size + 8
 
+    def _stored_key(self):
+        """The fingerprint record and the key opened from its card."""
+        record = None if self.selected_fp is None else self.session.fingerprints.get(self.selected_fp)
+        if record is None or not record.keys:
+            return record, None
+        index = self.selected_key_index
+        if index < 0 or index >= len(record.keys):
+            index = 0
+        return record, record.keys[index]
+
     def _key(self, frame: Frame):
-        record = self.session.fingerprints.get(self.selected_fp)
-        key = record.keys[0] if record is not None and record.keys else None
+        record, key = self._stored_key()
         has_seed = key is not None and key.has_seed
         if record is None or key is None:
             title = "Key"
@@ -1681,37 +1828,37 @@ class App:
                 frame.text(generated, MARGIN, y - offset, size=TITLE_SIZE)
             y += self._text_height(frame, generated, TITLE_SIZE)
             if key.passphrase:
-                y = self._flow_button(frame, y, "Show passphrase", "show-passphrase", paint, offset)
-                copy = "Create a copy of this seed with a different passphrase"
+                y = self._flow_button(frame, y, "Show Passphrase", "show-passphrase", paint, offset)
+                copy = "Create a Copy of This Seed with a Different Passphrase"
             else:
                 note = "No passphrase is used."
                 if paint:
                     frame.text(note, MARGIN, y - offset, size=TITLE_SIZE, fill=MUTED)
                 y += self._text_height(frame, note, TITLE_SIZE)
-                copy = "Create a copy of this seed with a passphrase"
-            y = self._flow_button(frame, y, "Show seed", "show-seed", paint, offset)
+                copy = "Create a Copy of This Seed with a Passphrase"
+            y = self._flow_button(frame, y, "Show Seed", "show-seed", paint, offset)
             y = self._flow_button(frame, y, copy, "copy-passphrase", paint, offset)
             y = self._flow_button(
-                frame, y, "Derive a\nNative-Segwit\nSingleSig key", "derive-native", paint, offset,
-                "Derive a Native-Segwit SingleSig key",
+                frame, y, "Derive a\nNative-Segwit\nSingleSig Key", "derive-native", paint, offset,
+                "Derive a Native-Segwit SingleSig Key",
             )
             y = self._flow_button(
-                frame, y, "Derive a\nNative-Segwit\nMultiSig key", "derive-multisig", paint, offset,
-                "Derive a Native-Segwit MultiSig key",
+                frame, y, "Derive a\nNative-Segwit\nMultiSig Key", "derive-multisig", paint, offset,
+                "Derive a Native-Segwit MultiSig Key",
             )
             return self._flow_button(
-                frame, y, "Derive a\nTaproot\nSingleSig key", "derive-taproot", paint, offset,
-                "Derive a Taproot SingleSig key",
+                frame, y, "Derive a\nTaproot\nSingleSig Key", "derive-taproot", paint, offset,
+                "Derive a Taproot SingleSig Key",
             )
         y = self._flow_text(frame, y, f"Type: {self._external_kind(key)}", paint, offset, size=text_size)
         if key.account is not None:
             y = self._flow_text(frame, y, f"Account: {key.account}", paint, offset, size=text_size)
-        preview = key.xpub.to_string()[:12] + "\u2026"
+        preview = key.xpub.to_string()[:XPUB_KEY_PREVIEW] + "\u2026"
         y = self._flow_value_below(frame, y, "Derivation Path:", format_path(list(key.path)), paint, offset, text_size)
         y = self._flow_value_below(frame, y, "Extended Public Key:", preview, paint, offset, text_size)
         if key.role == SINGLESIG_NATIVE:
             y = self._flow_button(
-                frame, y, self._seed_wallet_label(SINGLESIG_NATIVE, "Native Segwit"), "make-xpub-wallet", paint, offset,
+                frame, y, self._seed_wallet_label(SINGLESIG_NATIVE, "Native-Segwit"), "make-xpub-wallet", paint, offset,
             )
         elif key.role == SINGLESIG_TAPROOT:
             y = self._flow_button(
@@ -1797,7 +1944,7 @@ class App:
     def _current_derive_shell(self, key):
         label = ""
         if key.role in (SINGLESIG_NATIVE, SINGLESIG_TAPROOT):
-            script = "Taproot" if key.role == SINGLESIG_TAPROOT else "Native Segwit"
+            script = "Taproot" if key.role == SINGLESIG_TAPROOT else "Native-Segwit"
             label = self._seed_wallet_label(key.role, script)
         return (self.selected_fp, self.derive_role, self.scroll.get("derive", 0), label)
 
@@ -1866,7 +2013,7 @@ class App:
         y = self._flow_value_below(frame, y, "Extended Public Key:", preview, paint, offset, text_size)
         self._derive_xpub_box = self._flow_value_box
         if key.role in (SINGLESIG_NATIVE, SINGLESIG_TAPROOT):
-            script = "Taproot" if key.role == SINGLESIG_TAPROOT else "Native Segwit"
+            script = "Taproot" if key.role == SINGLESIG_TAPROOT else "Native-Segwit"
             y = self._flow_button(frame, y, self._seed_wallet_label(key.role, script), "derive-wallet", paint, offset)
         y += 20
         y = self._flow_button(frame, y, "Show Full Details", "derive-details", paint, offset)
@@ -1937,9 +2084,10 @@ class App:
             self._speed_dial(
                 frame,
                 (
-                    ("Scan descriptor QR code", "wallet-scan"),
-                    ("Load descriptor from SD card", "wallet-sd"),
-                    ("Select from existing multsig keys", "wallet-multisig"),
+                    ("Scan Descriptor QR Code", "wallet-scan"),
+                    ("Load Descriptor from SD Card", "wallet-sd"),
+                    ("Select from Existing SingleSig Key", "wallet-singlesig"),
+                    ("Select from Existing MultiSig Keys", "wallet-multisig"),
                 ),
             )
         self._plus(frame, "toggle-add", Icons.CLOSE if self.add_menu else Icons.PLUS)
@@ -1951,38 +2099,7 @@ class App:
         return kind
 
     def _wallet_title(self, wallet) -> str:
-        if wallet.role == SINGLESIG_TAPROOT:
-            kind = "Taproot"
-        else:
-            kind = "Native Segwit"
-        if wallet.multisig:
-            return f"{wallet.threshold}-of-{len(wallet.fingerprints)} {kind}"
-        return kind
-
-    def _wallet_name_row(self) -> int:
-        return (NAME_ON_WALLET_CARD + 8) * 2
-
-    def _wallet_hex_room(self) -> int:
-        return WIDTH - 2 * MARGIN - 32 - _WALLET_CARD_ICON - _WALLET_CARD_GAP
-
-    def _wallet_hex_lines(self, draw, fingerprints) -> list[str]:
-        """Comma-separated fingerprints, broken after a comma when the next one does not fit."""
-        face = font(TITLE_SIZE, mono=True)
-        width = self._wallet_hex_room()
-        hexes = [fingerprint.hex() for fingerprint in fingerprints]
-        if not hexes:
-            return []
-        lines = []
-        current = hexes[0]
-        for hex_text in hexes[1:]:
-            trial = f"{current},{hex_text}"
-            if draw.textlength(trial, font=face) <= width:
-                current = trial
-            else:
-                lines.append(f"{current},")
-                current = hex_text
-        lines.append(current)
-        return lines
+        return self._wallet_kind_line(wallet)
 
     def _wallet_card_height(self, wallet) -> int:
         draw = ImageDraw.Draw(Image.new("RGB", (WIDTH, 4)))
@@ -2001,40 +2118,38 @@ class App:
             label,
         )
 
-    def _wallet_card_body(self, draw, top: int, wallet, paint: bool, frame: Frame | None = None) -> int:
+    def _wallet_card_body(self, _draw, top: int, wallet, paint: bool, frame: Frame | None = None) -> int:
         y = top + 14
         if paint and frame is not None and y >= HEADER:
             frame.text(self._wallet_title(wallet), MARGIN + 16, y, size=TITLE_SIZE)
         y += TITLE_SIZE + 12
-        lines = self._wallet_hex_lines(draw, wallet.fingerprints)
-        if paint and frame is not None:
-            self._draw_wallet_hexes(frame, y, lines)
-        y += len(lines) * (TITLE_SIZE + 8) - (8 if lines else 0) + 12
-        for fingerprint in wallet.fingerprints:
+        for index, fingerprint in enumerate(wallet.fingerprints):
+            if index:
+                y += _WALLET_KEY_GAP
             record = self.session.fingerprints.get(fingerprint)
             nickname = "" if record is None else record.nickname
             has_seed = bool(record and any(key.has_seed for key in record.keys))
             y = self._draw_wallet_name(frame, y, nickname, has_seed, paint)
+            y = self._draw_wallet_fingerprint(frame, y, fingerprint.hex(), paint)
         return y + 16
 
-    def _draw_wallet_hexes(self, frame: Frame, y: int, lines: list[str]):
-        face = font(TITLE_SIZE, mono=True)
-        _left, top, _right, bottom = frame.draw.textbbox((0, 0), "Ag", font=face)
+    def _draw_wallet_fingerprint(self, frame: Frame | None, y: int, fingerprint_hex: str, paint: bool) -> int:
+        """Hex under the name, with the icon aligned to the start of the name text."""
         inset = MARGIN + 16
-        text_x = inset + _WALLET_CARD_ICON + _WALLET_CARD_GAP
-        for index, line in enumerate(lines):
-            line_y = y + index * (TITLE_SIZE + 8)
-            if line_y < HEADER:
-                continue
-            if index == 0:
-                frame.glyph(
-                    Icons.FINGERPRINT,
-                    inset + _WALLET_CARD_ICON / 2,
-                    line_y + (top + bottom) / 2,
-                    _WALLET_CARD_ICON,
-                    MUTED,
-                )
-            frame.draw.text((text_x, line_y), line, font=face, fill=MUTED)
+        name_text_x = inset + _WALLET_CARD_ICON + _WALLET_CARD_GAP
+        icon = _WALLET_CARD_ICON
+        if paint and frame is not None and y >= HEADER:
+            face = font(TITLE_SIZE, mono=True)
+            _left, top, _right, bottom = frame.draw.textbbox((0, 0), "Ag", font=face)
+            frame.glyph(
+                Icons.FINGERPRINT,
+                name_text_x + icon / 2,
+                y + (top + bottom) / 2,
+                icon,
+                MUTED,
+            )
+            frame.draw.text((name_text_x + icon + _WALLET_CARD_GAP, y), fingerprint_hex, font=face, fill=MUTED)
+        return y + TITLE_SIZE + 8
 
     def _draw_wallet_name(self, frame: Frame | None, y: int, nickname: str, has_seed: bool, paint: bool) -> int:
         lines = _fingerprint_name_lines(nickname)
@@ -2056,7 +2171,10 @@ class App:
         return y + step * max(1, len(lines))
 
     def _multisig(self, frame: Frame):
-        candidates = self._multisig_candidates()
+        candidates = sorted(
+            self._multisig_candidates(),
+            key=lambda fingerprint: self.session.fingerprints[fingerprint].nickname.casefold(),
+        )
         if len(candidates) < 2:
             frame.text(
                 "A multisig needs at least two seeds or native-segwit multisig keys.",
@@ -2082,16 +2200,20 @@ class App:
             field_enabled = True
         field = self._dropdown_field(frame, y, "multisig-m", label, enabled=field_enabled)
         list_top = field[3] + 16
-        name_step = NAME_ON_MULTISIG + 8
-        row_h = 12 + name_step + NAME_ON_MULTISIG + 8 + FINGERPRINT_ON_MULTISIG + 14
-        content_end = list_top + len(candidates) * (row_h + 12)
-        button_h = frame.button_height("Create wallet")
+        heights = [
+            self._picker_card_height(self.session.fingerprints[fingerprint], MULTISIG_NATIVE)
+            for fingerprint in candidates
+        ]
+        content_end = list_top + sum(heights) + 12 * len(candidates)
+        button = "Go to Wallet" if self._existing_multisig_index() is not None else "Create Wallet"
+        button_h = frame.button_height(button)
         offset = self._scroll_offset("multisig", content_end, clearance=24 + button_h)
         visible_bottom = HEIGHT - 16 - button_h
         y = list_top - offset
-        for fingerprint in candidates:
+        for fingerprint, row_h in zip(candidates, heights):
             record = self.session.fingerprints[fingerprint]
-            if list_top <= y and y + row_h <= visible_bottom:
+            clip = self._list_card_clip(frame, y, row_h, list_top, visible_bottom)
+            if clip is not None:
                 selected = fingerprint in self.multisig_selected
                 box = (MARGIN, y, WIDTH - MARGIN, y + row_h)
                 frame.draw.rounded_rectangle(box, radius=14, fill=WHITE, outline=LINE)
@@ -2102,7 +2224,8 @@ class App:
                     28,
                     NAVY,
                 )
-                name_y = y + 12
+                name_step = NAME_ON_MULTISIG + 8
+                name_y = self._draw_picker_kind(frame, record, y + 12, MULTISIG_NATIVE)
                 for line_index, line in enumerate(_fingerprint_name_lines(record.nickname)):
                     frame.text(line, MARGIN + 56, name_y + line_index * name_step, size=NAME_ON_MULTISIG)
                 hex_y = name_y + name_step + NAME_ON_MULTISIG + 8
@@ -2116,12 +2239,215 @@ class App:
                     (hex_x, hex_y), fingerprint.hex(),
                     font=font(FINGERPRINT_ON_MULTISIG, mono=True), fill=MUTED,
                 )
-                frame.hit(box, f"toggle-ms-{fingerprint.hex()}", record.nickname)
+                self._restore_list_card_clip(frame, clip)
+                frame.hit(clip["hit"], f"toggle-ms-{fingerprint.hex()}", record.nickname)
             y += row_h + 12
-        frame.button(HEIGHT - 16 - button_h, "Create wallet", "ms-create", enabled=count > 0 and self.multisig_m <= count)
+        frame.button(HEIGHT - 16 - button_h, button, "ms-create", enabled=count > 0 and self.multisig_m <= count)
         frame.header("Native-Segwit Multisig", "back")
         if field_enabled and self.open_dropdown == "multisig-m":
             self._dropdown_menu(frame, field, "multisig-m", choices, str(self.multisig_m))
+
+    def _singlesig(self, frame: Frame):
+        any_key = self._singlesig_candidates(SINGLESIG_NATIVE) or self._singlesig_candidates(SINGLESIG_TAPROOT)
+        if not any_key:
+            frame.text(
+                "A singlesig wallet needs a seed or a single-signature key.",
+                MARGIN,
+                HEADER + 16,
+                size=TITLE_SIZE,
+            )
+            frame.header("SingleSig Key", "back")
+            return
+        script = "Taproot" if self.singlesig_role == SINGLESIG_TAPROOT else "Native-Segwit"
+        candidates = sorted(
+            self._singlesig_candidates(),
+            key=lambda fingerprint: self.session.fingerprints[fingerprint].nickname.casefold(),
+        )
+        if self.singlesig_selected not in candidates:
+            self.singlesig_selected = None
+        y = HEADER + 16
+        field = self._dropdown_field(frame, y, "singlesig-script", script)
+        list_top = field[3] + 16
+        heights = [
+            self._picker_card_height(self.session.fingerprints[fingerprint], self.singlesig_role)
+            for fingerprint in candidates
+        ]
+        content_end = list_top + sum(heights) + 12 * len(candidates)
+        button = "Go to Wallet" if self._existing_singlesig_index() is not None else "Create Wallet"
+        button_h = frame.button_height(button)
+        offset = self._scroll_offset("singlesig", content_end, clearance=24 + button_h)
+        visible_bottom = HEIGHT - 16 - button_h
+        y = list_top - offset
+        if not candidates:
+            frame.text(f"There is no {script} key to select.", MARGIN, y, size=TITLE_SIZE)
+        for fingerprint, row_h in zip(candidates, heights):
+            record = self.session.fingerprints[fingerprint]
+            clip = self._list_card_clip(frame, y, row_h, list_top, visible_bottom)
+            if clip is not None:
+                selected = fingerprint == self.singlesig_selected
+                box = (MARGIN, y, WIDTH - MARGIN, y + row_h)
+                frame.draw.rounded_rectangle(box, radius=14, fill=WHITE, outline=LINE)
+                frame.glyph(
+                    Icons.CHECKBOX_SELECTED if selected else Icons.CHECKBOX,
+                    MARGIN + 28,
+                    y + row_h / 2,
+                    28,
+                    NAVY,
+                )
+                name_step = NAME_ON_MULTISIG + 8
+                name_y = self._draw_picker_kind(frame, record, y + 12, self.singlesig_role)
+                for line_index, line in enumerate(_fingerprint_name_lines(record.nickname)):
+                    frame.text(line, MARGIN + 56, name_y + line_index * name_step, size=NAME_ON_MULTISIG)
+                hex_y = name_y + name_step + NAME_ON_MULTISIG + 8
+                hex_x = frame.leading_icon(
+                    Icons.FINGERPRINT, MARGIN + 56, hex_y, FINGERPRINT_ON_MULTISIG, MUTED,
+                )
+                hex_label = "Fingerprint: "
+                frame.draw.text((hex_x, hex_y), hex_label, font=font(FINGERPRINT_ON_MULTISIG), fill=MUTED)
+                hex_x += int(frame.draw.textlength(hex_label, font=font(FINGERPRINT_ON_MULTISIG)))
+                frame.draw.text(
+                    (hex_x, hex_y), fingerprint.hex(),
+                    font=font(FINGERPRINT_ON_MULTISIG, mono=True), fill=MUTED,
+                )
+                self._restore_list_card_clip(frame, clip)
+                frame.hit(clip["hit"], f"pick-ss-{fingerprint.hex()}", record.nickname)
+            y += row_h + 12
+        frame.button(
+            HEIGHT - 16 - button_h,
+            button,
+            "ss-create",
+            enabled=self.singlesig_selected is not None,
+        )
+        frame.header("SingleSig Key", "back")
+        if self.open_dropdown == "singlesig-script":
+            self._dropdown_menu(
+                frame,
+                field,
+                "singlesig-script",
+                (("native", "Native-Segwit"), ("taproot", "Taproot")),
+                "taproot" if self.singlesig_role == SINGLESIG_TAPROOT else "native",
+            )
+
+    def _picker_kind_label(self, record, role: str) -> tuple[str, bool, list[str]]:
+        if any(key.has_seed for key in record.keys):
+            return Icons.KEY, False, ["Seed"]
+        accounts = {
+            key.account
+            for key in record.keys
+            if not key.has_seed and getattr(key, "role", None) == role and key.account is not None
+        }
+        if len(accounts) > 1:
+            return Icons.EYE, True, ["External Keys", f"({len(accounts)} accounts)"]
+        return Icons.EYE, True, ["External Key"]
+
+    def _picker_card_height(self, record, role: str) -> int:
+        _icon, _awesome, lines = self._picker_kind_label(record, role)
+        name_step = NAME_ON_MULTISIG + 8
+        kind = len(lines) * (FINGERPRINT_ON_MULTISIG + 8)
+        return 12 + kind + name_step + NAME_ON_MULTISIG + 8 + FINGERPRINT_ON_MULTISIG + 14
+
+    def _draw_picker_kind(self, frame: Frame, record, y: int, role: str) -> int:
+        icon, awesome, lines = self._picker_kind_label(record, role)
+        text_x = frame.leading_icon(
+            icon, MARGIN + 56, y, FINGERPRINT_ON_MULTISIG, MUTED, awesome=awesome,
+        )
+        face = font(FINGERPRINT_ON_MULTISIG)
+        for index, line in enumerate(lines):
+            frame.draw.text((text_x, y + index * (FINGERPRINT_ON_MULTISIG + 8)), line, font=face, fill=MUTED)
+        return y + len(lines) * (FINGERPRINT_ON_MULTISIG + 8)
+
+    def _existing_singlesig_index(self):
+        selected = self.singlesig_selected
+        if selected not in self._singlesig_candidates():
+            return None
+        for index, wallet in enumerate(self.session.wallets):
+            if wallet.role == self.singlesig_role and not wallet.multisig and selected in wallet.fingerprints:
+                return index
+        return None
+
+    def _existing_multisig_index(self):
+        selected = [fingerprint for fingerprint in self._multisig_candidates() if fingerprint in self.multisig_selected]
+        if len(selected) < 2 or len(selected) < self.multisig_m:
+            return None
+        wanted = tuple(sorted(selected))
+        for index, wallet in enumerate(self.session.wallets):
+            if (
+                wallet.multisig
+                and wallet.threshold == self.multisig_m
+                and tuple(sorted(wallet.fingerprints)) == wanted
+            ):
+                return index
+        return None
+
+    def _singlesig_candidates(self, role: str | None = None) -> list[bytes]:
+        """Seeds, and single-signature external keys of this script. One row per fingerprint."""
+        role = self.singlesig_role if role is None else role
+        found = []
+        for fingerprint, record in self.session.fingerprints.items():
+            if any(key.has_seed for key in record.keys):
+                found.append(fingerprint)
+            elif any(getattr(key, "role", None) == role for key in record.keys):
+                found.append(fingerprint)
+        return found
+
+    def _singlesig_account(self, fingerprint: bytes) -> int:
+        record = self.session.fingerprints[fingerprint]
+        if any(key.has_seed for key in record.keys):
+            return 0
+        accounts = [
+            key.account
+            for key in record.keys
+            if getattr(key, "role", None) == self.singlesig_role and key.account is not None
+        ]
+        return min(accounts)
+
+    def _create_selected_singlesig(self):
+        selected = self.singlesig_selected
+        if selected not in self._singlesig_candidates():
+            self.set_notice("Select a key.")
+            return
+        role = self.singlesig_role
+        existing = self._existing_singlesig_index()
+        if existing is not None:
+            self.set_notice("")
+            self._show_wallet(existing)
+            return
+        account = self._singlesig_account(selected)
+        kind = "tr" if role == SINGLESIG_TAPROOT else "wpkh"
+        key = _public_for(self.session, selected, role, account)
+        origin = format_path(list(key.path))[2:]
+        text = f"{kind}([{selected.hex()}/{origin}]{key.xpub.to_string()}/<0;1>/*)"
+        try:
+            added = self.session.add_text(text)
+        except SessionError as exc:
+            self.set_notice(str(exc))
+            return
+        self.set_notice(added["message"])
+        wallet = added.get("wallet")
+        if wallet is not None and wallet in self.session.wallets:
+            self._show_wallet(self.session.wallets.index(wallet))
+            return
+        self.back = ["wallets"]
+        self.screen = "wallets"
+
+    def _list_card_clip(self, frame: Frame, y: int, row_h: int, list_top: int, visible_bottom: int):
+        """Keep the part of a card that sits in the list. The rest can show only partly."""
+        if y + row_h <= list_top or y >= visible_bottom:
+            return None
+        return {
+            "saved_top": frame.image.crop((0, 0, WIDTH, list_top)) if y < list_top else None,
+            "saved_bottom": frame.image.crop((0, visible_bottom, WIDTH, HEIGHT)) if y + row_h > visible_bottom else None,
+            "list_top": list_top,
+            "visible_bottom": visible_bottom,
+            "hit": (MARGIN, max(y, list_top), WIDTH - MARGIN, min(y + row_h, visible_bottom)),
+        }
+
+    def _restore_list_card_clip(self, frame: Frame, clip) -> None:
+        if clip["saved_top"] is not None:
+            frame.image.paste(clip["saved_top"], (0, 0))
+        if clip["saved_bottom"] is not None:
+            frame.image.paste(clip["saved_bottom"], (0, clip["visible_bottom"]))
+        frame.draw = ImageDraw.Draw(frame.image)
 
     def _clamp_multisig_threshold(self):
         count = len(self._multisig_selection())
@@ -2156,6 +2482,12 @@ class App:
         ]
         return min(accounts)
 
+    def _first_receive_pubkey(self, fingerprint: bytes) -> bytes:
+        """Compressed pubkey at /0/0, the order Sparrow uses for the receive descriptor."""
+        account = self._multisig_account(fingerprint)
+        key = _public_for(self.session, fingerprint, MULTISIG_NATIVE, account)
+        return key.xpub.derive("m/0/0").key.sec()
+
     def _create_selected_multisig(self):
         candidates = self._multisig_candidates()
         selected = [fingerprint for fingerprint in candidates if fingerprint in self.multisig_selected]
@@ -2165,15 +2497,12 @@ class App:
         if len(selected) < self.multisig_m:
             self.set_notice(f"Select at least {self.multisig_m} keys.")
             return
-        wanted = tuple(sorted(selected))
-        if any(
-            wallet.multisig
-            and wallet.threshold == self.multisig_m
-            and tuple(sorted(wallet.fingerprints)) == wanted
-            for wallet in self.session.wallets
-        ):
-            self.set_notice("The wallet is already loaded.")
+        existing = self._existing_multisig_index()
+        if existing is not None:
+            self.set_notice("")
+            self._show_wallet(existing)
             return
+        selected.sort(key=self._first_receive_pubkey)
         parts = []
         for fingerprint in selected:
             account = self._multisig_account(fingerprint)
@@ -2190,8 +2519,10 @@ class App:
         wallet = added.get("wallet")
         if wallet is not None:
             self.wallet_index = self.session.wallets.index(wallet)
+            self.scroll["wallet"] = 0
             self.back = ["wallets"]
             self.screen = "wallet"
+            self._remember_wallet_accounts()
             return
         self.back = []
         self.screen = "wallets"
@@ -2209,7 +2540,7 @@ class App:
             frame.text("This wallet is no longer loaded.", MARGIN, 140)
             return
         flow_end = self._wallet_flow(frame, wallet, paint=False)[0]
-        delete_h = frame.button_height("Delete wallet")
+        delete_h = frame.button_height("Delete Wallet")
         clearance = 24
         if self.notice:
             _face, _lines, _line_h, _pad, notice_top, _height = self._notice_layout(frame)
@@ -2219,11 +2550,11 @@ class App:
             self.scroll["wallet"] = 0
             self.scroll_max["wallet"] = 0
             _end, open_field, open_fp = self._wallet_flow(frame, wallet, paint=True)
-            frame.button(delete_y, "Delete wallet", "delete-wallet", color=RED)
+            frame.button(delete_y, "Delete Wallet", "delete-wallet", color=RED)
         else:
             offset = self._scroll_offset("wallet", flow_end + 16 + delete_h, clearance=clearance)
             _end, open_field, open_fp = self._wallet_flow(frame, wallet, paint=True, offset=offset)
-            frame.button(flow_end + 16 - offset, "Delete wallet", "delete-wallet", color=RED)
+            frame.button(flow_end + 16 - offset, "Delete Wallet", "delete-wallet", color=RED)
         frame.header(title, "back")
         if open_field is not None and open_fp is not None:
             options = self.session.account_options(open_fp, wallet.role) or []
@@ -2239,9 +2570,14 @@ class App:
         """Lay out the wallet under the title. Returns the unshifted y, and any open account menu."""
         y = HEADER + 16
         kind = f"Type: {self._wallet_kind_line(wallet)}"
+        if paint:
+            frame.text(kind, MARGIN, y - offset, size=TITLE_SIZE)
+        y += self._text_height(frame, kind, TITLE_SIZE) + 8
         open_field = None
         open_fp = None
-        for fingerprint in wallet.fingerprints:
+        for index, fingerprint in enumerate(wallet.fingerprints):
+            if index:
+                y += 16
             record = self.session.fingerprints[fingerprint]
             has_seed = any(item.has_seed for item in record.keys)
             glyph, awesome = _name_icon(has_seed)
@@ -2252,10 +2588,7 @@ class App:
                 frame.fingerprint_line(
                     y - offset, fingerprint.hex(), text_size=TITLE_SIZE, icon_size=_DETAIL_ICON,
                 )
-            y += _DETAIL_ICON + 16
-            if paint:
-                frame.text(kind, MARGIN, y - offset, size=TITLE_SIZE)
-            y += self._text_height(frame, kind, TITLE_SIZE)
+            y += _DETAIL_ICON + 8
             options = self.session.account_options(fingerprint, wallet.role)
             if options is not None and len(options) <= 1:
                 account = wallet.accounts[fingerprint]
@@ -2307,7 +2640,8 @@ class App:
                 else:
                     y += 64 + 16
         y = self._flow_button(frame, y, "Addresses", "addresses", paint, offset)
-        y = self._flow_button(frame, y, "Show descriptor", "show-descriptor", paint, offset)
+        y = self._flow_button(frame, y, "Show Descriptor", "show-descriptor", paint, offset)
+        y = self._flow_button(frame, y, "Export to SD Card", "export-wallet", paint, offset)
         return y, open_field, open_fp
 
     def _step_account(self, fingerprint: bytes, delta: int):
@@ -2393,9 +2727,9 @@ class App:
         save_y = HEIGHT - 100
         if self.notice:
             _face, _lines, _line_h, _pad, notice_top, _height = self._notice_layout(frame)
-            save_y = min(save_y, notice_top - 12 - frame.button_height("Use this account"))
+            save_y = min(save_y, notice_top - 12 - frame.button_height("Use This Account"))
         self._account_pad(frame, save_y)
-        frame.button(save_y, "Use this account", "account-save")
+        frame.button(save_y, "Use This Account", "account-save")
 
     def _account_pad(self, frame: Frame, save_y: int):
         key_h = 64
@@ -2958,8 +3292,8 @@ class App:
             HEADER + 24,
             size=TITLE_SIZE,
         )
-        y = frame.button(y + 20, "No passphrase", "passphrase-no")
-        frame.button(y, "Enter a passphrase", "passphrase-yes")
+        y = frame.button(y + 20, "No Passphrase", "passphrase-no")
+        frame.button(y, "Enter a Passphrase", "passphrase-yes")
 
     def _passphrase_view(self, frame: Frame):
         record = self.session.fingerprints.get(self.selected_fp)
@@ -2980,11 +3314,12 @@ class App:
         frame.header("Passphrase", "back")
         warnings = _passphrase_warnings(self.passphrase_text)
         y = HEADER + 16
-        for warning in warnings:
-            y = frame.text(warning, MARGIN, y, size=TITLE_SIZE, fill=RED)
         box = (MARGIN, y, WIDTH - MARGIN, y + 72)
         self._paint_passphrase_field(frame, box)
-        frame.button(box[3] + 12, "Save passphrase", "passphrase-save")
+        y = box[3] + (8 if warnings else 0)
+        for warning in warnings:
+            y = frame.text(warning, MARGIN, y, size=TITLE_SIZE, fill=RED)
+        frame.button(y + 12, "Save Passphrase", "passphrase-save")
         self._passphrase_keyboard(frame)
         self._remember_passphrase(frame, warnings, box)
 
@@ -3021,51 +3356,72 @@ class App:
         return True
 
     def _paint_passphrase_field(self, frame: Frame, box):
+        self._paint_hscroll_field(
+            frame, box, self.passphrase_text, self.passphrase_cursor, "Type a passphrase",
+        )
+
+    def _paint_hscroll_field(self, frame: Frame, box, text: str, cursor: int, placeholder: str):
+        """One line of text. A finger drags it sideways when it is wider than the field."""
         frame.draw.rounded_rectangle(box, radius=12, fill=WHITE, outline=LINE)
         text_x = box[0] + 16
+        room = max(1, box[2] - 12 - text_x)
         face = font(TITLE_SIZE, mono=True)
-        if self.passphrase_text:
-            shown, shown_cursor, start = self._passphrase_window(frame.draw, face, box[2] - text_x - 12)
-            ink = INK
+        box_h = box[3] - box[1]
+        if not text:
+            self.hscroll = 0
+            self.hscroll_max = 0
+            self._hscroll_key = ("", 0)
+            self._hscroll_box = None
+            _left, text_top, _right, text_bottom = frame.draw.textbbox((0, 0), placeholder, font=face)
+            text_y = box[1] + (box_h - (text_bottom - text_top)) / 2 - text_top
+            frame.draw.text((text_x, text_y), placeholder, font=face, fill=MUTED)
+            return
+        cursor = max(0, min(cursor, len(text)))
+        ink_w = _text_ink_width(frame.draw, text, face)
+        content_w = ink_w + 2
+        max_scroll = max(0, content_w - room)
+        caret = _text_ink_width(frame.draw, text[:cursor], face)
+        key = (text, cursor)
+        if key != self._hscroll_key:
+            scroll = self.hscroll
+            if caret < scroll:
+                scroll = caret
+            elif caret > scroll + room - 2:
+                scroll = caret - (room - 2)
+            self.hscroll = max(0, min(max_scroll, int(scroll)))
+            self._hscroll_key = key
         else:
-            shown, shown_cursor, start = "Type a passphrase", 0, 0
-            ink = MUTED
-        _left, text_top, _right, text_bottom = frame.draw.textbbox((0, 0), shown or "Ag", font=face)
-        text_y = box[1] + (72 - (text_bottom - text_top)) / 2 - text_top
-        frame.draw.text((text_x, text_y), shown, font=face, fill=ink)
-        if self.passphrase_text:
-            caret_x = text_x + _text_ink_width(frame.draw, shown[:shown_cursor], face)
-            frame.draw.line((caret_x, box[1] + 14, caret_x, box[3] - 14), fill=BLUE, width=2)
-            self._passphrase_cursor_hits(frame, box, shown, start)
+            self.hscroll = max(0, min(max_scroll, int(self.hscroll)))
+        self.hscroll_max = max_scroll
+        self._hscroll_box = box if max_scroll else None
+        _left, text_top, _right, text_bottom = frame.draw.textbbox((0, 0), text, font=face)
+        text_y = (box_h - (text_bottom - text_top)) / 2 - text_top
+        strip = Image.new("RGB", (max(room, content_w), box_h), WHITE)
+        draw = ImageDraw.Draw(strip)
+        draw.text((0, text_y), text, font=face, fill=INK)
+        draw.line((caret, 14, caret, box_h - 14), fill=BLUE, width=2)
+        left = self.hscroll
+        frame.image.paste(strip.crop((left, 0, left + room, box_h)), (text_x, box[1]))
+        frame.draw.rounded_rectangle(box, radius=12, outline=LINE)
+        self._hscroll_cursor_hits(frame, box, text, text_x, face)
 
-    def _passphrase_window(self, draw, face, width: int) -> tuple[str, int, int]:
-        """The slice of the passphrase that fits, keeping the cursor on screen.
-
-        A passphrase wider than the field shows its tail while the cursor is at the end.
-        """
-        text = self.passphrase_text
-        cursor = max(0, min(self.passphrase_cursor, len(text)))
-        if _text_ink_width(draw, text, face) <= width:
-            return text, cursor, 0
-        start = cursor
-        while start > 0 and _text_ink_width(draw, text[start - 1 : cursor], face) <= width:
-            start -= 1
-        end = cursor
-        while end < len(text) and _text_ink_width(draw, text[start : end + 1], face) <= width:
-            end += 1
-        return text[start:end], cursor - start, start
-
-    def _passphrase_cursor_hits(self, frame: Frame, box, shown: str, start: int):
-        face = font(TITLE_SIZE, mono=True)
-        text_x = box[0] + 16
-        widths = [_text_ink_width(frame.draw, shown[:i], face) for i in range(len(shown) + 1)]
-        edges = [box[0]]
-        for index in range(len(shown)):
-            edges.append(text_x + (widths[index] + widths[index + 1]) / 2)
-        edges.append(box[2])
-        for index in range(len(shown) + 1):
-            absolute = start + index
-            frame.hit((edges[index], box[1], edges[index + 1], box[3]), f"passcur-{absolute}", f"passcur-{absolute}")
+    def _hscroll_cursor_hits(self, frame: Frame, box, text: str, text_x: int, face):
+        widths = [_text_ink_width(frame.draw, text[:index], face) for index in range(len(text) + 1)]
+        positions = [text_x + width - self.hscroll for width in widths]
+        for index in range(len(text) + 1):
+            if index == 0:
+                left = box[0]
+            else:
+                left = (positions[index - 1] + positions[index]) / 2
+            if index == len(text):
+                right = box[2]
+            else:
+                right = (positions[index] + positions[index + 1]) / 2
+            hit_left = max(box[0], left)
+            hit_right = min(box[2], right)
+            if hit_right - hit_left < 1:
+                continue
+            frame.hit((hit_left, box[1], hit_right, box[3]), f"passcur-{index}", f"passcur-{index}")
 
     def _passphrase_keyboard(self, frame: Frame):
         modes = (("abc", "lower"), ("ABC", "upper"), (".?123", "digit"), ("#+=", "symbol"))
@@ -3237,11 +3593,6 @@ class App:
             payload = self._qr_payload()
             image = _qr_image(payload, 400)
             frame.image.paste(image, ((WIDTH - image.width) // 2, 48))
-            if self.qr_is_seed:
-                caption = "Compact SeedQR" if self.qr_compact else "Standard SeedQR"
-                frame.text(caption, MARGIN, 460, size=TITLE_SIZE)
-                other = "Show standard SeedQR" if self.qr_compact else "Show compact SeedQR"
-                frame.button(510, other, "qr-format")
             frame.button(HEIGHT - 100, "Zoom In", "zoom-in")
             frame.hit((0, 0, 80, 80), "back", "back")
             frame.glyph(Icons.BACK, 40, 40, 40, INK)
@@ -3330,12 +3681,9 @@ class App:
 
     def _seed_qr_payload(self):
         words = self.qr_text.strip()
-        kind = SEED_FORMATS[self.seed_format]
-        if kind == "text":
+        if SEED_FORMATS[self.seed_format] == "text":
             return words.upper()
-        if kind == "compact":
-            return compact_bytes(words)
-        return standard_digits(words)
+        return compact_bytes(words)
 
     def _open_seed_show(self):
         record = self.session.fingerprints.get(self.selected_fp)
@@ -3343,7 +3691,6 @@ class App:
             self.set_notice("That key does not have a seed.")
             return
         self.qr_text = " ".join(record.keys[0].mnemonic)
-        self.qr_is_seed = True
         self.seed_format = 0
         self.qr_zoom = None
         self.seed_grid_scroll = 0
@@ -3590,17 +3937,17 @@ class App:
             return
         y = frame.text(self._descriptor_choice_message(), MARGIN, HEADER + 24, size=BODY_SIZE)
         if choice["multisig"]:
-            y = frame.button(y + 20, "Both Wallet And All Keys", "descriptor-both")
+            y = frame.button(y + 20, "Load Both Wallet and All Keys", "descriptor-both")
             labels = choice["labels"]
             index = min(self.descriptor_key_index, len(labels) - 1)
-            field = self._dropdown_field(frame, y + 28, "descriptor-key", labels[index])
-            frame.button(field[3] + 24, "Load Selected Key", "descriptor-key")
+            field = self._dropdown_field(frame, y + 64, "descriptor-key", labels[index])
+            frame.button(field[3] + 24, "Load Only Selected Key", "descriptor-key")
             if self.open_dropdown == "descriptor-key":
                 options = [(str(item), label) for item, label in enumerate(labels)]
                 self._dropdown_menu(frame, field, "descriptor-key", options, str(index))
             return
-        frame.button(HEIGHT - 190, "Both Wallet And Key", "descriptor-both")
-        frame.button(HEIGHT - 110, "Only The Key", "descriptor-key")
+        frame.button(HEIGHT - 190, "Both Wallet and Key", "descriptor-both")
+        frame.button(HEIGHT - 110, "Only the Key", "descriptor-key")
 
     def _load_chosen_descriptor_key(self):
         choice = self.descriptor_choice
@@ -3647,6 +3994,11 @@ class App:
         self.back = ["wallets"]
         self.menu = False
         self.add_menu = False
+        if plan["parsed"].multisig and (plan["new_keys"] or plan["existing"] is None):
+            self.pending_external = plan["new_keys"][0] if plan["new_keys"] else None
+            self.scroll["external-review"] = 0
+            self.screen = "external-review"
+            return
         if plan["new_keys"]:
             self.pending_external = plan["new_keys"][0]
             self.scroll["external-review"] = 0
@@ -3692,21 +4044,23 @@ class App:
             return
         self.wallet_index = self.session.wallets.index(wallet)
         if plan["existing"] is None:
-            message = "The multisig wallet was added." if plan["parsed"].multisig else "The wallet was added successfully."
+            message = "The multisig wallet was added successfully." if plan["parsed"].multisig else "The wallet was added successfully."
             self.set_notice(message)
         else:
             self.set_notice("")
         self.back = ["wallets"]
+        self.scroll["wallet"] = 0
         self.screen = "wallet"
         self.menu = False
         self.add_menu = False
+        self._remember_wallet_accounts()
 
     def _wallet_import_message(self) -> str:
         plan = self.wallet_plan
         name = self.session.wallet_short_name_of(plan["existing"])
         accounts = self._wallet_import_accounts()
         if plan["new_keys"]:
-            return f'Wallet "{name}" was already loaded. You can also use {accounts}.'
+            return f'Wallet "{name}" was already loaded. You can now also use {accounts}.'
         return f'Wallet "{name}" was already loaded. This descriptor points to {accounts}.'
 
     def _wallet_import_accounts(self) -> str:
@@ -3725,7 +4079,7 @@ class App:
         message = self._wallet_import_message()
         frame.header("Load Wallet", "back")
         frame.text(message, MARGIN, HEADER + 28, size=BODY_SIZE)
-        frame.button(HEIGHT - 110, "Continue", "wallet-import-continue")
+        frame.button(HEIGHT - 110, "Go to Wallet", "wallet-import-continue")
 
     def _external_format_options(self, key):
         network = self.session.network
@@ -3749,14 +4103,49 @@ class App:
             return f"[{key.fingerprint.hex()}/{path}]{key.canonical}/<0;1>/*"
         return key.canonical
 
+    def _continue_loaded_multisig(self):
+        plan = self.wallet_plan
+        if plan is None:
+            return
+        self.pending_external = None
+        if plan["existing"] is not None:
+            self.back = ["wallets"]
+            self.screen = "wallet-import-note"
+            return
+        self._finish_wallet_import()
+
+    def _importing_multisig_wallet(self) -> bool:
+        plan = self.wallet_plan
+        return plan is not None and plan["parsed"].multisig
+
+    def _multisig_key_counts(self) -> tuple[int, int]:
+        plan = self.wallet_plan
+        total = len(plan["parsed"].keys)
+        known = total - len(plan["new_keys"])
+        return known, total
+
+    def _known_keys_sentence(self) -> str:
+        known, total = self._multisig_key_counts()
+        if known == total:
+            return f"All of the multisig wallet's {total} keys were already loaded."
+        verb = "was" if known == 1 else "were"
+        return f"{known} of the multisig wallet's {total} keys {verb} already loaded."
+
     def _wallet_key_warning(self) -> str | None:
         """The warning used while importing a wallet. A lone external key keeps its own text."""
         plan = self.wallet_plan
         if plan is None:
             return None
         if plan["parsed"].multisig:
+            new = len(plan["new_keys"])
+            if new == 1:
+                return (
+                    "You are about to load 1 external key for a multisig wallet. "
+                    "Your co-signer must verify on their hardware wallet that the following "
+                    "extended public key (xpub) is indeed theirs."
+                )
             return (
-                "You are about to load External Keys for a multisig wallet. "
+                f"You are about to load {new} external keys for a multisig wallet. "
                 "Your co-signers must verify on their hardware wallets that the following "
                 "extended public keys (xpubs) are indeed theirs."
             )
@@ -3767,26 +4156,50 @@ class App:
         key = self.pending_external
         if key is not None and getattr(key, "role", None) == MULTISIG_NATIVE:
             return (
-                "You are about to load an External Key for a multisig wallet. "
+                "You are about to load an external key for a multisig wallet. "
                 "Your co-signer must verify on their hardware wallet that the following "
                 "extended public key (xpub) is indeed theirs."
             )
         return (
-            "You are about to load an External Key for a singlesig wallet. "
+            "You are about to load an external key for a singlesig wallet. "
             "Before sending any funds to the wallet addresses, the wallet owner must verify "
             "on their hardware wallet that the following extended public key is indeed theirs."
         )
 
+    def _external_details_title(self) -> str:
+        title = "Extended Public Key Details"
+        plan = self.wallet_plan
+        if plan is None:
+            return title
+        count = len(plan["new_keys"])
+        if count < 2:
+            return title
+        return f"{title} {self.wallet_plan_pos + 1}/{count}"
+
     def _external_warning(self, frame: Frame):
-        if self.pending_external is None:
+        multisig = self._importing_multisig_wallet()
+        if self.pending_external is None and not multisig:
             frame.header("Load External Key", "back")
             frame.text("This external key is no longer waiting to be loaded.", MARGIN, HEADER + 24)
             return
-        frame.header("Load External Key", "back")
-        self._centered_text(frame, "Warning", HEADER + 28, 34, RED)
-        message = self._wallet_key_warning() or self._lone_key_warning()
-        frame.text(message, MARGIN, HEADER + 88, size=TITLE_SIZE, fill=RED)
-        frame.button(HEIGHT - 110, "Show Extended Public Key Details", "external-next")
+        frame.header("Load MultiSig Wallet" if multisig else "Load External Key", "back")
+        if not multisig:
+            self._centered_text(frame, "Warning", HEADER + 28, 34, RED)
+            message = self._wallet_key_warning() or self._lone_key_warning()
+            frame.text(message, MARGIN, HEADER + 88, size=TITLE_SIZE, fill=RED)
+            frame.button(HEIGHT - 110, "Show Extended Public Key Details", "external-next")
+            return
+        known, total = self._multisig_key_counts()
+        y = HEADER + 16
+        if known:
+            y = frame.text(self._known_keys_sentence(), MARGIN, y, size=TITLE_SIZE)
+            y += 16
+        if known < total:
+            y = self._centered_text(frame, "Warning", y, 34, RED)
+            frame.text(self._wallet_key_warning(), MARGIN, y, size=TITLE_SIZE, fill=RED)
+            frame.button(HEIGHT - 110, "Show Extended Public Key Details", "external-next")
+            return
+        frame.button(HEIGHT - 110, "Continue", "external-known")
 
     def _external_details(self, frame: Frame):
         key = self.pending_external
@@ -3794,7 +4207,7 @@ class App:
             frame.header("Load External Key", "back")
             frame.text("This external key is no longer waiting to be loaded.", MARGIN, HEADER + 24)
             return
-        subtitle = "Extended Public Key Details"
+        subtitle = self._external_details_title()
         intro = "Verify these details are backed up:"
         prompt = "Verify this Extended Public Key on the other hardware wallet:"
         preview = self._external_preview(key)
@@ -3804,39 +4217,39 @@ class App:
         y = HEADER + 16
         y += self._text_height(frame, subtitle, detail)
         y += 8
-        y += self._text_height(frame, intro, detail)
-        y += 20
-        y += self._text_height(frame, f"Type: {self._external_kind(key)}", detail)
-        y += detail + 8
-        y += self._text_height(frame, "Derivation Path:", detail)
-        y += detail + 8
-        y += 16
         y += self._text_height(frame, prompt, detail)
         y += 8
         y += self._text_height(frame, "Format:", detail)
         y += 8
         y += 64 + 16
         y += self._text_height(frame, preview, xpub_size, mono=True) + 16
+        y += 16
+        y += self._text_height(frame, intro, detail)
+        y += 20
+        y += self._text_height(frame, f"Type: {self._external_kind(key)}", detail)
+        y += detail + 8
+        y += self._text_height(frame, "Derivation Path:", detail)
+        y += detail + 8
         content_end = y + frame.button_height("Continue") + 24
         offset = self._scroll_offset("external-details", content_end, clearance=12)
         y = HEADER + 16 - offset
-        y = frame.text(subtitle, MARGIN, y, size=detail)
+        y = self._centered_block(frame, subtitle, y, detail, INK)
         y += 8
+        y = frame.text(prompt, MARGIN, y, size=detail)
+        y = frame.text("Format:", MARGIN, y + 8, size=detail, fill=MUTED)
+        field = self._dropdown_field(frame, y + 8, "external-format", self._external_format_label(key))
+        y = self._draw_wrapped(frame, preview, field[3] + 16, xpub_size, mono=True)
+        y += 16
         y = frame.text(intro, MARGIN, y, size=detail)
         y += 20
-        y = frame.text(f"Type: {self._external_kind(key)}", MARGIN, y, size=detail)
+        y = self._label_value(frame, y, "Type: ", self._external_kind(key), detail)
         y = self._review_account_line(frame, y, key.account)
-        y = frame.text("Derivation Path:", MARGIN, y, size=detail)
+        y = frame.text("Derivation Path:", MARGIN, y, size=detail, fill=MUTED)
         path_face = font(detail, mono=True)
         path_width = frame.draw.textlength(path, font=path_face)
         if y >= HEADER:
             frame.draw.text((max(MARGIN, (WIDTH - path_width) / 2), y), path, font=path_face, fill=INK)
         y += detail + 8
-        y += 16
-        y = frame.text(prompt, MARGIN, y, size=detail)
-        y = frame.text("Format:", MARGIN, y + 8, size=detail, fill=MUTED)
-        field = self._dropdown_field(frame, y + 8, "external-format", self._external_format_label(key))
-        y = self._draw_wrapped(frame, preview, field[3] + 16, xpub_size, mono=True)
         frame.button(y + 16, "Continue", "external-continue")
         frame.header("Load External Key", "back")
         if self.open_dropdown == "external-format":
@@ -3853,6 +4266,40 @@ class App:
         width = frame.draw.textlength(value, font=face)
         frame.draw.text(((WIDTH - width) / 2, y), value, font=face, fill=fill)
         return y + size + 8
+
+    def _centered_block(self, frame: Frame, value: str, y: int, size: int, fill) -> int:
+        face = font(size)
+        for line in wrap(frame.draw, value, face, WIDTH - 2 * MARGIN) or [""]:
+            if y >= HEADER:
+                width = frame.draw.textlength(line, font=face)
+                frame.draw.text(((WIDTH - width) / 2, y), line, font=face, fill=fill)
+            y += size + 8
+        return y
+
+    def _label_value(self, frame: Frame, y: int, label: str, value: str, size: int, value_fill=INK) -> int:
+        """A grey label and its value, wrapping as one sentence. Later lines are the value."""
+        face = font(size)
+        source = f"{label}{value}"
+        lines = wrap(frame.draw, source, face, WIDTH - 2 * MARGIN) or [""]
+        cursor = 0
+        label_end = len(label)
+        for line in lines:
+            while cursor < len(source) and not source.startswith(line, cursor):
+                cursor += 1
+            if y >= HEADER:
+                if cursor < label_end:
+                    take = min(len(line), label_end - cursor)
+                    label_part = line[:take]
+                    value_part = line[take:]
+                    frame.draw.text((MARGIN, y), label_part, font=face, fill=MUTED)
+                    if value_part:
+                        x = MARGIN + frame.draw.textlength(label_part, font=face)
+                        frame.draw.text((x, y), value_part, font=face, fill=value_fill)
+                else:
+                    frame.draw.text((MARGIN, y), line, font=face, fill=value_fill)
+            cursor += len(line)
+            y += size + 8
+        return y
 
     def _text_height(self, frame: Frame, value: str, size: int, mono: bool = False) -> int:
         face = font(size, mono=mono)
@@ -3872,7 +4319,7 @@ class App:
         face = font(size)
         label = "Account: "
         if y >= HEADER:
-            frame.draw.text((MARGIN, y), label, font=face, fill=INK)
+            frame.draw.text((MARGIN, y), label, font=face, fill=MUTED)
             x = MARGIN + frame.draw.textlength(label, font=face)
             if account == 0:
                 frame.draw.text((x, y), "0 (default)", font=face, fill=INK)
@@ -3916,6 +4363,7 @@ class App:
             lines = wrap(frame.draw, label, face, text_width)
             height = max(BODY_SIZE + 28, 16 + line_h * len(lines))
             prepared.append((action, lines, height, label))
+        rows = []
         y = HEIGHT - _PLUS_CLEARANCE - 16
         for action, lines, height, label in reversed(prepared):
             y -= height
@@ -3927,8 +4375,24 @@ class App:
             for line in lines:
                 frame.draw.text((box[0] + 18, text_y), line, font=face, fill=INK)
                 text_y += line_h
-            frame.hit(box, action, label)
+            rows.append((y, y + height, action, label))
             y -= gap
+        # The grey page behind the rows closes the menu. The top row sits in
+        # that grey, so a touch slightly above its white pill was an outside
+        # tap and the menu vanished. Each row owns the gap around it, and the
+        # top row owns a band above the pill.
+        rows.reverse()
+        plus_top = HEIGHT - 28 - _PLUS_DIAMETER
+        for index, (top, bottom, action, label) in enumerate(rows):
+            if index == 0:
+                above = max(HEADER, top - 72)
+            else:
+                above = (rows[index - 1][1] + top) // 2
+            if index == len(rows) - 1:
+                below = min(plus_top, bottom + 16)
+            else:
+                below = (bottom + rows[index + 1][0]) // 2
+            frame.hit((0, above, WIDTH, below), action, label)
 
     def _plus(self, frame: Frame, action: str, icon: str):
         diameter = _PLUS_DIAMETER
@@ -3972,15 +4436,14 @@ class App:
         return None
 
     def _seed_wallet_label(self, role: str, script: str) -> str:
-        prefix = "Go to SingleSig" if self._seed_wallet_index(role) is not None else "Create a SingleSig"
-        return f"{prefix}\n{script} wallet"
+        verb = "Go to" if self._seed_wallet_index(role) is not None else "Create a"
+        return f"{verb} {script} SingleSig Wallet"
 
     def _make_wallet(self, kind: str, account: int = 0):
         role = SINGLESIG_NATIVE if kind == "wpkh" else SINGLESIG_TAPROOT
         existing = self._seed_wallet_index(role)
         if existing is not None:
-            self.wallet_index = existing
-            self.go("wallet")
+            self._show_wallet(existing)
             return
         record = self.session.fingerprints.get(self.selected_fp)
         if record is None or not record.keys[0].has_seed:
@@ -3998,21 +4461,53 @@ class App:
             self.set_notice(str(exc))
             return
         self.set_notice(added["message"])
-        self.wallet_index = len(self.session.wallets) - 1
-        self.go("wallet")
+        self._show_wallet(len(self.session.wallets) - 1)
+
+    def _show_wallet(self, index: int):
+        """Open a wallet with Bitcoin Wallets as the only screen behind it."""
+        self.wallet_index = index
+        self.scroll["wallet"] = 0
+        self.back = ["wallets"]
+        self.screen = "wallet"
+        self.menu = False
+        self.add_menu = False
+        self.open_dropdown = None
+        self._remember_wallet_accounts()
+
+    def _remember_wallet_accounts(self):
+        """The account a singlesig wallet had when it was opened. Leaving puts it back."""
+        if self.wallet_index >= len(self.session.wallets):
+            self._wallet_account_visit = None
+            return
+        wallet = self.session.wallets[self.wallet_index]
+        if wallet.multisig:
+            self._wallet_account_visit = None
+            return
+        self._wallet_account_visit = (id(wallet), dict(wallet.accounts))
+
+    def _restore_wallet_accounts(self):
+        visit = self._wallet_account_visit
+        self._wallet_account_visit = None
+        if visit is None or self.wallet_index >= len(self.session.wallets):
+            return
+        wallet = self.session.wallets[self.wallet_index]
+        marker, saved = visit
+        if marker != id(wallet) or wallet.multisig:
+            return
+        for fingerprint, account in saved.items():
+            if fingerprint in wallet.accounts:
+                wallet.accounts[fingerprint] = account
 
     def _make_xpub_wallet(self):
-        record = self.session.fingerprints.get(self.selected_fp)
-        if record is None or not record.keys or record.keys[0].xpub is None:
+        record, key = self._stored_key()
+        if record is None or key is None or key.xpub is None:
             self.set_notice("This key is no longer loaded.")
             return
-        key = record.keys[0]
         if key.role not in (SINGLESIG_NATIVE, SINGLESIG_TAPROOT):
             return
         existing = self._seed_wallet_index(key.role)
         if existing is not None:
-            self.wallet_index = existing
-            self.go("wallet")
+            self._show_wallet(existing)
             return
         kind = "tr" if key.role == SINGLESIG_TAPROOT else "wpkh"
         origin = format_path(list(key.path))[2:]
@@ -4025,10 +4520,10 @@ class App:
         self.set_notice(added["message"])
         wallet = added.get("wallet")
         if wallet is not None and wallet in self.session.wallets:
-            self.wallet_index = self.session.wallets.index(wallet)
+            index = self.session.wallets.index(wallet)
         else:
-            self.wallet_index = len(self.session.wallets) - 1
-        self.go("wallet")
+            index = len(self.session.wallets) - 1
+        self._show_wallet(index)
 
     def _delete_selected_wallet(self):
         try:
@@ -4048,7 +4543,7 @@ class App:
         if self.selected_fp is None:
             return
         try:
-            self.set_notice(self.session.delete_key(self.selected_fp, 0))
+            self.set_notice(self.session.delete_key(self.selected_fp, self.selected_key_index))
         except SessionError as exc:
             self.set_notice(str(exc))
             return
@@ -4057,26 +4552,26 @@ class App:
         self.screen = "keys"
 
     def _current_export(self) -> str:
+        record, key = self._stored_key()
         if self.screen == "wallet" and self.session.wallets:
             return self.session.descriptor_text(self.wallet_index).split("#")[0]
-        record = self.session.fingerprints.get(self.selected_fp)
-        if record and record.keys[0].has_seed:
-            return " ".join(record.keys[0].mnemonic)
-        if record and record.keys[0].xpub:
-            return record.keys[0].xpub.to_string()
+        if key is not None and key.has_seed:
+            return " ".join(key.mnemonic)
+        if key is not None and key.xpub:
+            return key.xpub.to_string()
         return "BigSigner"
 
     def _show_qr(self):
         if self.screen != "wallet":
-            record = self.session.fingerprints.get(self.selected_fp)
-            if record and record.keys and record.keys[0].has_seed:
+            record, key = self._stored_key()
+            if key is not None and key.has_seed:
                 self._open_seed_show()
                 return
-            if record and record.keys and record.keys[0].xpub is not None:
+            if key is not None and key.xpub is not None:
                 self.qr_source = "stored"
                 self._open_key_qr()
                 return
-        self._open_qr(self._current_export(), seed=False)
+        self._open_qr(self._current_export())
 
     def _open_descriptor_qr(self):
         if self.wallet_index >= len(self.session.wallets):
@@ -4084,8 +4579,8 @@ class App:
             return
         self.qr_text = self.session.descriptor_text(self.wallet_index)
         self.qr_kind = "descriptor"
+        self.descriptor_format = 0
         self.qr_scroll = 0
-        self.qr_is_seed = False
         self.qr_zoom = None
         self.qr_hint_until = time.monotonic() + QR_HINT_HOLD
         self.go("qr")
@@ -4094,7 +4589,6 @@ class App:
         self.qr_kind = "key"
         self.key_qr_index = 0
         self.qr_scroll = 0
-        self.qr_is_seed = False
         self.qr_zoom = None
         self.qr_hint_until = time.monotonic() + QR_HINT_HOLD
         self.go("qr")
@@ -4106,9 +4600,9 @@ class App:
             if record is None or key is None or key.xpub is None:
                 return []
         else:
-            if record is None or not record.keys or record.keys[0].xpub is None:
+            record, key = self._stored_key()
+            if record is None or key is None or key.xpub is None:
                 return []
-            key = record.keys[0]
         canonical = key.xpub.to_string()
         origin = format_path(list(key.path))[2:]
         expression = f"[{record.fingerprint.hex()}/{origin}]{canonical}"
@@ -4117,6 +4611,21 @@ class App:
         if alternate:
             formats.append((label_of(alternate), alternate))
         return formats
+
+    def _step_qr_format(self, delta: int):
+        if self.qr_kind == "descriptor":
+            self.descriptor_format = (self.descriptor_format + delta) % len(DESCRIPTOR_FORMATS)
+            self.qr_scroll = 0
+            self.qr_zoom = None
+            return
+        self._step_key_qr(delta)
+
+    def _descriptor_qr_payload(self) -> str:
+        text = self.session.descriptor_text(self.wallet_index)
+        self.qr_text = text
+        if DESCRIPTOR_FORMATS[self.descriptor_format] == "plain":
+            return text
+        return descriptor_ur(self.session, self.wallet_index).upper()
 
     def _step_key_qr(self, delta: int):
         count = len(self._key_qr_formats())
@@ -4165,7 +4674,17 @@ class App:
             lines = wrap(scratch, visible, face, WIDTH - 2 * MARGIN)
         else:
             lines = _wrap_indented(scratch, visible, face, WIDTH - 2 * MARGIN)
-        content_h = layout.qr_size + layout.text_gap + layout.line_h * len(lines) + layout.tail
+        note_face = font(TITLE_SIZE)
+        note_lines = wrap(scratch, layout.note, note_face, WIDTH - 2 * MARGIN) if layout.note else []
+        note_gap = 16 if note_lines else 0
+        content_h = (
+            layout.qr_size
+            + layout.text_gap
+            + layout.line_h * len(lines)
+            + note_gap
+            + layout.line_h * len(note_lines)
+            + layout.tail
+        )
         height = max(content_h, layout.view_h)
         strip = Image.new("RGB", (WIDTH, height), layout.light)
         code = _qr_image(layout.payload, layout.qr_size, layout.light)
@@ -4175,6 +4694,11 @@ class App:
         for line in lines:
             draw.text((MARGIN, text_y), line, font=face, fill=INK)
             text_y += layout.line_h
+        if note_lines:
+            text_y += note_gap
+            for line in note_lines:
+                draw.text((MARGIN, text_y), line, font=note_face, fill=MUTED)
+                text_y += layout.line_h
         self._qr_strip = strip
         self._qr_strip_key = self._qr_strip_identity(layout)
         self.qr_scroll_max = max(0, content_h - layout.view_h)
@@ -4217,20 +4741,25 @@ class App:
                 return None
             format_name, payload = formats[self.key_qr_index % len(formats)]
             shown = None
+            note = None
             title = "QR & content"
+            show_zoom = True
         else:
             if self.wallet_index >= len(self.session.wallets):
                 return None
-            payload = self.session.descriptor_text(self.wallet_index)
-            self.qr_text = payload
-            shown = _pretty_descriptor(payload)
-            format_name = None
+            payload = self._descriptor_qr_payload()
+            shown = _pretty_descriptor(self.qr_text)
+            wallet = self.session.wallets[self.wallet_index]
+            note = MULTISIG_DESCRIPTOR_NOTE if wallet.multisig else None
+            format_name = DESCRIPTOR_FORMAT_NAMES[self.descriptor_format]
             title = "Descriptor"
-        if format_name:
-            zoom_y = HEIGHT - 88 - 12 - 64
+            show_zoom = False
+        if show_zoom:
+            zoom_y = HEIGHT - 88 - 12 - 64 if format_name else HEIGHT - 100
+            bright_y = zoom_y - 12 - 52
         else:
-            zoom_y = HEIGHT - 100
-        bright_y = zoom_y - 12 - 52
+            zoom_y = 0
+            bright_y = HEIGHT - 88 - 12 - 52
         view_top = HEADER + 8
         view_bottom = bright_y - 4
         view_h = view_bottom - view_top
@@ -4245,7 +4774,9 @@ class App:
             title=title,
             payload=payload,
             shown=shown,
+            note=note,
             format_name=format_name,
+            show_zoom=show_zoom,
             light=_qr_light(self.qr_brightness),
             view_top=view_top,
             view_bottom=view_bottom,
@@ -4259,7 +4790,7 @@ class App:
         )
 
     def _qr_strip_identity(self, layout):
-        return (layout.payload, layout.shown, layout.light, layout.qr_size, layout.tail)
+        return (layout.payload, layout.shown, layout.note, layout.light, layout.qr_size, layout.tail)
 
     def _qr_strip_matches(self, layout) -> bool:
         return self._qr_strip is not None and self._qr_strip_key == self._qr_strip_identity(layout)
@@ -4291,7 +4822,8 @@ class App:
             else (0, layout.view_top, WIDTH, layout.view_bottom)
         )
         self._brightness_control(frame, layout.bright_y)
-        frame.button(layout.zoom_y, "Zoom In", "zoom-in")
+        if layout.show_zoom:
+            frame.button(layout.zoom_y, "Zoom In", "zoom-in")
         if layout.format_name:
             self._format_switcher(frame, layout.format_name, "qr-form-prev", "qr-form-next")
 
@@ -4318,19 +4850,13 @@ class App:
             formats = self._key_qr_formats()
             if formats:
                 return formats[self.key_qr_index % len(formats)][1]
-        if self.qr_kind == "descriptor":
-            return self.qr_text
-        if self.qr_is_seed and self.qr_compact:
-            return compact_bytes(self.qr_text)
-        if self.qr_is_seed:
-            return standard_digits(self.qr_text)
+        if self.qr_kind == "descriptor" and self.wallet_index < len(self.session.wallets):
+            return self._descriptor_qr_payload()
         return self.qr_text
 
-    def _open_qr(self, text: str, seed: bool = False):
+    def _open_qr(self, text: str):
         self.qr_text = text
-        self.qr_is_seed = seed
         self.qr_kind = "plain"
-        self.qr_compact = False
         self.qr_zoom = None
         self.go("qr")
 
@@ -4463,6 +4989,46 @@ def _wrap_indented(draw, text: str, face, width: int) -> list[str]:
         if index < len(body):
             lines.extend(wrap(draw, body[index:], face, width))
     return lines
+
+
+def _filename_lines(draw, text: str, face, width: int, limit: int = 3) -> list[str]:
+    """Wrap at the character that would overflow, for at most `limit` lines."""
+    if draw.textlength(text, font=face) <= width:
+        return [text]
+    lines = []
+    rest = text
+    while rest and len(lines) < limit:
+        if len(lines) < limit - 1 and _fit_count(draw, rest, face, width) < len(rest):
+            count = _fit_count(draw, rest, face, width)
+            lines.append(rest[:count])
+            rest = rest[count:]
+            continue
+        if draw.textlength(rest, font=face) <= width:
+            lines.append(rest)
+            break
+        count = _fit_count(draw, rest, face, width, "...")
+        lines.append(rest[:count] + "...")
+        break
+    return lines or [""]
+
+
+def _fit_count(draw, text: str, face, width: int, suffix: str = "") -> int:
+    """How many leading characters fit, reserving room for `suffix`."""
+    low, high = 0, len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if draw.textlength(text[:middle] + suffix, font=face) <= width:
+            low = middle
+        else:
+            high = middle - 1
+    if low == 0 and text and not suffix:
+        return 1
+    return low
+
+
+def _sd_row_height(line_count: int) -> int:
+    block = line_count * TITLE_SIZE + max(0, line_count - 1) * 8
+    return 20 + block + 24
 
 
 def _one_line(frame: Frame, text: str, size: int, width: int, mono: bool = False) -> str:
@@ -4613,4 +5179,4 @@ def sign_loaded(app: App, fingerprint: bytes):
     if app.review is None:
         raise ReviewError("Load a transaction first.")
     sign_with(app.session, app.wallet_index, app.review["psbt"], fingerprint)
-    app.set_notice("A signature was added.")
+    app.set_notice("A signature was added successfully.")
