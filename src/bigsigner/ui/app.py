@@ -15,6 +15,7 @@ from PIL import Image, ImageDraw
 
 from .. import __version__
 from ..entropy import mnemonic_from_camera, mnemonic_from_coins, mnemonic_from_dice
+from ..rpc import split_line
 from ..parse import ParseError
 from ..paths import HARDENED, MULTISIG_NATIVE, SINGLESIG_NATIVE, SINGLESIG_TAPROOT, format_path
 from ..psbt_review import ReviewError, review_psbt, sign_with
@@ -1879,6 +1880,35 @@ class App:
             self._initial_notice(f"BIGSIGNER_INITIAL_SEED: {exc}")
             return
         self.selected_fp = added["fingerprint"]
+
+    def inject_mnemonic(self, line: str) -> str:
+        """Load one seed from an injectseed line. The returned line has no words."""
+        try:
+            words, passphrase = split_line(line)
+            added = self.session.add_mnemonic(words, passphrase)
+        except SessionError as exc:
+            self._initial_notice(str(exc))
+            if str(exc) == "This seed is already loaded.":
+                return "seed already loaded"
+            return f"seed refused: {exc}"
+        self.selected_fp = added["fingerprint"]
+        self.selected_key_index = 0
+        fingerprint = added["fingerprint"].hex()
+        if self.screen in ("boot", "warning"):
+            message = added["message"]
+            if added.get("warnings"):
+                message = f"{message} {' '.join(added['warnings'])}"
+            self._initial_notice(message)
+            return f"seed {fingerprint}"
+        self.menu = False
+        self.add_menu = False
+        self.confirm = None
+        self.open_dropdown = None
+        self._press = None
+        self._seed_title_hold = None
+        self._ignore_lift = True
+        self._show_imported(added)
+        return f"seed {fingerprint}"
 
     def _load_initial_wallet_descriptor(self):
         raw = (self.initial_wallet_descriptor or "").strip()

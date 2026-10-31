@@ -71,11 +71,21 @@ These variables are for the panel and the tests. Do not set them on a device tha
 | `BIGSIGNER_CPU_SERIAL` | A string mixed into camera entropy. The default is `bigsigner-emulator`. |
 | `BIGSIGNER_TAP` | Path of a pipe the panel reads in addition to the touchscreen. Leave it unset on a device that holds real funds; a missing file does nothing. Create the pipe before the process starts. A line `x y` is a tap. `down x y`, `move x y`, and `up x y` are those phases, and they go through the same press handling as a finger. Each release is logged as `bigsigner: tap x,y N ms`. |
 | `BIGSIGNER_UI` | Path of a file the panel appends after each paint, one JSON line with the screen, the frame time, and a box for every control and text line. Leave it unset on a device that holds real funds. |
+| `BIGSIGNER_RPC` | Path of a pipe the panel reads along with the touchscreen. The default is `/tmp/bigsigner-rpc`, which the panel creates. `off` disables it. Do not enable it on a device that holds real funds. Each line starts with a command word. For example, `injectseed` is followed by a 12, 18, or 24 word mnemonic. A tab, then a BIP39 passphrase, is optional. A seed that is already loaded is left as it is. On the boot screen a new seed waits until Continue. After that, the seed key opens. |
 
 ```bash
 mkfifo /tmp/bigsigner-tap
 BIGSIGNER_TAP=/tmp/bigsigner-tap python -m bigsigner
 printf '240 726\n' > /tmp/bigsigner-tap
+```
+
+`python -m bigsigner.rpc` writes one command to that pipe. `injectseed` is one command: it checks a mnemonic and writes that line. The words are not printed. From a computer, `docs/scripts/rpc.sh` in bigsigner-os sends the line over SSH to the panel that is already running. The pipe is in RAM. The script does not restart the panel.
+
+```bash
+mkfifo /tmp/bigsigner-rpc
+BIGSIGNER_RPC=/tmp/bigsigner-rpc python -m bigsigner
+python -m bigsigner.rpc injectseed abandon abandon abandon abandon abandon abandon \
+    abandon abandon abandon abandon abandon about
 ```
 
 `python -m bigsigner` runs the panel. It needs `/dev/fb0`. BigSigner OS starts the device by running `src/main.py`. Syncing this checkout to a dev image and restarting uses that file.

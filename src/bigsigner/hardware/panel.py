@@ -3,6 +3,7 @@
 import os
 import time
 
+from ..rpc import apply_line, open_rpc_pipe
 from ..ui.app import App
 from .camera import LiveCamera, jpeg_bytes, paste_preview, read_qr
 from .display import framebuffer_info, pack_image, silence_console
@@ -32,9 +33,13 @@ def run_panel():
     ranges = (axis_range(touch, ABS_X), axis_range(touch, ABS_Y)) if touch else None
     tap_path = os.environ.get("BIGSIGNER_TAP", "").strip()
     inject = os.open(tap_path, os.O_RDWR | os.O_NONBLOCK) if tap_path and os.path.exists(tap_path) else None
+    rpc = open_rpc_pipe()
+    rpc_fd = None if rpc is None else rpc[0]
     ui_path = os.environ.get("BIGSIGNER_UI", "").strip()
     dump_error = False
     _kmsg(f"framebuffer {width}x{height} {bpp}bpp, touch {touch_path or 'missing'}")
+    if rpc_fd is not None:
+        _kmsg(f"listening on {rpc[1]}")
     silence_console()
 
     frames = 0
@@ -110,13 +115,25 @@ def run_panel():
 
     try:
         blit()
-        if touch is None:
+        if touch is None and rpc_fd is None:
             return
+        x_range = ranges[0] if ranges else (0, width - 1)
+        y_range = ranges[1] if ranges else (0, height - 1)
         logged_touch = False
-        for point in read_points(touch, width, height, ranges[0], ranges[1], wait=wait, inject=inject):
+        for point in read_points(touch, width, height, x_range, y_range, wait=wait, inject=inject, rpc=rpc_fd):
             if point is None:
                 app.pointer_idle()
                 blit()
+                continue
+            if point[0] == "rpc":
+                try:
+                    _kmsg(apply_line(app, point[1]))
+                except Exception as exc:
+                    _kmsg(f"command refused: {exc}")
+                blit()
+                continue
+            if point[0] == "rpc-error":
+                _kmsg(point[1])
                 continue
             phase, x, y = point
             if not logged_touch:

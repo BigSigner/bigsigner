@@ -35,6 +35,14 @@ pytest
 
 `PYTHONPATH=src python tests/panel_device.py` syncs to seedsigner.local and drives the panel. Do not run it unless asked. Screenshot tests write `artifacts/screenshots/<test name>/` and an `index.html` gallery. A flow that stands in for scanning a QR code mounts the payload on the in-memory SD card and clicks the plus button, then Load from SD Card, then the file. The browser camera is not a stand-in for that card.
 
+## Inject a seed
+
+`python -m bigsigner.rpc` writes one command to the pipe named by `BIGSIGNER_RPC`. The default path is `/tmp/bigsigner-rpc`. `injectseed` is one command: the line is that word and then the mnemonic. The panel loads it without the manual-entry screen. On the boot screen the seed waits until Continue on Remove SD Card. After that, the seed key opens. A line with an unknown command word is refused.
+
+From the computer, `bigsigner-os/docs/scripts/rpc.sh` sends the line over SSH to the panel that is already running. It does not stop that process. A seed that is already loaded is left as it is. The app on the device has to already contain `rpc.py`. The panel opens `/tmp/bigsigner-rpc` when it starts. `BIGSIGNER_RPC=off` disables that.
+
+Do not run either command unless asked. Do not pass a real seed. The Abandon test mnemonic is the one the tests use.
+
 ## External keys
 
 A bare key expression is not stored on the first screen. Checks for an unsupported path, a duplicate, or a seed mismatch open Error loading key (or Error loading wallet, from the wallets page). OK returns to Bitcoin Keys or Bitcoin Wallets.

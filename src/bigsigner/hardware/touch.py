@@ -6,6 +6,8 @@ import os
 import select
 import struct
 
+from ..rpc import feed_lines
+
 EV_KEY = 0x01
 EV_ABS = 0x03
 ABS_X = 0x00
@@ -171,8 +173,16 @@ def tap_line(line: bytes):
     return None
 
 
-def read_points(handle, width, height, x_range, y_range, wait=None, inject=None):
-    """Yield ("down", x, y), ("move", x, y), ("up", x, y), or None on timeout.
+def _nonblocking(handle):
+    """A later read returns immediately when this pipe has nothing waiting."""
+    if handle is None:
+        return
+    flags = fcntl.fcntl(handle, fcntl.F_GETFL)
+    fcntl.fcntl(handle, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+
+def read_points(handle, width, height, x_range, y_range, wait=None, inject=None, rpc=None):
+    """Yield ("down", x, y), ("move", x, y), ("up", x, y), ("rpc", line), or None.
 
     A timeout means no touch arrived before wait() elapsed, so the screen can redraw.
     A wait of None sleeps until a finger arrives. The process must not spin on the
@@ -180,26 +190,42 @@ def read_points(handle, width, height, x_range, y_range, wait=None, inject=None)
     needs it. One finger report is one yield, not one yield per input event. The
     device is read without blocking, the same way the touch demo drains it.
     inject is an optional pipe of tap lines, so a test can press without the panel.
+    rpc is an optional pipe of command lines. ("rpc-error", message) means a
+    line was longer than the pipe allows and was dropped.
     """
-    flags = fcntl.fcntl(handle, fcntl.F_GETFL)
-    fcntl.fcntl(handle, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-    if inject is not None:
-        flags = fcntl.fcntl(inject, fcntl.F_GETFL)
-        fcntl.fcntl(inject, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-    contact = _Contact(width, height, x_range, y_range)
+    contact = None
+    if handle is not None:
+        _nonblocking(handle)
+        contact = _Contact(width, height, x_range, y_range)
+    _nonblocking(inject)
+    _nonblocking(rpc)
     pending = bytearray()
+    rpc_pending = bytearray()
     while True:
         timeout = wait() if callable(wait) else wait
-        watch = [handle] if inject is None else [handle, inject]
+        watch = [item for item in (handle, inject, rpc) if item is not None]
+        if not watch:
+            return
         ready, _, _ = select.select(watch, [], [], timeout)
         if not ready:
             # The pen is still down and the controller has gone quiet. Keep the
             # gesture alive so a long hold is not mistaken for the end of a tap.
-            if contact.touching and contact.sent_down:
+            if contact is not None and contact.touching and contact.sent_down:
                 yield ("hold", contact.last[0], contact.last[1])
             else:
                 yield None
             continue
+        if rpc is not None and rpc in ready:
+            try:
+                chunk = os.read(rpc, 4096)
+            except BlockingIOError:
+                chunk = b""
+            if chunk:
+                lines, overflow = feed_lines(rpc_pending, chunk)
+                if overflow:
+                    yield ("rpc-error", "command line was too long")
+                for line in lines:
+                    yield ("rpc", line)
         if inject is not None and inject in ready:
             try:
                 chunk = os.read(inject, 256)
@@ -213,7 +239,7 @@ def read_points(handle, width, height, x_range, y_range, wait=None, inject=None)
                     point = tap_line(line)
                     if point is not None:
                         yield point
-        if handle not in ready:
+        if handle is None or handle not in ready:
             continue
         actions = []
         while True:
