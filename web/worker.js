@@ -1,17 +1,13 @@
 /* BigSigner in the page. Pyodide runs the same App the panel runs. */
 
-import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/pyodide.mjs";
+import { loadPyodide } from "./external-assets/pyodide/pyodide.mjs";
 
-const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/";
+const PYODIDE = new URL("external-assets/pyodide/", self.location.href);
+const PILLOW = new URL("external-assets/pillow/", self.location.href);
 
 let tick = null;
 const jobs = [];
 let running = false;
-
-const EMBIT_URL = "https://files.pythonhosted.org/packages/83/88/b054b00ade6d2a41749e15976cdcec4b7ec4656ac1cb917ce3de395528d1/embit-0.8.0.tar.gz";
-const EMBIT_SHA256 = "8bf4b10073c67400370ce523fb16f035fe759f6fdd987c579bdcc268d75ed770";
-const QRCODE_URL = "https://files.pythonhosted.org/packages/74/ab/df8d889fd01139db68ae9e5cb5c8f0ea016823559a6ecb427582d52b07dc/qrcode-8.0-py3-none-any.whl";
-const QRCODE_SHA256 = "9fc05f03305ad27a709eb742cf3097fa19e6f6f93bb9e2f039c0979190f6f1b1";
 
 self.onmessage = (event) => {
   const msg = event.data;
@@ -31,22 +27,17 @@ function progress(text) {
   self.postMessage({type: "progress", text});
 }
 
-async function fetchChecked(url, expected) {
+async function fetchBytes(url) {
   const response = await fetch(url);
-  if (!response.ok) throw new Error("Could not download " + url);
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-  const actual = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  if (actual !== expected) {
-    throw new Error("SHA-256 for " + url + " was " + actual + ", expected " + expected + ".");
-  }
-  return bytes;
+  if (!response.ok) throw new Error("Missing " + url + ". Run python -m bigsigner.bundle.");
+  return new Uint8Array(await response.arrayBuffer());
 }
 
 async function boot() {
   progress("Loading Python…");
   const pyodide = await loadPyodide({
-    indexURL: PYODIDE,
+    indexURL: PYODIDE.href,
+    packageBaseUrl: PILLOW.href,
     stderr: (text) => self.postMessage({type: "stderr", text}),
   });
   progress("Loading Pillow…");
@@ -54,7 +45,10 @@ async function boot() {
   progress("Loading the Bitcoin library…");
   // embit 0.8.0 publishes a source archive, not a wheel. The archive is pure
   // Python plus desktop builds of libsecp256k1, which this page does not load.
-  pyodide.FS.writeFile("/embit-0.8.0.tar.gz", await fetchChecked(EMBIT_URL, EMBIT_SHA256));
+  pyodide.FS.writeFile(
+    "/embit-0.8.0.tar.gz",
+    await fetchBytes(new URL("external-assets/embit/embit-0.8.0.tar.gz", self.location.href)),
+  );
   pyodide.runPython(`
 import os, sys, tarfile
 os.makedirs("/tmp/embit-src", exist_ok=True)
@@ -62,7 +56,10 @@ tarfile.open("/embit-0.8.0.tar.gz").extractall("/tmp/embit-src", filter="data")
 sys.path.insert(0, "/tmp/embit-src/embit-0.8.0/src")
 `);
   progress("Loading QR codes…");
-  pyodide.FS.writeFile("/qrcode-8.0-py3-none-any.whl", await fetchChecked(QRCODE_URL, QRCODE_SHA256));
+  pyodide.FS.writeFile(
+    "/qrcode-8.0-py3-none-any.whl",
+    await fetchBytes(new URL("external-assets/qrcode/qrcode-8.0-py3-none-any.whl", self.location.href)),
+  );
   pyodide.runPython(`
 import sys, zipfile
 zipfile.ZipFile("/qrcode-8.0-py3-none-any.whl").extractall("/tmp/qrcode")

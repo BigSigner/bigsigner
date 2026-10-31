@@ -117,6 +117,7 @@ def test_delete_key_warnings_save_screenshots():
     record.shot(app, "delete-unused")
     assert app.session.deletion_message(app.selected_fp, 0) == "Delete this key?"
     record.click(app, "Cancel")
+    record.click(app, "derive-menu")
     record.click(app, "derive-native")
     record.click(app, "derive-wallet")
     record.click(app, "back")
@@ -136,6 +137,7 @@ def test_transaction_warnings_save_screenshots():
     app = _keys(ABANDON)
     record = ScreenRecord(__folder("test_transaction_warnings_save_screenshots"))
     _open_seed_key(app, record)
+    record.click(app, "derive-menu")
     record.click(app, "derive-native")
     record.click(app, "derive-wallet")
     app.notice_until = 0

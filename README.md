@@ -53,7 +53,7 @@ PYTHONPATH=src .venv/bin/python -m bigsigner.bundle
 python3 -m http.server 8780 --directory web
 ```
 
-Open http://127.0.0.1:8780/ . The page shows the 480×800 frame at the Waveshare picture size, 51.84 mm by 86.40 mm. A browser's millimeter is not always a ruler millimeter, so the buttons under the picture adjust that size and remember it. This mode is for development. Do not type a real seed into it. The first load downloads a Python runtime into the page. After you change Python, run the bundle command again and reload the page. `web/bundle.json` is not committed.
+Open http://127.0.0.1:8780/ . The page shows the 480×800 frame at the Waveshare picture size, 51.84 mm by 86.40 mm. A browser's millimeter is not always a ruler millimeter, so the buttons under the picture adjust that size and remember it. This mode is for development. Do not type a real seed into it. The bundle command also downloads the pinned Pyodide runtime, Pillow, embit, and qrcode into folders under `web/external-assets`, and the page loads them from there. After you change Python, run the bundle command again and reload the page. `web/bundle.json` and `web/external-assets/` are not committed.
 
 The hash is a query string, so a seed in it is not sent to the server. A reload applies it again. `seed` is the mnemonic, and commas are spaces. `descriptor` is a wallet descriptor or a BSMS file, percent-encoded. Both are loaded when the boot screen ends, the seed first.
 

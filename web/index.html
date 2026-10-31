@@ -40,8 +40,7 @@
   #sd-error:empty { display: none; }
   #sd-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; max-height: 50vh; overflow: auto; }
   #sd-list li { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
-  #sd-list .enter, #sd-list span { overflow-wrap: anywhere; text-align: left; }
-  #sd-list .enter { background: transparent; color: #eee; border: 0; padding: 0; cursor: pointer; font: inherit; }
+  #sd-list .enter, #sd-list .file { overflow-wrap: anywhere; text-align: left; background: transparent; color: #eee; border: 0; padding: 0; cursor: pointer; font: inherit; }
   #sd-list .delete { background: transparent; color: #f0b4b4; border: 0; padding: 4px; cursor: pointer; font: inherit; }
   #sd-list .empty { display: block; color: #9a9a9a; }
 </style>
@@ -266,8 +265,11 @@ function renderRow(name, path, kind) {
     open.setAttribute("data-path", path);
     item.append(open);
   } else {
-    const label = document.createElement("span");
+    const label = document.createElement("button");
+    label.type = "button";
+    label.className = "file";
     label.textContent = name;
+    label.setAttribute("data-path", path);
     item.append(label);
   }
   const remove = document.createElement("button");
@@ -278,6 +280,17 @@ function renderRow(name, path, kind) {
   remove.setAttribute("data-kind", kind);
   item.append(remove);
   sdList.append(item);
+}
+function downloadFile(path) {
+  const text = card.files[path];
+  if (typeof text !== "string") return;
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  const url = URL.createObjectURL(new Blob([text], {type: "text/plain"}));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 function deletePath(path, kind) {
   if (kind === "dir") {
@@ -411,6 +424,7 @@ sdList.addEventListener("click", (event) => {
   if (!button) return;
   const path = button.getAttribute("data-path");
   if (button.classList.contains("delete")) deletePath(path, button.getAttribute("data-kind"));
+  else if (button.classList.contains("file")) downloadFile(path);
   else if (button.classList.contains("enter")) {
     sdHere = path;
     renderSd();

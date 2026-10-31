@@ -8,7 +8,7 @@ BigSigner is one Python package in `src/bigsigner`. The browser emulator and the
 
 `src/main.py` is the file BigSigner OS runs. It calls `bigsigner.__main__.main`. That runs `hardware.panel.run_panel` when `/dev/fb0` is present. The panel copies each 480×800 image to the framebuffer and reads evdev.
 
-`web/index.html` is the browser front. `python -m bigsigner.bundle` writes `web/bundle.json`, a copy of `src/` with `.DS_Store` and bytecode left out. That file is not committed. Serve the `web/` directory, then reload the page after each new bundle. The page loads Pyodide, checks the SHA-256 of the embit archive and the qrcode wheel, unpacks the bundle, and drives the same `App`. `render` paints the picture. Taps call the same pointer methods the panel uses. The hash is a query string: `seed` is the mnemonic, commas count as spaces, and `descriptor` is the wallet descriptor. Those replace `BIGSIGNER_INITIAL_SEED` and `BIGSIGNER_INITIAL_WALLET_DESCRIPTOR` on that page. The SD Card section stores files in the browser. `mount_memory` in `sdcard.py` makes Load from SD Card read them. The page does not use `BIGSIGNER_SDCARD_PATH`.
+`web/index.html` is the browser front. `python -m bigsigner.bundle` writes `web/bundle.json`, a copy of `src/` with `.DS_Store` and bytecode left out, and downloads the pinned Pyodide runtime, Pillow, embit, and qrcode into `web/external-assets`. Neither is committed. Serve the `web/` directory, then reload the page after each new bundle. The worker loads Pyodide, Pillow, embit, and qrcode from their folders there, unpacks the bundle, and drives the same `App`. The bundle command is what checks each file's SHA-256. `render` paints the picture. Taps call the same pointer methods the panel uses. The hash is a query string: `seed` is the mnemonic, commas count as spaces, and `descriptor` is the wallet descriptor. Those replace `BIGSIGNER_INITIAL_SEED` and `BIGSIGNER_INITIAL_WALLET_DESCRIPTOR` on that page. The SD Card section stores files in the browser. `mount_memory` in `sdcard.py` makes Load from SD Card read them. The page does not use `BIGSIGNER_SDCARD_PATH`.
 
 ## Session
 
@@ -47,7 +47,7 @@ Bitcoin operations go through embit 0.8.0, the release SeedSigner pins. Pillow d
 
 The side menu reaches Bitcoin Keys, Bitcoin Wallets, Settings, and About. Every other screen has a back button. Scroll offset is stored per screen, and the title bar stays put.
 
-A seed key opens Derive Key (`derive`) for one of the three supported paths. The screen derives the extended key in memory with `_public_for` and does not store it. Single-signature derivations can create or open the wallet at the selected account. Multisig derivation only shows the key.
+A seed key opens Derive Key (`derive`) for one of the three supported paths. The screen derives the extended key in memory with `_public_for` and does not store it. Single-signature derivations can create or open the wallet at the selected account. Multisig derivation only shows the key. Derive a BIP85 Child Seed opens `bip85`. `session.bip85_mnemonic` asks embit for the English mnemonic at `m/83696968h/39h/0h/{12 or 24}h/{index}h`. The child is stored with `add_mnemonic`, and the back stack is replaced with Bitcoin Keys.
 
 Load External Key is two screens, `external-review` and `external-details`. A failed QR or SD import uses `load-error`. The license list is `licenses`, and one notice is `license`.
 

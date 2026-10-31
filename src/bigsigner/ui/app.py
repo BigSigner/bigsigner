@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw
 from .. import __version__
 from ..entropy import mnemonic_from_camera, mnemonic_from_coins, mnemonic_from_dice
 from ..parse import ParseError
-from ..paths import MULTISIG_NATIVE, SINGLESIG_NATIVE, SINGLESIG_TAPROOT, format_path
+from ..paths import HARDENED, MULTISIG_NATIVE, SINGLESIG_NATIVE, SINGLESIG_TAPROOT, format_path
 from ..psbt_review import ReviewError, review_psbt, sign_with
 from ..qr import qr_matrix
 from ..session import Session, SessionError, _passphrase_warnings, _public_for, account_index_phrase
@@ -258,6 +258,8 @@ class App:
         self.account_for = "wallet"
         self.derive_role = None
         self.derive_account = 0
+        self.bip85_words = 24
+        self.bip85_index = 0
         self.qr_source = "stored"
         self.descriptor_choice = None
         self.descriptor_key_index = 0
@@ -334,6 +336,9 @@ class App:
             "warning": self._warning,
             "keys": self._keys,
             "key": self._key,
+            "derive-type": self._derive_type,
+            "bip85": self._bip85,
+            "seed-backup": self._seed_backup,
             "derive": self._derive,
             "wallets": self._wallets,
             "wallet": self._wallet,
@@ -605,6 +610,7 @@ class App:
             self.seed_words = []
             self.word_prefix = ""
             self.word_cursor = 0
+            self.seed_length = 24
             self.seed_grid_stick = True
             self.go("seed")
         elif action == "add-scan":
@@ -656,6 +662,10 @@ class App:
             self._read_sd_file(action[len("sd-read:") :])
         elif action.startswith("sd-write:"):
             self._choose_export_file(action[len("sd-write:") :])
+        elif action == "export-seed":
+            self._open_seed_export()
+        elif action == "seed-backup-continue":
+            self._continue_seed_export()
         elif action == "export-key":
             self._open_export("stored")
         elif action == "export-derived":
@@ -707,6 +717,8 @@ class App:
                 self.descriptor_key_index = int(key)
             elif name == "seed-length":
                 self._set_seed_length(int(key))
+            elif name == "bip85-words":
+                self.bip85_words = int(key)
             self.open_dropdown = None
         elif action.startswith("dropdown-"):
             name = action[len("dropdown-") :]
@@ -818,6 +830,18 @@ class App:
             self.scroll["wallet"] = 0
             self._remember_wallet_accounts()
             self.go("wallet")
+        elif action == "derive-menu":
+            self._open_derive_menu()
+        elif action == "derive-bip85":
+            self._open_bip85()
+        elif action == "bip85-dec":
+            self._step_bip85_index(-1)
+        elif action == "bip85-inc":
+            self._step_bip85_index(1)
+        elif action == "bip85-edit":
+            self._edit_bip85_index()
+        elif action == "bip85-derive":
+            self._add_bip85_child()
         elif action == "derive-native":
             self._open_derive(SINGLESIG_NATIVE)
         elif action == "derive-multisig":
@@ -1111,6 +1135,50 @@ class App:
         self.export_return = self.screen
         self.export_back = list(self.back)
         self.go("export-format")
+
+    def _open_seed_export(self):
+        _record, key = self._stored_key()
+        if key is None or not key.has_seed:
+            self.set_notice("This seed is no longer loaded.")
+            return
+        self.export_label = "Seed"
+        self.export_text = " ".join(key.mnemonic)
+        self.export_return = self.screen
+        self.export_back = list(self.back)
+        self.scroll["seed-backup"] = 0
+        self.go("seed-backup")
+
+    def _continue_seed_export(self):
+        self.sd_mode = "export"
+        self.sd_dir = ""
+        self.scroll["sd"] = 0
+        self.go("sd")
+
+    def _seed_backup(self, frame: Frame):
+        _record, key = self._stored_key()
+        if key is None or not key.has_seed:
+            frame.header("Export Seed", "back")
+            frame.text("This seed is no longer loaded.", MARGIN, HEADER + 24, size=TITLE_SIZE)
+            return
+        paragraphs = [
+            "A seed backup should include a physical copy, not only a file. Keep the words on paper or on metal as well.",
+            "Wipe this SD card thoroughly before it is used in any device connected to the internet. Deleting the file is not enough.",
+        ]
+        if key.passphrase:
+            paragraphs.append("This file does not include the passphrase.")
+        y = HEADER + 24
+        y += 34 + 16
+        for paragraph in paragraphs:
+            y += self._text_height(frame, paragraph, TITLE_SIZE) + 12
+        button_h = frame.button_height("Continue")
+        offset = self._scroll_offset("seed-backup", y, clearance=button_h + 28)
+        self._centered_text(frame, "Warning", HEADER + 24 - offset, 34, RED)
+        text_y = HEADER + 24 + 34 + 16 - offset
+        for paragraph in paragraphs:
+            text_y = frame.text(paragraph, MARGIN, text_y, size=TITLE_SIZE, fill=RED)
+            text_y += 12
+        frame.button(HEIGHT - 16 - button_h, "Continue", "seed-backup-continue")
+        frame.header("Export Seed", "back")
 
     def _open_wallet_export(self):
         if self.wallet_index >= len(self.session.wallets):
@@ -1783,7 +1851,8 @@ class App:
             frame.text("This key is no longer loaded.", MARGIN, 140)
             return
         flow_end = self._key_flow(frame, record, key, paint=False)
-        delete_h = frame.button_height("Delete Key")
+        delete_label = "Delete Seed" if key.has_seed else "Delete Key"
+        delete_h = frame.button_height(delete_label)
         clearance = 24
         if self.notice:
             _face, _lines, _line_h, _pad, notice_top, _height = self._notice_layout(frame)
@@ -1794,11 +1863,11 @@ class App:
             self.scroll["key"] = 0
             self.scroll_max["key"] = 0
             self._key_flow(frame, record, key, paint=True)
-            frame.button(delete_y, "Delete Key", "delete-key", color=RED)
+            frame.button(delete_y, delete_label, "delete-key", color=RED)
         else:
             offset = self._scroll_offset("key", flow_end + 16 + delete_h, clearance=clearance)
             self._key_flow(frame, record, key, paint=True, offset=offset)
-            frame.button(flow_end + 16 - offset, "Delete Key", "delete-key", color=RED)
+            frame.button(flow_end + 16 - offset, delete_label, "delete-key", color=RED)
         frame.header(title, "back")
 
     def _fitted_fingerprint(self, frame: Frame) -> tuple[int, int]:
@@ -1828,7 +1897,6 @@ class App:
                 frame.text(generated, MARGIN, y - offset, size=TITLE_SIZE)
             y += self._text_height(frame, generated, TITLE_SIZE)
             if key.passphrase:
-                y = self._flow_button(frame, y, "Show Passphrase", "show-passphrase", paint, offset)
                 copy = "Create a Copy of This Seed with a Different Passphrase"
             else:
                 note = "No passphrase is used."
@@ -1837,18 +1905,15 @@ class App:
                 y += self._text_height(frame, note, TITLE_SIZE)
                 copy = "Create a Copy of This Seed with a Passphrase"
             y = self._flow_button(frame, y, "Show Seed", "show-seed", paint, offset)
+            if key.passphrase:
+                y = self._flow_button(frame, y, "Show Passphrase", "show-passphrase", paint, offset)
+            y = self._flow_button(
+                frame, y, "Export Seed\nto SD Card", "export-seed", paint, offset, "Export Seed to SD Card",
+            )
+            y = self._flow_button(frame, y, "Derive an Extended Public Key", "derive-menu", paint, offset)
             y = self._flow_button(frame, y, copy, "copy-passphrase", paint, offset)
-            y = self._flow_button(
-                frame, y, "Derive a\nNative-Segwit\nSingleSig Key", "derive-native", paint, offset,
-                "Derive a Native-Segwit SingleSig Key",
-            )
-            y = self._flow_button(
-                frame, y, "Derive a\nNative-Segwit\nMultiSig Key", "derive-multisig", paint, offset,
-                "Derive a Native-Segwit MultiSig Key",
-            )
             return self._flow_button(
-                frame, y, "Derive a\nTaproot\nSingleSig Key", "derive-taproot", paint, offset,
-                "Derive a Taproot SingleSig Key",
+                frame, y, "Derive a BIP85\nChild Seed", "derive-bip85", paint, offset, "Derive a BIP85 Child Seed",
             )
         y = self._flow_text(frame, y, f"Type: {self._external_kind(key)}", paint, offset, size=text_size)
         if key.account is not None:
@@ -1892,6 +1957,113 @@ class App:
         if paint and top + height > HEADER and top < HEIGHT:
             frame.button(top, label, action, label=hit_label)
         return y + height + 12
+
+    def _open_derive_menu(self):
+        record = None if self.selected_fp is None else self.session.fingerprints.get(self.selected_fp)
+        if record is None or not record.keys or not record.keys[0].has_seed:
+            self.set_notice("Load a seed before deriving a key.")
+            return
+        self.go("derive-type")
+
+    def _derive_type(self, frame: Frame):
+        frame.header("Derive Key", "back")
+        y = frame.text("Which type of key do you want to derive?", MARGIN, HEADER + 24, size=TITLE_SIZE)
+        y = frame.button(
+            y + 20, "Native-Segwit\nSingleSig Key", "derive-native", label="Native-Segwit SingleSig Key",
+        )
+        y = frame.button(
+            y, "Native-Segwit\nMultiSig Key", "derive-multisig", label="Native-Segwit MultiSig Key",
+        )
+        frame.button(y, "Taproot\nSingleSig Key", "derive-taproot", label="Taproot SingleSig Key")
+
+    def _open_bip85(self):
+        _record, key = self._stored_key()
+        if key is None or not key.has_seed:
+            self.set_notice("Load a seed before deriving a child seed.")
+            return
+        self.bip85_words = 24
+        self.bip85_index = 0
+        self.go("bip85")
+
+    def _bip85_path(self) -> str:
+        return format_path(
+            [
+                HARDENED + 83696968,
+                HARDENED + 39,
+                HARDENED,
+                HARDENED + self.bip85_words,
+                HARDENED + self.bip85_index,
+            ]
+        )
+
+    def _bip85(self, frame: Frame):
+        _record, key = self._stored_key()
+        if key is None or not key.has_seed:
+            frame.header("BIP85 Child Seed", "back")
+            frame.text("This seed is no longer loaded.", MARGIN, HEADER + 24, size=TITLE_SIZE)
+            return
+        y = HEADER + 16
+        y = frame.text("Number of Words", MARGIN, y, size=TITLE_SIZE, fill=MUTED)
+        field = self._dropdown_field(frame, y, "bip85-words", f"{self.bip85_words} words")
+        y = self._account_selector(
+            frame, field[3] + 16, self.bip85_index, True, 0, caption="Index", down="bip85-dec", up="bip85-inc", edit="bip85-edit",
+        )
+        path = self._bip85_path()
+        y = frame.text("Derivation Path:", MARGIN, y, size=TITLE_SIZE, fill=MUTED)
+        face = font(22, mono=True)
+        for line in wrap(frame.draw, path, face, WIDTH - 2 * MARGIN):
+            width = frame.draw.textlength(line, font=face)
+            frame.draw.text((max(MARGIN, (WIDTH - width) / 2), y), line, font=face, fill=MUTED)
+            y += 22 + 8
+        frame.button(y + 8, "Derive Seed", "bip85-derive")
+        frame.header("BIP85 Child Seed", "back")
+        if self.open_dropdown == "bip85-words":
+            self._dropdown_menu(
+                frame,
+                field,
+                "bip85-words",
+                (("12", "12 words"), ("24", "24 words")),
+                str(self.bip85_words),
+            )
+
+    def _step_bip85_index(self, delta: int):
+        index = self.bip85_index + delta
+        if index < 0 or index >= 0x80000000:
+            return
+        self.bip85_index = index
+
+    def _edit_bip85_index(self):
+        _record, key = self._stored_key()
+        if key is None or not key.has_seed:
+            self.set_notice("This seed is no longer loaded.")
+            return
+        self.account_fp = self.selected_fp
+        self.account_text = str(self.bip85_index)
+        self.account_for = "bip85"
+        self.go("account")
+
+    def _add_bip85_child(self):
+        if self.selected_fp is None:
+            self.set_notice("This seed is no longer loaded.")
+            return
+        try:
+            words = self.session.bip85_child(self.selected_fp, self.bip85_words, self.bip85_index)
+            added = self.session.add_mnemonic(words.split())
+        except SessionError as exc:
+            self.set_notice(str(exc))
+            return
+        self.selected_fp = added["fingerprint"]
+        self.selected_key_index = 0
+        self.show_secret = False
+        self.show_passphrase = False
+        self.slip_labels = False
+        message = "BIP85 child seed was added successfully."
+        if "External keys derived from this seed were removed." in added["message"]:
+            message += " External keys derived from this seed were removed."
+        self.set_notice(message)
+        self.back = ["keys"]
+        self.scroll["key"] = 0
+        self.screen = "key"
 
     def _open_derive(self, role: str):
         record = None if self.selected_fp is None else self.session.fingerprints.get(self.selected_fp)
@@ -2012,44 +2184,56 @@ class App:
         self._derive_path_box = self._flow_value_box
         y = self._flow_value_below(frame, y, "Extended Public Key:", preview, paint, offset, text_size)
         self._derive_xpub_box = self._flow_value_box
-        if key.role in (SINGLESIG_NATIVE, SINGLESIG_TAPROOT):
-            script = "Taproot" if key.role == SINGLESIG_TAPROOT else "Native-Segwit"
-            y = self._flow_button(frame, y, self._seed_wallet_label(key.role, script), "derive-wallet", paint, offset)
-        y += 20
         y = self._flow_button(frame, y, "Show Full Details", "derive-details", paint, offset)
-        return self._flow_button(frame, y, "Export to SD Card", "export-derived", paint, offset)
+        y = self._flow_button(frame, y, "Export to SD Card", "export-derived", paint, offset)
+        if key.role not in (SINGLESIG_NATIVE, SINGLESIG_TAPROOT):
+            return y
+        script = "Taproot" if key.role == SINGLESIG_TAPROOT else "Native-Segwit"
+        return self._flow_button(frame, y, self._seed_wallet_label(key.role, script), "derive-wallet", paint, offset)
 
-    def _account_selector(self, frame: Frame, y: int, value: int, paint: bool, offset: int) -> int:
+    def _account_selector(
+        self,
+        frame: Frame,
+        y: int,
+        value: int,
+        paint: bool,
+        offset: int,
+        caption: str = "Account",
+        down: str = "derive-dec",
+        up: str = "derive-inc",
+        edit: str = "derive-edit",
+    ) -> int:
         if paint:
-            frame.text("Account", MARGIN, y - offset, size=TITLE_SIZE, fill=MUTED)
-        y += self._text_height(frame, "Account", TITLE_SIZE)
+            frame.text(caption, MARGIN, y - offset, size=TITLE_SIZE, fill=MUTED)
+        y += self._text_height(frame, caption, TITLE_SIZE)
         side = 64
         gap = 12
         top = y - offset
         if paint and top + 64 > HEADER and top < HEIGHT:
-            self._brightness_button(frame, (MARGIN, top, MARGIN + side, top + 64), "-", value > 0, "derive-dec")
+            self._brightness_button(frame, (MARGIN, top, MARGIN + side, top + 64), "-", value > 0, down)
             self._brightness_button(
                 frame,
                 (WIDTH - MARGIN - side, top, WIDTH - MARGIN, top + 64),
                 "+",
                 value < 0x7FFFFFFF,
-                "derive-inc",
+                up,
             )
             # A press on this panel is reported a little above the drawn key.
             reach = 24
             if value > 0:
                 minus = (0, top - reach, MARGIN + side + gap // 2, top + 64)
-                frame.hit(minus, "derive-dec", "-")
+                frame.hit(minus, down, "-")
                 self._still_boxes.append(minus)
             if value < 0x7FFFFFFF:
                 plus = (WIDTH - (MARGIN + side + gap // 2), top - reach, WIDTH, top + 64)
-                frame.hit(plus, "derive-inc", "+")
+                frame.hit(plus, up, "+")
                 self._still_boxes.append(plus)
             box = self._account_textbox(
                 frame, top, str(value), left=MARGIN + side + gap, right=WIDTH - MARGIN - side - gap,
             )
-            self._derive_account_box = box
-            frame.hit(box, "derive-edit", "Account")
+            if edit == "derive-edit":
+                self._derive_account_box = box
+            frame.hit(box, edit, caption)
             # The number is wide and sits in the middle, so a drag on it scrolls.
             self._still_boxes.append((MARGIN, top, MARGIN + side, top + 64))
             self._still_boxes.append((WIDTH - MARGIN - side, top, WIDTH - MARGIN, top + 64))
@@ -2693,14 +2877,19 @@ class App:
         if self.account_fp is None:
             return
         if not self.account_text.isdigit():
-            self.set_notice("Enter an account index.")
+            self.set_notice("Enter an index." if self.account_for == "bip85" else "Enter an account index.")
             return
         account = int(self.account_text)
-        if self.account_for == "derive":
+        if self.account_for in ("derive", "bip85"):
             if account >= 0x80000000:
-                self.set_notice("The account index is too large.")
+                self.set_notice(
+                    "The index is too large." if self.account_for == "bip85" else "The account index is too large."
+                )
                 return
-            self.derive_account = account
+            if self.account_for == "bip85":
+                self.bip85_index = account
+            else:
+                self.derive_account = account
             self.back_one()
             return
         try:
@@ -2717,19 +2906,22 @@ class App:
             self.set_notice(str(exc))
 
     def _account(self, frame: Frame):
-        frame.header("Account", "back")
+        choosing_index = self.account_for == "bip85"
+        title = "Index" if choosing_index else "Account"
+        save_label = "Use This Index" if choosing_index else "Use This Account"
+        frame.header(title, "back")
         record = None if self.account_fp is None else self.session.fingerprints.get(self.account_fp)
         if record is None:
             frame.text("This key is no longer loaded.", MARGIN, 140)
             return
-        y = frame.text("Account", MARGIN, HEADER + 16, size=TITLE_SIZE, fill=MUTED)
+        y = frame.text(title, MARGIN, HEADER + 16, size=TITLE_SIZE, fill=MUTED)
         self._account_textbox(frame, y, self.account_text, outline=BLUE)
         save_y = HEIGHT - 100
         if self.notice:
             _face, _lines, _line_h, _pad, notice_top, _height = self._notice_layout(frame)
-            save_y = min(save_y, notice_top - 12 - frame.button_height("Use This Account"))
+            save_y = min(save_y, notice_top - 12 - frame.button_height(save_label))
         self._account_pad(frame, save_y)
-        frame.button(save_y, "Use This Account", "account-save")
+        frame.button(save_y, save_label, "account-save")
 
     def _account_pad(self, frame: Frame, save_y: int):
         key_h = 64

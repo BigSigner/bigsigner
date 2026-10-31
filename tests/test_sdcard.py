@@ -368,6 +368,48 @@ def test_memory_card_rejects_a_bad_shape():
         mount_memory({"dirs": "seeds", "files": {}})
 
 
+def test_export_seed_writes_words_that_load_from_the_card(tmp_path, monkeypatch):
+    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+    app = App()
+    added = app.session.add_mnemonic(ABANDON.split(), passphrase="secret")
+    app.selected_fp = added["fingerprint"]
+    app.screen = "key"
+    app.scroll["key"] = 10_000
+    app.render()
+    tops = {hit["label"]: hit["box"][1] for hit in app.hits}
+    assert tops["Show Seed"] < tops["Show Passphrase"] < tops["Export Seed to SD Card"]
+    assert tops["Export Seed to SD Card"] < tops["Derive an Extended Public Key"]
+    assert tops["Derive an Extended Public Key"] < tops["Create a Copy of This Seed with a Different Passphrase"]
+    assert tops["Create a Copy of This Seed with a Different Passphrase"] < tops["Derive a BIP85 Child Seed"]
+    app._act("export-seed")
+    assert app.screen == "seed-backup"
+    app.render()
+    assert any(hit["label"] == "Continue" for hit in app.hits)
+    app._act("seed-backup-continue")
+    assert app.screen == "sd"
+    app._act("export-new")
+    assert app.filename == f"{added['fingerprint'].hex()}-seed.txt"
+    app._act("export-save-new")
+    body = (tmp_path / app.filename).read_text(encoding="utf-8")
+    assert body.strip() == ABANDON
+    assert "secret" not in body
+    assert app.screen == "key"
+
+    (tmp_path / "spaced.txt").write_text("  " + ABANDON.replace(" ", "\n") + "\n")
+    fresh = App()
+    fresh.screen = "keys"
+    _tap(fresh, "plus")
+    _tap(fresh, "Load from SD Card")
+    _tap(fresh, app.filename)
+    assert fresh.notice == "The seed was added successfully."
+    again = App()
+    again.screen = "keys"
+    _tap(again, "plus")
+    _tap(again, "Load from SD Card")
+    _tap(again, "spaced.txt")
+    assert again.notice == "The seed was added successfully."
+
+
 def test_a_long_filename_scrolls_sideways():
     app = App()
     app.screen = "export-name"

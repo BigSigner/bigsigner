@@ -91,6 +91,19 @@ def test_seed_entry_starts_with_a_keyboard():
     assert any(hit["label"] == "24 words" and hit["action"] == "dropdown-seed-length" for hit in app.hits)
 
 
+def test_manual_entry_opens_at_24_words():
+    app = App()
+    app.screen = "keys"
+    app.seed_length = 12
+    app.seed_words = ["abandon"]
+    app._act("add-manual")
+    assert app.screen == "seed"
+    assert app.seed_length == 24
+    assert app.seed_words == []
+    app.render()
+    assert any(hit["label"] == "24 words" and hit["action"] == "dropdown-seed-length" for hit in app.hits)
+
+
 def test_typing_a_letter_updates_the_keyboard_without_redrawing_the_screen():
     app = App()
     app.screen = "seed"

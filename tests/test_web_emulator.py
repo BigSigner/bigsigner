@@ -1,16 +1,20 @@
 """The static page runs the app in the browser."""
 
 import base64
+import hashlib
 import json
 from pathlib import Path
 
-from bigsigner.bundle import bundle_files, source_files, source_root, write_bundle
+import pytest
+
+from bigsigner.bundle import EXTERNAL_ASSETS, bundle_files, install_assets, source_files, source_root, write_bundle
 
 
 def test_the_static_page_reads_the_bundle_and_checks_downloads():
     page = Path("web/index.html").read_text(encoding="utf-8")
     worker = Path("web/worker.js").read_text(encoding="utf-8")
     assert 'rel="icon" href="icon.png"' in page
+    assert "function downloadFile" in page
     assert 'params.get("seed")' in page
     assert 'params.get("descriptor")' in page
     assert "BIGSIGNER_SDCARD_PATH" not in page
@@ -22,10 +26,28 @@ def test_the_static_page_reads_the_bundle_and_checks_downloads():
     assert "manifest.json" not in worker
     assert "src/bigsigner" not in worker
     assert 'new URL("../"' not in page
-    assert "crypto.subtle.digest" in worker
-    assert "8bf4b10073c67400370ce523fb16f035fe759f6fdd987c579bdcc268d75ed770" in worker
-    assert "9fc05f03305ad27a709eb742cf3097fa19e6f6f93bb9e2f039c0979190f6f1b1" in worker
+    assert "crypto.subtle.digest" not in worker
+    assert 'from "./external-assets/pyodide/pyodide.mjs"' in worker
+    assert "external-assets/pillow/" in worker
+    assert "external-assets/embit/embit-0.8.0.tar.gz" in worker
+    assert "external-assets/qrcode/qrcode-8.0-py3-none-any.whl" in worker
+    assert "cdn.jsdelivr.net" not in worker
+    assert "files.pythonhosted.org" not in worker
     assert "python -m bigsigner.bundle" in worker
+    assert "web/external-assets/" in Path(".gitignore").read_text(encoding="utf-8")
+    by_name = {name: digest for name, _url, digest in EXTERNAL_ASSETS}
+    assert by_name["embit/embit-0.8.0.tar.gz"] == "8bf4b10073c67400370ce523fb16f035fe759f6fdd987c579bdcc268d75ed770"
+    assert by_name["qrcode/qrcode-8.0-py3-none-any.whl"] == "9fc05f03305ad27a709eb742cf3097fa19e6f6f93bb9e2f039c0979190f6f1b1"
+    assert list(by_name) == [
+        "pyodide/pyodide.mjs",
+        "pyodide/pyodide.asm.mjs",
+        "pyodide/pyodide.asm.wasm",
+        "pyodide/python_stdlib.zip",
+        "pyodide/pyodide-lock.json",
+        "pillow/pillow-12.2.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
+        "embit/embit-0.8.0.tar.gz",
+        "qrcode/qrcode-8.0-py3-none-any.whl",
+    ]
 
 
 def test_the_bundle_of_this_tree_includes_the_package_and_skips_metadata():
@@ -60,3 +82,37 @@ def test_the_bundle_stores_text_and_base64_and_skips_junk(tmp_path):
     assert saved["bigsigner/__init__.py"] == document["bigsigner/__init__.py"]
     assert saved["logo.bin"] == document["logo.bin"]
     assert (tmp_path / "web" / "icon.png").read_bytes() == b"\x89PNG\r\n"
+
+
+def test_an_external_asset_is_kept_when_its_hash_matches(tmp_path):
+    body = b"already here"
+    digest = hashlib.sha256(body).hexdigest()
+    (tmp_path / "kept.bin").write_bytes(body)
+    calls = []
+    install_assets(tmp_path, (("kept.bin", "https://example.invalid/kept.bin", digest),), fetch=lambda url: calls.append(url))
+    assert calls == []
+    assert (tmp_path / "kept.bin").read_bytes() == body
+
+
+def test_a_matching_file_moves_into_its_folder(tmp_path):
+    body = b"wheel"
+    digest = hashlib.sha256(body).hexdigest()
+    (tmp_path / "lib.whl").write_bytes(body)
+    install_assets(tmp_path, (("qrcode/lib.whl", "https://example.invalid/lib.whl", digest),), fetch=lambda url: b"no")
+    assert (tmp_path / "qrcode" / "lib.whl").read_bytes() == body
+    assert not (tmp_path / "lib.whl").exists()
+
+
+def test_an_external_asset_path_cannot_leave_the_folder(tmp_path):
+    with pytest.raises(SystemExit, match="Bad external asset"):
+        install_assets(tmp_path, (("../x", "https://example.invalid/x", "ab"),), fetch=lambda url: b"x")
+
+
+def test_an_external_asset_with_the_wrong_hash_is_refused(tmp_path):
+    with pytest.raises(SystemExit, match="SHA-256"):
+        install_assets(
+            tmp_path,
+            (("fresh.bin", "https://example.invalid/fresh.bin", "0" * 64),),
+            fetch=lambda url: b"not the pinned bytes",
+        )
+    assert not (tmp_path / "fresh.bin").exists()

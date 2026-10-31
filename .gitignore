@@ -10,3 +10,4 @@ build/
 emulator-sdcard/
 web/bundle.json
 web/icon.png
+web/external-assets/

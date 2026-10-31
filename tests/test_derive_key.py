@@ -14,23 +14,30 @@ def _seed_app():
     return app, added["fingerprint"]
 
 
-def test_a_seed_offers_three_derive_buttons_and_no_wallet_buttons():
+def test_a_seed_offers_one_derive_button_and_then_a_type_choice():
     app, _fingerprint = _seed_app()
     app.scroll["key"] = 10_000
     app.render()
     labels = {hit["label"] for hit in app.hits}
     actions = {hit["action"] for hit in app.hits}
-    assert "Derive a Native-Segwit SingleSig Key" in labels
-    assert "Derive a Native-Segwit MultiSig Key" in labels
-    assert "Derive a Taproot SingleSig Key" in labels
+    assert "Derive an Extended Public Key" in labels
+    assert "Delete Seed" in labels
+    assert "derive-native" not in actions
+    assert "make-xpub-wallet" not in actions
+    assert "derive-wallet" not in actions
+    assert not any("SingleSig Wallet" in label for label in labels)
+    app._act("derive-menu")
+    assert app.screen == "derive-type"
+    app.render()
+    labels = {hit["label"] for hit in app.hits}
+    assert "Native-Segwit SingleSig Key" in labels
+    assert "Native-Segwit MultiSig Key" in labels
+    assert "Taproot SingleSig Key" in labels
     height = next(hit["box"] for hit in app.hits if hit["action"] == "derive-taproot")
     native = next(hit["box"] for hit in app.hits if hit["action"] == "derive-native")
     multisig = next(hit["box"] for hit in app.hits if hit["action"] == "derive-multisig")
     assert height[3] - height[1] == native[3] - native[1] == multisig[3] - multisig[1]
-    assert height[3] - height[1] > Frame().button_height("Derive a Taproot")
-    assert "make-xpub-wallet" not in actions
-    assert "derive-wallet" not in actions
-    assert not any("SingleSig Wallet" in label for label in labels)
+    assert height[3] - height[1] > Frame().button_height("Taproot")
 
 
 def test_the_derive_screen_shows_the_account_selector_and_the_derived_key():
@@ -45,6 +52,8 @@ def test_the_derive_screen_shows_the_account_selector_and_the_derived_key():
     assert "derive-edit" in actions
     assert "derive-wallet" in actions
     assert "derive-details" in actions
+    tops = {hit["action"]: hit["box"][1] for hit in app.hits}
+    assert tops["derive-details"] < tops["export-derived"] < tops["derive-wallet"]
     assert "delete-key" not in actions
     key = app._derived_key()
     assert format_path(list(key.path)) == "m/84h/0h/0h"

@@ -452,6 +452,7 @@ def test_main_screens_save_screenshots():
     app.screen = "key"
     record.note("Loaded the Abandon seed in code and opened its key screen.")
     record.shot(app, "key")
+    record.click(app, "derive-menu")
     record.click(app, "derive-native")
     record.click(app, "derive-wallet")
     record.shot(app, "wallet")
@@ -745,9 +746,8 @@ def test_seed_screen_labels_banner_and_wallet_buttons():
     app.scroll["key"] = 10_000
     image = app.render()
     labels = [hit["label"] for hit in app.hits]
-    assert "Derive a Native-Segwit SingleSig Key" in labels
-    assert "Derive a Native-Segwit MultiSig Key" in labels
-    assert "Derive a Taproot SingleSig Key" in labels
+    assert "Derive an Extended Public Key" in labels
+    assert "Delete Seed" in labels
     assert not any("SingleSig Wallet" in label for label in labels)
     assert all("hidden" not in label.lower() for label in labels)
 
@@ -772,10 +772,8 @@ def test_seed_screen_labels_banner_and_wallet_buttons():
         box = next(hit["box"] for hit in app.hits if hit["action"] == action)
         return image.getpixel((box[0] + 24, (box[1] + box[3]) // 2))[:3]
 
-    native = button_color("derive-native")
-    taproot = button_color("derive-taproot")
-    assert native == taproot
-    assert native == (24, 92, 184)
+    derive = button_color("derive-menu")
+    assert derive == (24, 92, 184)
     delete = next(hit["box"] for hit in app.hits if hit["action"] == "delete-key")
     toast_navy = [
         y
@@ -791,6 +789,7 @@ def test_seed_screen_labels_banner_and_wallet_buttons():
     assert app.notice == ""
     assert len(toast_rows(image)) < 8
 
+    tap(app, "derive-menu")
     tap(app, "derive-native")
     assert app.screen == "derive"
     tap(app, "derive-wallet")

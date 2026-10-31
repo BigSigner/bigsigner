@@ -20,14 +20,24 @@ Before the words are shown again, confirm that nobody else can see the screen.
 
 The fingerprint is the first four bytes of the HASH160 of the master public key. Compare it with the fingerprint shown by the wallet that created the phrase, or with the one you wrote down when you generated the seed. If they differ, stop. Do not receive funds to addresses from a seed you cannot identify.
 
+## Export the words
+
+Export Seed to SD Card is under Show Seed. The next screen warns that a file is not a complete backup: keep a physical copy on paper or metal as well, and wipe the card thoroughly before it is used in anything connected to the internet. Deleting the file is not enough. Continue then writes a text file of the words separated by spaces. There is no separate standard file format for a BIP39 seed. The passphrase is not included. Load from SD Card reads that file, trims the surrounding space, and accepts the same words with extra spaces, newlines, or commas.
+
 ## Derive a key
 
-The Seed Key screen does not create a wallet directly. It offers three buttons:
+The Seed Key screen does not create a wallet directly. Derive an Extended Public Key asks which type of key to derive:
 
-- Derive a Native-Segwit SingleSig Key (`m/84h/<coin>h/<account>h`)
-- Derive a Native-Segwit MultiSig Key (`m/48h/<coin>h/<account>h/2h`)
-- Derive a Taproot SingleSig Key (`m/86h/<coin>h/<account>h`)
+- Native-Segwit SingleSig Key (`m/84h/<coin>h/<account>h`)
+- Native-Segwit MultiSig Key (`m/48h/<coin>h/<account>h/2h`)
+- Taproot SingleSig Key (`m/86h/<coin>h/<account>h`)
 
-Each opens Derive Key. The account selector is the first control: minus on the left, plus on the right, and the account index in the middle. Tapping the index opens a keypad. The screen then shows the same details as an external key: the fingerprint name, the fingerprint, the type, the derivation path, and the first 20 characters of the extended public key. Those 20 characters change when the account changes. Nothing new is stored. There is no Delete button.
+Each choice opens Derive Key. The account selector is the first control: minus on the left, plus on the right, and the account index in the middle. Tapping the index opens a keypad. The screen then shows the same details as an external key: the fingerprint name, the fingerprint, the type, the derivation path, and the first 20 characters of the extended public key. Those 20 characters change when the account changes. Nothing new is stored. There is no Delete button.
 
-Show Full Details shows the derived key expression, including its QR code. Export to SD Card is the next button. It asks for a format (Key Expression, the xpub or tpub, and the SLIP-132 form such as zpub when this path has one), then a file on the SD card. An existing file can be replaced, or New File can name a new one. The Key Expression file is `[fingerprint/derivation path]xpub/<0;1>/*`. The other formats are the key alone. A single-signature derivation also has a button that creates the wallet at the selected account, or opens that wallet if it already exists. A multisig derivation has no wallet button. A multisig wallet is loaded from a descriptor, or assembled from keys, rather than created from this one derived key.
+Show Full Details shows the derived key expression, including its QR code. Export to SD Card is the next button. It asks for a format (Key Expression, the xpub or tpub, and the SLIP-132 form such as zpub when this path has one), then a file on the SD card. An existing file can be replaced, or New File can name a new one. The Key Expression file is `[fingerprint/derivation path]xpub/<0;1>/*`. The other formats are the key alone. A single-signature derivation then has a button that creates the wallet at the selected account, or opens that wallet if it already exists. A multisig derivation has no wallet button. A multisig wallet is loaded from a descriptor, or assembled from keys, rather than created from this one derived key.
+
+## Derive a BIP85 child seed
+
+Derive a BIP85 Child Seed sits under Create a Copy of This Seed with a Passphrase, or under Create a Copy of This Seed with a Different Passphrase when a passphrase is set. The label breaks after BIP85. The next screen labels the choice Number of Words. It is a dropdown of 12 words or 24 words, with 24 words selected, and an index that starts at 0. The child is an English BIP39 mnemonic from `m/83696968h/39h/0h/{12 or 24}h/{index}h`. 83696968 is the BIP85 purpose field. It is not the index 85. Specter DIY derives a child mnemonic with the same path. The child has no passphrase of its own. A passphrase on the parent is already part of the master key this derivation uses, so the same words with a passphrase produce a different child.
+
+Derive Seed adds the child and opens it. Back from that screen returns to Bitcoin Keys. The notice says BIP85 child seed was added successfully. Deriving a seed that is already loaded shows This seed is already loaded. and stays on the BIP85 screen.

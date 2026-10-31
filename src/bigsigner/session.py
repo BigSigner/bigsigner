@@ -3,6 +3,7 @@
 import unicodedata
 
 from embit import bip32, bip39
+from embit.bip85 import derive_mnemonic
 from embit.descriptor import Descriptor
 from embit.descriptor.checksum import checksum
 from embit.networks import NETWORKS
@@ -22,6 +23,19 @@ from .paths import (
 
 class SessionError(ValueError):
     pass
+
+
+def bip85_mnemonic(root, words: int, index: int) -> str:
+    """English BIP39 mnemonic at m/83696968h/39h/0h/{words}h/{index}h.
+
+    83696968 is the BIP85 purpose field. The next step, 39, selects the BIP39
+    application. A path that begins with 85h is a different derivation.
+    """
+    if words not in (12, 24):
+        raise SessionError("A BIP85 child seed is 12 or 24 words.")
+    if index < 0 or index >= 0x80000000:
+        raise SessionError("The index is too large.")
+    return derive_mnemonic(root, num_words=words, index=index)
 
 
 class StoredKey:
@@ -122,6 +136,13 @@ class Session:
         if removed:
             message += " External keys derived from this seed were removed."
         return {"message": message, "warnings": warnings, "fingerprint": fingerprint}
+
+    def bip85_child(self, fingerprint: bytes, words: int, index: int) -> str:
+        seed = self._seed_for(fingerprint)
+        root = getattr(seed, "root", None) if seed is not None else None
+        if root is None:
+            raise SessionError("This seed is no longer loaded.")
+        return bip85_mnemonic(root, words, index)
 
     def add_text(self, text: str) -> dict:
         cleaned = text.strip()
