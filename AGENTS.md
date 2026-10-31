@@ -16,15 +16,16 @@ There is no horizontal scrolling. Long text wraps. Fingerprints, addresses, xpub
 
 The title bar text is 32px. Body paragraphs and buttons are 36px, a little larger than the title. On Bitcoin Keys, the section labels, the fingerprint name, the hex, the seed summary, and an external key's kind and account are 32px. The fingerprint name on a key card is centered and breaks after the second word. A Bitcoin Wallets card lists the fingerprints under the title, monospace and separated by commas, breaking after a comma, and puts a key icon or an eye icon to the left of each fingerprint name. On the seed key, external key, and wallet screens the name breaks the same way, with a key icon for a seed or an eye icon for an external key on the left, lined up with the fingerprint icon. The seed key screen's fingerprint line, seed sentences, and buttons follow the title and button sizes above. Its three derive buttons open Derive Key, which starts with an account selector and then the external-key details, without Delete. Export to SD Card sits under Show Full Details there, and on an external key it sits under Show Full Details and above Delete Key. A single-signature derivation can create or open its wallet from that screen. On an external key, the type, account, derivation path, and extended public key use that fingerprint size. The path and the key preview are each centered on the next line, and Delete Key follows the other buttons. The side menu keeps its own size.
 
-## Emulator port
+## Browser emulator
 
-The default emulator port is 8765. A person working in this repository often keeps a live emulator on **8766**. Do not kill, restart, or bind port 8766. Tests do not start that emulator. They construct `App`, call `render`, and tap. If you need to start an emulator yourself, use 8765 or another free port.
+Tests do not start it. They construct `App`, call `render`, and tap.
 
 ```bash
-PYTHONPATH=src BIGSIGNER_EMULATOR=1 python -m bigsigner
+PYTHONPATH=src python -m bigsigner.bundle
+python3 -m http.server 8780 --directory web
 ```
 
-Do not type a real seed into the emulator.
+Open http://127.0.0.1:8780/ . Run the bundle command again after changing Python, then reload the page. `web/bundle.json` is gitignored. Do not type a real seed into the emulator. The hash supplies `seed` and `descriptor`. The SD card is the files stored in the browser. `BIGSIGNER_INITIAL_SEED`, `BIGSIGNER_INITIAL_WALLET_DESCRIPTOR`, and `BIGSIGNER_SDCARD_PATH` are for tests and the panel, not this page.
 
 ## Tests
 
@@ -32,7 +33,7 @@ Do not type a real seed into the emulator.
 pytest
 ```
 
-Screenshot tests write `artifacts/screenshots/<test name>/` and an `index.html` gallery. A flow that stands in for scanning a QR code writes the payload into a temporary directory, sets `BIGSIGNER_SDCARD_PATH`, and clicks the plus button, then Load from SD Card, then the file. The browser camera is not a stand-in for that path. The one test that starts a server uses port 8778, not 8766.
+Screenshot tests write `artifacts/screenshots/<test name>/` and an `index.html` gallery. A flow that stands in for scanning a QR code writes the payload into a temporary directory, sets `BIGSIGNER_SDCARD_PATH`, and clicks the plus button, then Load from SD Card, then the file. The browser camera is not a stand-in for that path.
 
 ## External keys
 

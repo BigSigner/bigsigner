@@ -1,8 +1,23 @@
 import pytest
 
-from bigsigner.sdcard import SdError, list_folder, read_text, write_text
+from bigsigner.sdcard import (
+    SdError,
+    consume_memory_change,
+    list_folder,
+    mount_memory,
+    read_text,
+    unmount_memory,
+    write_text,
+)
 from test_domain import LEGAL, expression
 from bigsigner.ui.app import App
+
+
+@pytest.fixture(autouse=True)
+def _no_memory_card():
+    unmount_memory()
+    yield
+    unmount_memory()
 
 ABANDON = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 
@@ -295,6 +310,62 @@ def _assert_packed(draw, face, width, text, lines):
             assert draw.textlength(line + text[consumed], font=face) > width
     if not lines[-1].endswith("..."):
         assert consumed == len(text)
+
+
+def test_an_empty_memory_card_is_inserted():
+    mount_memory({"dirs": [], "files": {}})
+    assert list_folder("") == []
+    app = App()
+    app.screen = "sd"
+    app.render()
+    assert app.screen == "sd"
+
+
+def test_a_memory_card_lists_folders_and_loads_a_seed():
+    mount_memory({"files": {"seeds/nested/note.txt": "hello\n", "seeds/abandon.txt": ABANDON + "\n"}})
+    assert list_folder("") == [{"name": "seeds", "kind": "dir"}]
+    assert list_folder("seeds") == [
+        {"name": "nested", "kind": "dir"},
+        {"name": "abandon.txt", "kind": "file"},
+    ]
+    app = App()
+    app.screen = "keys"
+    _tap(app, "plus")
+    _tap(app, "Load from SD Card")
+    _tap(app, "seeds/")
+    _tap(app, "abandon.txt")
+    assert app.screen == "key"
+    assert app.notice == "The seed was added successfully."
+
+
+def test_a_mounted_memory_card_ignores_the_sd_card_path(tmp_path, monkeypatch):
+    (tmp_path / "disk.txt").write_text("disk\n")
+    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+    mount_memory({"dirs": [], "files": {"memory.txt": "memory\n"}})
+    assert [item["name"] for item in list_folder("")] == ["memory.txt"]
+    unmount_memory()
+    assert [item["name"] for item in list_folder("")] == ["disk.txt"]
+
+
+def test_write_text_on_a_memory_card_is_reported_once():
+    mount_memory({"dirs": ["keep"], "files": {}})
+    assert consume_memory_change() is None
+    write_text("keep/note.txt", "hello")
+    assert read_text("keep/note.txt") == "hello"
+    changed = consume_memory_change()
+    assert changed["files"]["keep/note.txt"] == "hello\n"
+    assert "keep" in changed["dirs"]
+    assert consume_memory_change() is None
+    with pytest.raises(SdError):
+        write_text("missing/note.txt", "nope")
+    with pytest.raises(SdError):
+        write_text("../note.txt", "nope")
+    assert consume_memory_change() is None
+
+
+def test_memory_card_rejects_a_bad_shape():
+    with pytest.raises(SdError):
+        mount_memory({"dirs": "seeds", "files": {}})
 
 
 def test_a_long_filename_scrolls_sideways():

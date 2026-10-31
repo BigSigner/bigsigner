@@ -46,20 +46,27 @@ pytest
 
 `pytest` runs the unit tests and writes review screenshots under `artifacts/screenshots/`.
 
-To run the same interface in a desktop browser, without a Raspberry Pi:
+To run the same interface in a desktop browser, without a Raspberry Pi, bundle the source and serve only `web/`:
 
 ```bash
-PYTHONPATH=src BIGSIGNER_EMULATOR=1 python -m bigsigner
+PYTHONPATH=src .venv/bin/python -m bigsigner.bundle
+python3 -m http.server 8780 --directory web
 ```
 
-Open http://127.0.0.1:8765. The page shows the 480×800 frame at the Waveshare picture size, 51.84 mm by 86.40 mm, and sends taps back to the application. A browser's millimeter is not always a ruler millimeter, so the buttons under the picture adjust that size and remember it. This mode is for development. Do not type a real seed into it. In that terminal, `r` clears the session and starts the program again, so code saved on disk is loaded. Ctrl+C stops it. Another port is `BIGSIGNER_PORT=8766`.
+Open http://127.0.0.1:8780/ . The page shows the 480×800 frame at the Waveshare picture size, 51.84 mm by 86.40 mm. A browser's millimeter is not always a ruler millimeter, so the buttons under the picture adjust that size and remember it. This mode is for development. Do not type a real seed into it. The first load downloads a Python runtime into the page. After you change Python, run the bundle command again and reload the page. `web/bundle.json` is not committed.
 
-These variables are for development. Do not set them on a device that holds real funds.
+The hash is a query string, so a seed in it is not sent to the server. A reload applies it again. `seed` is the mnemonic, and commas are spaces. `descriptor` is a wallet descriptor or a BSMS file, percent-encoded. Both are loaded when the boot screen ends, the seed first.
+
+```
+http://127.0.0.1:8780/#seed=abandon,abandon,abandon,abandon,abandon,abandon,abandon,abandon,abandon,abandon,abandon,about
+```
+
+SD Card, beside the picture, keeps files in the browser. Load from SD Card reads those files. New Folder adds a directory, and Delete removes a file or a directory and what is inside it. A file saved from the picture is added to that same card. This page does not use `BIGSIGNER_SDCARD_PATH`, `BIGSIGNER_INITIAL_SEED`, or `BIGSIGNER_INITIAL_WALLET_DESCRIPTOR`.
+
+These variables are for the panel and the tests. Do not set them on a device that holds real funds.
 
 | Variable | Purpose |
 | --- | --- |
-| `BIGSIGNER_EMULATOR` | Set to `1` to force the browser emulator. Without it, a machine with `/dev/fb0` uses the panel. |
-| `BIGSIGNER_PORT` | Emulator port. The default is `8765`. |
 | `BIGSIGNER_SDCARD_PATH` | A folder treated as the microSD card, including its subfolders. Load from SD Card reads text files from it. |
 | `BIGSIGNER_INITIAL_SEED` | A 12, 18, or 24 word mnemonic loaded when the boot screen is left. Commas are treated as spaces. An invalid value is printed and shown on screen. |
 | `BIGSIGNER_INITIAL_WALLET_DESCRIPTOR` | A wallet descriptor loaded when the boot screen is left, after the initial seed. It is imported the same way as a descriptor from the Bitcoin Wallets page, including a BSMS 1.0 file. An invalid value is printed and shown on screen. |
@@ -72,7 +79,7 @@ BIGSIGNER_TAP=/tmp/bigsigner-tap python -m bigsigner
 printf '240 726\n' > /tmp/bigsigner-tap
 ```
 
-On a device whose HDMI framebuffer is `/dev/fb0`, the same command uses the panel and the touchscreen instead of the browser. BigSigner OS starts that device by running `src/main.py`. Syncing this checkout to a dev image and restarting uses that file.
+`python -m bigsigner` runs the panel. It needs `/dev/fb0`. BigSigner OS starts the device by running `src/main.py`. Syncing this checkout to a dev image and restarting uses that file.
 
 The operating-system image is built from [bigsigner-os](https://github.com/BigSigner/bigsigner-os), not from this repository. See that project's documentation for how to build and flash a microSD card.
 

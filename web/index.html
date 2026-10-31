@@ -1,0 +1,678 @@
+<!doctype html>
+<meta charset="utf-8">
+<!--
+  Hash query, so the seed is not sent to the server:
+  #seed=word1,word2,...&descriptor=wpkh(...)
+  Commas in the seed are spaces. Percent-encode the descriptor.
+  A reload applies the hash again.
+-->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BigSigner</title>
+<style>
+  body { margin: 0; background: #111; color: #ddd; font: 15px/1.4 sans-serif; }
+  #warning { margin: 0; padding: 14px 16px; background: #a8242a; color: white; text-align: center; font: 600 18px/1.4 sans-serif; }
+  #layout { display: flex; justify-content: center; align-items: flex-start; gap: 28px; flex-wrap: wrap; min-height: 100vh; box-sizing: border-box; padding: 16px; }
+  #stage { display: grid; justify-items: center; gap: 12px; }
+  #status { margin: 0; max-width: min(90vw, 36rem); white-space: pre-wrap; color: #f0d090; }
+  video { width: 51.84mm; height: 180px; object-fit: cover; background: #000; display: none; }
+  #panel-wrap { width: 51.84mm; aspect-ratio: 480 / 800; background: #1a1a1a; display: grid; }
+  #panel-wrap img { width: 100%; height: 100%; display: none; grid-area: 1 / 1; touch-action: none; background: white; }
+  #panel-loading { grid-area: 1 / 1; place-self: center; margin: 0; color: #f0d090; font: 32px/1.2 sans-serif; }
+  #panel-wrap.ready img { display: block; }
+  #panel-wrap.ready #panel-loading { display: none; }
+  #size { display: flex; gap: 8px; align-items: center; }
+  #size button, #sd-new button, #sd-drop label { background: transparent; color: #ddd; border: 1px solid #555; border-radius: 8px; font: 14px/1 sans-serif; padding: 8px 12px; cursor: pointer; }
+  #size-note, #sd-note { margin: 0; max-width: 52mm; color: #9a9a9a; font: 13px/1.4 sans-serif; text-align: center; }
+  #sd-column { width: min(22rem, 100%); display: grid; gap: 12px; align-content: start; position: sticky; top: 16px; }
+  #sd-column h2 { margin: 0; font: 600 18px/1.2 sans-serif; text-align: center; }
+  #sd-panel { display: grid; gap: 12px; padding: 12px; border: 1px solid #333; border-radius: 12px; background: #1b1b1b; }
+  #sd-path { display: flex; flex-wrap: wrap; gap: 4px; }
+  #sd-path button { background: transparent; color: #9ec1ff; border: 0; padding: 0; cursor: pointer; font: inherit; }
+  #sd-path button + button::before { content: "/"; color: #777; margin-right: 4px; }
+  #sd-new { display: flex; gap: 8px; }
+  #sd-folder { flex: 1; min-width: 0; background: #111; color: #eee; border: 1px solid #444; border-radius: 8px; padding: 8px; font: inherit; }
+  #sd-drop { display: grid; justify-items: center; gap: 8px; padding: 16px; border: 1px dashed #555; border-radius: 12px; text-align: center; }
+  #sd-drop.over { border-color: #7eb6ff; background: #162033; }
+  #sd-drop p { margin: 0; }
+  #sd-drop label { position: relative; }
+  #sd-drop input { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; opacity: 0; }
+  #sd-error { margin: 0; color: #f0b4b4; }
+  #sd-error:empty { display: none; }
+  #sd-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; max-height: 50vh; overflow: auto; }
+  #sd-list li { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+  #sd-list .enter, #sd-list span { overflow-wrap: anywhere; text-align: left; }
+  #sd-list .enter { background: transparent; color: #eee; border: 0; padding: 0; cursor: pointer; font: inherit; }
+  #sd-list .delete { background: transparent; color: #f0b4b4; border: 0; padding: 4px; cursor: pointer; font: inherit; }
+  #sd-list .empty { display: block; color: #9a9a9a; }
+</style>
+<p id="warning">This is an emulator. Do not use it for real Bitcoin.</p>
+<div id="layout">
+  <div id="stage">
+    <p id="status">Loading the emulator…</p>
+    <video id="camera" playsinline autoplay muted></video>
+    <div id="panel-wrap"><p id="panel-loading">Loading</p><img id="panel" alt="BigSigner"></div>
+    <div id="size">
+      <button type="button" id="smaller" title="Smaller">−</button>
+      <button type="button" id="size-label" title="Reset to the Waveshare picture size"></button>
+      <button type="button" id="larger" title="Larger">+</button>
+    </div>
+    <p id="size-note">The 4 inch Waveshare picture is 51.8 mm wide. Match a ruler, then leave it. Do not type a real seed into this page.</p>
+  </div>
+  <aside id="sd-column">
+    <h2>SD Card</h2>
+    <div id="sd-panel">
+      <div id="sd-path"></div>
+      <form id="sd-new">
+        <input id="sd-folder" placeholder="Folder name" autocomplete="off">
+        <button type="submit">New Folder</button>
+      </form>
+      <div id="sd-drop">
+        <p>Drop files here</p>
+        <label>Choose Files<input id="sd-files" type="file" multiple></label>
+      </div>
+      <p id="sd-error" role="status"></p>
+      <ul id="sd-list"></ul>
+      <p id="sd-note">These files stay in this browser.</p>
+    </div>
+  </aside>
+</div>
+<script>
+const panel = document.getElementById("panel");
+const panelWrap = document.getElementById("panel-wrap");
+const video = document.getElementById("camera");
+const status = document.getElementById("status");
+const sdPath = document.getElementById("sd-path");
+const sdList = document.getElementById("sd-list");
+const sdError = document.getElementById("sd-error");
+const sdDrop = document.getElementById("sd-drop");
+const folderInput = document.getElementById("sd-folder");
+const CARD_KEY = "bigsigner-sdcard";
+const MAX_BYTES = 256000;
+const PANEL_WIDTH_MM = 51.84;
+const SIZE_KEY = "bigsigner-panel-scale";
+const initial = hashParams();
+
+function hashParams() {
+  let raw = location.hash.startsWith("#") ? location.hash.slice(1) : "";
+  if (raw.startsWith("?")) raw = raw.slice(1);
+  const params = new URLSearchParams(raw);
+  return {seed: params.get("seed") || "", descriptor: params.get("descriptor") || ""};
+}
+
+function panelScale() {
+  const saved = Number(localStorage.getItem(SIZE_KEY));
+  return Number.isFinite(saved) && saved >= 0.6 && saved <= 1.8 ? saved : 1;
+}
+function applyPanelSize(scale) {
+  const width = (PANEL_WIDTH_MM * scale) + "mm";
+  panelWrap.style.width = width;
+  video.style.width = width;
+  const label = document.getElementById("size-label");
+  label.textContent = scale === 1 ? "51.8 × 86.4 mm" : Math.round(scale * 100) + "%";
+}
+function setPanelScale(scale) {
+  const next = Math.round(Math.min(1.8, Math.max(0.6, scale)) * 100) / 100;
+  localStorage.setItem(SIZE_KEY, String(next));
+  applyPanelSize(next);
+}
+applyPanelSize(panelScale());
+document.getElementById("smaller").addEventListener("click", () => setPanelScale(panelScale() - 0.02));
+document.getElementById("larger").addEventListener("click", () => setPanelScale(panelScale() + 0.02));
+document.getElementById("size-label").addEventListener("click", () => setPanelScale(1));
+
+let card = loadCard();
+let sdHere = "";
+let dirty = false;
+let started = false;
+let refreshTimer = 0;
+let frameUrl = "";
+let screenName = "";
+let cameraFrames = [];
+let sampler = 0;
+let lastQr = "";
+let qrBusy = false;
+let qrWarned = false;
+let qrDetector = null;
+panel.style.pointerEvents = "none";
+renderSd();
+
+function loadCard() {
+  try {
+    return normalizeCard(JSON.parse(localStorage.getItem(CARD_KEY) || "null"));
+  } catch (err) {
+    return emptyCard();
+  }
+}
+function emptyCard() {
+  return {dirs: [], files: {}};
+}
+function normalizeCard(raw) {
+  const next = emptyCard();
+  if (!raw || typeof raw !== "object") return next;
+  const dirs = Array.isArray(raw.dirs) ? raw.dirs : [];
+  const files = raw.files && typeof raw.files === "object" && !Array.isArray(raw.files) ? raw.files : {};
+  for (const dir of dirs) {
+    if (typeof dir === "string") addDirPath(next, safePath(dir));
+  }
+  for (const [path, text] of Object.entries(files)) {
+    if (typeof text !== "string") continue;
+    const rel = safePath(path);
+    if (!rel || next.dirs.includes(rel)) continue;
+    const parent = parentOf(rel);
+    if (parent) {
+      if (next.files[parent]) continue;
+      addDirPath(next, parent);
+    }
+    if (next.dirs.includes(rel)) continue;
+    next.files[rel] = text;
+  }
+  return next;
+}
+function safePath(path) {
+  if (typeof path !== "string" || path.includes("\\") || path.includes("\0")) return "";
+  const parts = path.split("/").filter((part) => part.length);
+  if (!parts.length || parts.some((part) => part === "." || part === "..")) return "";
+  return parts.join("/");
+}
+function parentOf(path) {
+  const slash = path.lastIndexOf("/");
+  return slash === -1 ? "" : path.slice(0, slash);
+}
+function joinPath(dir, name) {
+  return dir ? dir + "/" + name : name;
+}
+function addDirPath(target, path) {
+  let current = path;
+  while (current) {
+    if (!target.dirs.includes(current) && !target.files[current]) target.dirs.push(current);
+    current = parentOf(current);
+  }
+}
+function validName(name) {
+  return !!name && name !== "." && name !== ".." && !name.includes("/") && !name.includes("\\") && !name.includes("\0");
+}
+function saveCard() {
+  try {
+    localStorage.setItem(CARD_KEY, JSON.stringify(card));
+  } catch (err) {
+    setSdError("This browser cannot store the SD card. It may be full.");
+  }
+}
+function setSdError(text) {
+  sdError.textContent = text || "";
+}
+function noteCard() {
+  dirty = true;
+  saveCard();
+  renderSd();
+  if (started) enqueue(() => sendTick({kind: "frame"}));
+}
+function renderSd() {
+  sdPath.replaceChildren();
+  const root = document.createElement("button");
+  root.type = "button";
+  root.textContent = "Card";
+  root.setAttribute("data-path", "");
+  sdPath.append(root);
+  if (sdHere) {
+    let built = "";
+    for (const part of sdHere.split("/")) {
+      built = built ? built + "/" + part : part;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = part;
+      button.setAttribute("data-path", built);
+      sdPath.append(button);
+    }
+  }
+  const prefix = sdHere ? sdHere + "/" : "";
+  const dirs = [];
+  const files = [];
+  for (const dir of card.dirs) {
+    const name = childName(dir, prefix);
+    if (name) dirs.push(name);
+  }
+  for (const file of Object.keys(card.files)) {
+    const name = childName(file, prefix);
+    if (name) files.push(name);
+  }
+  dirs.sort((a, b) => a.localeCompare(b, undefined, {sensitivity: "base"}));
+  files.sort((a, b) => a.localeCompare(b, undefined, {sensitivity: "base"}));
+  sdList.replaceChildren();
+  if (!dirs.length && !files.length) {
+    const item = document.createElement("li");
+    item.className = "empty";
+    item.textContent = sdHere ? "This folder is empty." : "This SD card is empty.";
+    sdList.append(item);
+    return;
+  }
+  for (const name of dirs) renderRow(name, joinPath(sdHere, name), "dir");
+  for (const name of files) renderRow(name, joinPath(sdHere, name), "file");
+}
+function childName(path, prefix) {
+  if (prefix) {
+    if (!path.startsWith(prefix)) return "";
+    path = path.slice(prefix.length);
+  }
+  if (!path || path.includes("/")) return "";
+  return path;
+}
+function renderRow(name, path, kind) {
+  const item = document.createElement("li");
+  if (kind === "dir") {
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "enter";
+    open.textContent = name;
+    open.setAttribute("data-path", path);
+    item.append(open);
+  } else {
+    const label = document.createElement("span");
+    label.textContent = name;
+    item.append(label);
+  }
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "delete";
+  remove.textContent = "Delete";
+  remove.setAttribute("data-path", path);
+  remove.setAttribute("data-kind", kind);
+  item.append(remove);
+  sdList.append(item);
+}
+function deletePath(path, kind) {
+  if (kind === "dir") {
+    card.dirs = card.dirs.filter((dir) => dir !== path && !dir.startsWith(path + "/"));
+    for (const file of Object.keys(card.files)) {
+      if (file === path || file.startsWith(path + "/")) delete card.files[file];
+    }
+    if (sdHere === path || sdHere.startsWith(path + "/")) sdHere = parentOf(path);
+  } else {
+    delete card.files[path];
+  }
+  noteCard();
+}
+function createFolder(name) {
+  const trimmed = name.trim();
+  if (!validName(trimmed)) {
+    setSdError("Choose a different folder name.");
+    return;
+  }
+  const path = joinPath(sdHere, trimmed);
+  if (card.files[path]) {
+    setSdError("A file already has that name.");
+    return;
+  }
+  if (card.dirs.includes(path)) {
+    setSdError("That folder already exists.");
+    return;
+  }
+  addDirPath(card, path);
+  folderInput.value = "";
+  setSdError("");
+  noteCard();
+}
+async function addFiles(items) {
+  const errors = [];
+  for (const item of items) {
+    if (item.directory) {
+      const path = safePath(item.path);
+      if (!path) errors.push("Choose a different folder name.");
+      else if (card.files[path] || (parentOf(path) && card.files[parentOf(path)])) errors.push("A file already has that name.");
+      else addDirPath(card, path);
+      continue;
+    }
+    const error = await addOneFile(item.path, item.file);
+    if (error) errors.push(error);
+  }
+  setSdError(errors[0] || "");
+  if (items.length) noteCard();
+}
+async function addOneFile(path, file) {
+  const rel = safePath(path);
+  if (!rel) return "Choose a different file name.";
+  if (card.dirs.includes(rel)) return "A folder already has that name.";
+  if (file.size > MAX_BYTES) return "That file is too large.";
+  let text = "";
+  try {
+    text = await file.text();
+  } catch (err) {
+    return "That file cannot be read.";
+  }
+  if (text.includes("\0")) return "That file is not text.";
+  const parent = parentOf(rel);
+  if (parent) {
+    if (card.files[parent]) return "A file already has that name.";
+    addDirPath(card, parent);
+  }
+  card.files[rel] = text;
+  return "";
+}
+function collectDrop(dataTransfer) {
+  const items = [...(dataTransfer.items || [])];
+  const canWalk = items.some((item) => item.webkitGetAsEntry);
+  if (!canWalk) {
+    return Promise.resolve([...dataTransfer.files].map((file) => ({path: joinPath(sdHere, file.name), file})));
+  }
+  const collected = [];
+  const walks = [];
+  for (const item of items) {
+    const entry = item.webkitGetAsEntry && item.webkitGetAsEntry();
+    if (entry) walks.push(walkEntry(entry, sdHere, collected));
+  }
+  return Promise.all(walks).then(() => collected);
+}
+function walkEntry(entry, directory, collected) {
+  if (entry.isFile) {
+    return new Promise((resolve, reject) => {
+      entry.file((file) => {
+        collected.push({path: joinPath(directory, file.name), file});
+        resolve();
+      }, reject);
+    });
+  }
+  if (!entry.isDirectory) return Promise.resolve();
+  const next = joinPath(directory, entry.name);
+  collected.push({path: next, directory: true});
+  return readAllEntries(entry.createReader()).then((children) => {
+    let chain = Promise.resolve();
+    for (const child of children) chain = chain.then(() => walkEntry(child, next, collected));
+    return chain;
+  });
+}
+function readAllEntries(reader) {
+  const all = [];
+  function read() {
+    return new Promise((resolve, reject) => {
+      reader.readEntries((batch) => {
+        if (!batch.length) {
+          resolve(all);
+          return;
+        }
+        all.push(...batch);
+        read().then(resolve, reject);
+      }, reject);
+    });
+  }
+  return read();
+}
+
+sdPath.addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  sdHere = button.getAttribute("data-path") || "";
+  renderSd();
+});
+document.getElementById("sd-new").addEventListener("submit", (event) => {
+  event.preventDefault();
+  createFolder(folderInput.value);
+});
+sdList.addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  const path = button.getAttribute("data-path");
+  if (button.classList.contains("delete")) deletePath(path, button.getAttribute("data-kind"));
+  else if (button.classList.contains("enter")) {
+    sdHere = path;
+    renderSd();
+  }
+});
+sdDrop.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  sdDrop.classList.add("over");
+});
+sdDrop.addEventListener("dragleave", () => sdDrop.classList.remove("over"));
+sdDrop.addEventListener("drop", (event) => {
+  event.preventDefault();
+  sdDrop.classList.remove("over");
+  collectDrop(event.dataTransfer).then(addFiles).catch(() => setSdError("That file cannot be read."));
+});
+document.getElementById("sd-files").addEventListener("change", (event) => {
+  const files = [...event.target.files];
+  event.target.value = "";
+  addFiles(files.map((file) => ({path: joinPath(sdHere, file.name), file})));
+});
+window.addEventListener("dragover", (event) => event.preventDefault());
+window.addEventListener("drop", (event) => event.preventDefault());
+
+function point(event) {
+  const rect = panel.getBoundingClientRect();
+  const source = event.touches ? event.touches[0] : event;
+  return {
+    x: Math.round((source.clientX - rect.left) * 480 / rect.width),
+    y: Math.round((source.clientY - rect.top) * 800 / rect.height)
+  };
+}
+function grab() {
+  if (!video.videoWidth) return "";
+  const canvas = document.createElement("canvas");
+  canvas.width = 160;
+  canvas.height = 120;
+  canvas.getContext("2d").drawImage(video, 0, 0, 160, 120);
+  return canvas.toDataURL("image/jpeg", 0.5).split(",")[1];
+}
+function sampleCamera() {
+  const frame = grab();
+  if (!frame) return;
+  cameraFrames.push(frame);
+  if (cameraFrames.length > 8) cameraFrames.shift();
+}
+function usesCamera(name) {
+  return name === "camera" || name === "scan";
+}
+function stopCamera() {
+  clearInterval(sampler);
+  sampler = 0;
+  cameraFrames = [];
+  lastQr = "";
+  const stream = video.srcObject;
+  if (stream) stream.getTracks().forEach((track) => track.stop());
+  video.srcObject = null;
+  video.style.display = "none";
+}
+async function watchQr() {
+  if (qrBusy || screenName !== "scan" || !video.srcObject) return;
+  qrBusy = true;
+  try {
+    if (!("BarcodeDetector" in window)) {
+      if (!qrWarned) {
+        qrWarned = true;
+        enqueue(() => sendTick({kind: "tap", qr_unsupported: true}));
+      }
+      return;
+    }
+    if (!video.videoWidth) return;
+    if (!qrDetector) qrDetector = new BarcodeDetector({formats: ["qr_code"]});
+    const codes = await qrDetector.detect(video);
+    const text = codes.length ? (codes[0].rawValue || "") : "";
+    if (!text) {
+      lastQr = "";
+      return;
+    }
+    if (text === lastQr) return;
+    lastQr = text;
+    enqueue(() => sendTick({kind: "tap", qr: text}));
+  } catch (err) {
+  } finally {
+    qrBusy = false;
+  }
+}
+async function syncCamera(name) {
+  if (!usesCamera(name)) {
+    if (usesCamera(screenName)) stopCamera();
+    screenName = name;
+    return;
+  }
+  screenName = name;
+  video.style.display = "block";
+  if (!video.srcObject) {
+    let stream = null;
+    for (const constraints of [{video: {facingMode: "environment"}, audio: false}, {video: true, audio: false}]) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        break;
+      } catch (err) {}
+    }
+    if (!stream) {
+      video.style.display = "none";
+      return;
+    }
+    video.srcObject = stream;
+    await video.play();
+  }
+  if (!sampler) sampler = setInterval(() => {
+    if (screenName === "camera") sampleCamera();
+    if (screenName === "scan") watchQr();
+  }, 400);
+}
+
+let worker = null;
+let chain = Promise.resolve();
+function enqueue(fn) {
+  chain = chain.then(fn, fn);
+  return chain;
+}
+let nextId = 0;
+const pending = new Map();
+function rpc(body) {
+  const id = ++nextId;
+  return new Promise((resolve, reject) => {
+    pending.set(id, {resolve, reject});
+    worker.postMessage({type: "tick", id, body});
+  });
+}
+function showStatus(text) {
+  status.hidden = false;
+  status.textContent = String(text || "").slice(0, 2000);
+}
+function hideStatus() {
+  status.hidden = true;
+  status.textContent = "";
+}
+function showFrame(msg) {
+  const binary = atob(msg.png);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const next = URL.createObjectURL(new Blob([bytes], {type: "image/png"}));
+  panel.src = next;
+  panelWrap.classList.add("ready");
+  if (frameUrl) URL.revokeObjectURL(frameUrl);
+  frameUrl = next;
+  hideStatus();
+  syncCamera(msg.screen || "");
+  const delay = Number(msg.delay) || 0;
+  if (delay > 0) refreshTimer = setTimeout(loadFrame, delay * 1000 + 80);
+}
+function applyRemote(sent, remote) {
+  const remoteCard = normalizeCard(remote);
+  if (!dirty) card = remoteCard;
+  else {
+    for (const [path, text] of Object.entries(remoteCard.files)) {
+      if (sent.files[path] !== text) card.files[path] = text;
+    }
+    for (const dir of remoteCard.dirs) {
+      if (!sent.dirs.includes(dir) && !card.dirs.includes(dir) && !card.files[dir]) card.dirs.push(dir);
+    }
+  }
+  saveCard();
+  renderSd();
+}
+async function sendTick(body) {
+  clearTimeout(refreshTimer);
+  const sent = JSON.parse(JSON.stringify(card));
+  const includeCard = !started || dirty;
+  if (includeCard) {
+    dirty = false;
+    body.cardJson = JSON.stringify(sent);
+  }
+  if (!started) {
+    body.kind = "start";
+    body.seed = initial.seed;
+    body.descriptor = initial.descriptor;
+  } else if (!body.kind) body.kind = "tap";
+  let msg;
+  try {
+    msg = await rpc(body);
+  } catch (err) {
+    if (includeCard) dirty = true;
+    showStatus(err.message || "The emulator stopped.");
+    throw err;
+  }
+  started = true;
+  panel.style.pointerEvents = "auto";
+  if (msg.card) applyRemote(sent, msg.card);
+  showFrame(msg);
+  if (dirty) enqueue(() => sendTick({kind: "frame"}));
+}
+function loadFrame() {
+  clearTimeout(refreshTimer);
+  enqueue(() => sendTick({kind: "frame"}));
+}
+function post(body) {
+  if (!started) return;
+  enqueue(() => sendTick(body));
+}
+
+let press = null;
+panel.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  if (panel.setPointerCapture) panel.setPointerCapture(event.pointerId);
+  const p = point(event);
+  press = {x: p.x, y: p.y, moved: false};
+  post({kind: "tap", phase: "down", x: p.x, y: p.y});
+});
+panel.addEventListener("pointermove", (event) => {
+  if (!press) return;
+  const p = point(event);
+  if (Math.abs(p.x - press.x) < 8 && Math.abs(p.y - press.y) < 8) return;
+  press = {x: p.x, y: p.y, moved: true};
+  post({kind: "tap", phase: "move", x: p.x, y: p.y});
+});
+panel.addEventListener("pointerup", (event) => {
+  if (!press) return;
+  const moved = press.moved;
+  press = null;
+  const p = point(event);
+  const body = {kind: "tap", phase: "up", x: p.x, y: p.y};
+  if (!moved && screenName === "camera" && video.srcObject) {
+    const finalFrame = grab();
+    if (finalFrame) body.camera = {frames: cameraFrames.slice(), final: finalFrame};
+  }
+  post(body);
+});
+panel.addEventListener("pointercancel", () => { press = null; });
+
+if (location.protocol === "file:") {
+  showStatus("Open this page from a local web server.");
+} else {
+  worker = new Worker("worker.js", {type: "module"});
+  worker.addEventListener("message", (event) => {
+    const msg = event.data;
+    if (msg.type === "progress") {
+      showStatus(msg.text);
+      return;
+    }
+    if (msg.type === "stderr") {
+      console.warn(msg.text);
+      return;
+    }
+    if (msg.type === "fatal") {
+      showStatus(msg.message);
+      return;
+    }
+    if (msg.type === "ready") {
+      loadFrame();
+      return;
+    }
+    const waiter = pending.get(msg.id);
+    if (!waiter) return;
+    pending.delete(msg.id);
+    if (msg.type === "tick-error") waiter.reject(new Error(msg.message));
+    else if (msg.type === "tick") waiter.resolve(msg.result);
+  });
+  worker.addEventListener("error", (event) => {
+    showStatus(event.message || "The emulator could not be loaded.");
+  });
+  worker.postMessage({type: "init"});
+}
+</script>
