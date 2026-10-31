@@ -8,3 +8,4 @@ artifacts/
 dist/
 build/
 emulator-sdcard/
+web/bundle.json

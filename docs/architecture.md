@@ -6,9 +6,9 @@ BigSigner is one Python package in `src/bigsigner`. The browser emulator and the
 
 ## How it starts
 
-`src/main.py` is the file BigSigner OS runs. It calls `bigsigner.__main__.main`. `__main__.py` chooses the front end. `BIGSIGNER_EMULATOR=1`, or a machine with no `/dev/fb0`, starts `emulator.server.serve`. The default port is 8765. Otherwise `hardware.panel.run_panel` opens the HDMI framebuffer and the touchscreen. In the emulator's terminal, `r` replaces the process with `python -m bigsigner` on the same port, so the new session imports the code from disk. The environment variables stay.
+`src/main.py` is the file BigSigner OS runs. It calls `bigsigner.__main__.main`. That runs `hardware.panel.run_panel` when `/dev/fb0` is present. The panel copies each 480×800 image to the framebuffer and reads evdev.
 
-Both fronts call the same `App`. `render` paints a 480×800 image. `tap` hits the buttons recorded during that paint. The emulator serves that image and posts taps back. The panel copies the image to `/dev/fb0` and reads evdev.
+`web/index.html` is the browser front. `python -m bigsigner.bundle` writes `web/bundle.json`, a copy of `src/` with `.DS_Store` and bytecode left out. That file is not committed. Serve the `web/` directory, then reload the page after each new bundle. The page loads Pyodide, checks the SHA-256 of the embit archive and the qrcode wheel, unpacks the bundle, and drives the same `App`. `render` paints the picture. Taps call the same pointer methods the panel uses. The hash is a query string: `seed` is the mnemonic, commas count as spaces, and `descriptor` is the wallet descriptor. Those replace `BIGSIGNER_INITIAL_SEED` and `BIGSIGNER_INITIAL_WALLET_DESCRIPTOR` on that page. The SD Card section stores files in the browser. `mount_memory` in `sdcard.py` makes Load from SD Card read them. The page does not use `BIGSIGNER_SDCARD_PATH`.
 
 ## Session
 
@@ -36,7 +36,7 @@ Wallets are descriptors built from those keys. Changing the network drops wallet
 | `seedqr.py` | Standard and compact SeedQR. |
 | `entropy.py` | Dice, coin, and camera entropy, following SeedSigner. |
 | `psbt_review.py` | Check a PSBT against one loaded wallet, then sign with a seed that is in memory. |
-| `sdcard.py` | Read the microSD card. The emulator uses the `BIGSIGNER_SDCARD_PATH` folder. |
+| `sdcard.py` | Read the microSD card. A process uses the `BIGSIGNER_SDCARD_PATH` folder. The browser page mounts the card kept beside the picture. |
 | `licenses.py` | Notices shown from About → Licenses. |
 
 Bitcoin operations go through embit 0.8.0, the release SeedSigner pins. Pillow draws the screen. `qr.py` builds the codes the device displays: through libqrencode when the image has it (milliseconds on a Pi Zero), otherwise through the pure-Python qrcode package (seconds). Each payload is built once and cached.
