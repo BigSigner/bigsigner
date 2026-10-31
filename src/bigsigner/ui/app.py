@@ -269,6 +269,7 @@ class App:
         self.seed_words = []
         self.word_prefix = ""
         self.word_cursor = 0
+        self._seed_title_hold = None
         self._seed_choice_key = None
         self._seed_choice_words = WORDLIST
         self._seed_picture = None
@@ -394,6 +395,8 @@ class App:
             delays.append(max(0, self.qr_hint_until - time.monotonic()))
         if self.address_search_pending is not None and self.address_search_shown:
             delays.append(0.05)
+        if self._seed_title_hold is not None:
+            delays.append(0.25)
         if not delays:
             return None
         return min(delays)
@@ -419,6 +422,8 @@ class App:
         self._expire_notice()
         self._advance_boot()
         self._advance_address_search()
+        if self._seed_title_hold is not None and self._press is not None:
+            self._advance_seed_title_hold(self._press[0], self._press[1])
         frame = Frame()
         painter = {
             "boot": self._boot,
@@ -507,6 +512,7 @@ class App:
         now = time.monotonic()
         self._press_at = now
         self._press_last = now
+        self._seed_title_hold = now if self._on_seed_title(x, y) else None
         if panel == "qr":
             self._grid_origin = self.qr_scroll
         elif panel == "entropy":
@@ -560,6 +566,9 @@ class App:
         """Drag the current page, or the seed-word list, vertically."""
         if self._press is None:
             return False
+        if self._seed_title_hold is not None:
+            self._press_last = time.monotonic()
+            return self._advance_seed_title_hold(x, y)
         self._press_last = time.monotonic()
         origin_x, origin_y, origin_scroll, dragging, panel = self._press
         dx = x - origin_x
@@ -615,6 +624,7 @@ class App:
     def pointer_up(self, x: int, y: int, camera: dict | None = None):
         press = self._press
         self._press = None
+        self._seed_title_hold = None
         if press is None:
             self.tap(x, y, camera)
             return
@@ -627,6 +637,7 @@ class App:
         if press is None or time.monotonic() - self._press_last < SCROLL_GAP:
             return False
         self._press = None
+        self._seed_title_hold = None
         if not self._press_is_click(press):
             return False
         self.tap(press[0], press[1])
@@ -3706,6 +3717,7 @@ class App:
                     frame.button(lower_top, self.word_prefix, f"pick-{self.word_prefix}")
                 self._seed_keyboard(frame, self._enabled_letters())
             self._seed_transcript(frame, content_top, lower_top - 8, matches)
+            self._seed_title_target(frame, title)
             self._remember_seed_keyboard(frame, show_words, matches)
         if self.open_dropdown == "seed-length":
             self._dropdown_menu(
@@ -3715,6 +3727,48 @@ class App:
                 (("12", "12 words"), ("18", "18 words"), ("24", "24 words")),
                 str(self.seed_length),
             )
+
+    def _on_seed_title(self, x: int, y: int) -> bool:
+        if self.screen != "seed" or self.open_dropdown or self.menu or self.confirm:
+            return False
+        if len(self.seed_words) != 1 or self.seed_length != 12:
+            return False
+        return 84 <= x < WIDTH and 0 <= y < HEADER
+
+    def _advance_seed_title_hold(self, x: int, y: int) -> bool:
+        """Fill the seed once the finger has stayed on the title for five seconds."""
+        if self._seed_title_hold is None:
+            return False
+        if not self._on_seed_title(x, y):
+            self._seed_title_hold = None
+            return False
+        if time.monotonic() - self._seed_title_hold < 5:
+            return False
+        self._seed_title_hold = None
+        return self._fill_repeated_seed()
+
+    def _seed_title_target(self, frame: Frame, title: str) -> None:
+        """The title is a hold target only while one word is entered in 12-word mode."""
+        if len(self.seed_words) != 1 or self.seed_length != 12:
+            return
+        frame.hit((84, 0, WIDTH, HEADER), "seed-title", title)
+
+    def _fill_repeated_seed(self) -> bool:
+        """Repeat the one entered word and finish the 12-word phrase."""
+        if len(self.seed_words) != 1 or self.seed_length != 12:
+            return False
+        word = self.seed_words[0]
+        final = _first_checksum_word([word] * 11)
+        if final is None:
+            return False
+        self.seed_words = [word] * 11 + [final]
+        self.word_prefix = ""
+        self.word_cursor = 0
+        self.seed_grid_stick = True
+        self._seed_choice_key = None
+        self._seed_choice_words = WORDLIST
+        self._seed_picture = None
+        return True
 
     def _seed_entered_grid(self, frame: Frame, top: int, bottom: int) -> int:
         """Draw the accepted words in one column. Returns the y below the grid."""
@@ -5911,6 +5965,15 @@ def _prefix_bounds(prefix: str) -> tuple[int, int]:
     start = bisect_left(WORDLIST, prefix)
     end = bisect_left(WORDLIST, prefix[:-1] + chr(ord(prefix[-1]) + 1))
     return start, end
+
+
+def _first_checksum_word(words: list[str]) -> str | None:
+    """The first BIP39 word that makes this 11-word stem a valid 12-word phrase."""
+    stem = [_WORD_INDEX[word] for word in words]
+    for candidate in WORDLIST:
+        if _phrase_checksum_ok(stem + [_WORD_INDEX[candidate]]):
+            return candidate
+    return None
 
 
 def _phrase_checksum_ok(indexes: list[int]) -> bool:

@@ -1,3 +1,5 @@
+import time
+
 from PIL import Image, ImageDraw
 
 from bigsigner.ui.app import App, _grid_font_size
@@ -122,6 +124,49 @@ def test_a_word_count_choice_stays_on_its_own_row():
     eighteen = next(hit["box"] for hit in app.hits if hit["label"] == "18 words")
     app.tap((eighteen[0] + eighteen[2]) // 2, (eighteen[1] + eighteen[3]) // 2)
     assert app.seed_length == 18
+
+
+def test_holding_the_title_repeats_the_first_word():
+    from bigsigner.ui.app import _WORD_INDEX, _first_checksum_word, _phrase_checksum_ok
+
+    app = App()
+    app.screen = "seed"
+    app.seed_length = 12
+    app.seed_words = ["abandon"]
+    app.word_prefix = "ab"
+    app.word_cursor = 1
+    app.render()
+    title = next(hit for hit in app.hits if hit["action"] == "seed-title")
+    assert title["label"] == "Word 2 of 12"
+    x = (title["box"][0] + title["box"][2]) // 2
+    y = (title["box"][1] + title["box"][3]) // 2
+    app.pointer_down(x, y)
+    app.render()
+    assert app.seed_words == ["abandon"]
+    app._seed_title_hold = time.monotonic() - 5
+    app.render()
+    assert app.seed_words[:11] == ["abandon"] * 11
+    assert app.seed_words[11] == "about"
+    assert app.seed_words[11] == _first_checksum_word(["abandon"] * 11)
+    assert _phrase_checksum_ok([_WORD_INDEX[word] for word in app.seed_words])
+    assert app.word_prefix == ""
+    app.render()
+    labels = {hit["label"] for hit in app.hits}
+    assert "Continue" in labels
+    assert any(item["text"] == "Seed words" for item in app.texts)
+    assert not any(hit["action"] == "seed-title" for hit in app.hits)
+
+    app.seed_words = ["abandon"]
+    app.seed_length = 12
+    app.pointer_down(x, y)
+    app.pointer_move(200, 400)
+    assert app._seed_title_hold is None
+    app.render()
+    assert app.seed_words == ["abandon"]
+
+    app.seed_length = 24
+    app.render()
+    assert not any(hit["action"] == "seed-title" for hit in app.hits)
 
 
 def test_manual_entry_opens_at_24_words():
