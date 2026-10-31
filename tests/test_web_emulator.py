@@ -10,6 +10,7 @@ from bigsigner.bundle import bundle_files, source_files, source_root, write_bund
 def test_the_static_page_reads_the_bundle_and_checks_downloads():
     page = Path("web/index.html").read_text(encoding="utf-8")
     worker = Path("web/worker.js").read_text(encoding="utf-8")
+    assert 'rel="icon" href="icon.png"' in page
     assert 'params.get("seed")' in page
     assert 'params.get("descriptor")' in page
     assert "BIGSIGNER_SDCARD_PATH" not in page
@@ -49,7 +50,13 @@ def test_the_bundle_stores_text_and_base64_and_skips_junk(tmp_path):
     assert document["bigsigner/__init__.py"]["text"] == 'value = "ok"\n'
     assert base64.b64decode(document["logo.bin"]["base64"]) == b"\xff\xfe"
 
+    icon = package / "resources" / "icon.png"
+    icon.parent.mkdir()
+    icon.write_bytes(b"\x89PNG\r\n")
     dest = tmp_path / "web" / "bundle.json"
     written = write_bundle(src, dest)
     assert written == dest
-    assert json.loads(dest.read_text(encoding="utf-8"))["files"] == document
+    saved = json.loads(dest.read_text(encoding="utf-8"))["files"]
+    assert saved["bigsigner/__init__.py"] == document["bigsigner/__init__.py"]
+    assert saved["logo.bin"] == document["logo.bin"]
+    assert (tmp_path / "web" / "icon.png").read_bytes() == b"\x89PNG\r\n"

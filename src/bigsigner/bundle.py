@@ -8,6 +8,7 @@ That file is generated and is not committed.
 
 import base64
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -65,6 +66,9 @@ def write_bundle(src: Path | None = None, dest: Path | None = None) -> Path:
     document = {"files": bundle_files(src)}
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    icon = src / "bigsigner" / "resources" / "icon.png"
+    if icon.is_file():
+        shutil.copyfile(icon, dest.parent / "icon.png")
     return dest
 
 
