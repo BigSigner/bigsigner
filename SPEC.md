@@ -191,7 +191,7 @@ Condemned Chocolate
 Chimpanzee DD
 ```
 
-Below the name is a fingerprint icon followed by the fingerprint hex. A seed card adds one more line under the fingerprint: a seedling icon, then the seed's first word followed by "...". If that seed has a passphrase, the line continues with " + Passphrase" and the passphrase's number, for example "Abandon... + Passphrase1". An external-key card adds two lines under the fingerprint hex: Native-Segwit or Taproot, then the account, for example "Native-Segwit" and "Account #0". The section title already says whether the key is single-sig or multisig.
+Below the name is a fingerprint icon followed by the fingerprint hex. A seed card adds one more line under the fingerprint: a seedling icon, then the seed's first word followed by "…". If that seed has a passphrase, the line continues with " + Passphrase" and the passphrase's number, for example "Abandon… + Passphrase1". An external-key card adds two lines under the fingerprint hex: Native-Segwit or Taproot, then the account, for example "Native-Segwit" and "Account #0". The section title already says whether the key is single-sig or multisig.
 
 If the fingerprint has a seed or seed + passphrase in its list of keys (in this case the list in this case will only contain one key), we should show in a new row a symbol of a key followed by a small title "Generated from a 12/18/24 words seed".
 In the case of a seed + passphrase, it should say "Generated from a 12/18/24 words seed + passphrase" and that passphrase's number, for example "Generated from a 12 words seed + passphrase1".
@@ -202,7 +202,7 @@ If some of the keys are SingleSig Xpubs, we should show in a new row a symbol of
 If some of the keys are MultiSig Xpubs, we should show in a new row a symbol of an eye (read only) followed by a small title "MultiSig Xpubs", and below it a list of the MultiSig Xpub keys displayed as:
 "<kind> Account <account>: <derivation path prefix>", e.g. "Native-Segwit Account 3: m/48h/0h/3h/2h".
 
-This should be followed by the xpub's first 19 letters followed by "...", e.g. "xpub6ERApfZw...".
+This should be followed by the xpub's first 19 letters followed by "…", e.g. "xpub6ERApfZw…".
 
 Clicking a key or creating a new key will open the Key screen.
 
@@ -250,7 +250,7 @@ Notice that the wallet script-type (`wpkh`, `tr`, or `wsh(sortedmulti)`) must ma
 Notice that the data can use the "'" format instead of the "h" format for the derivation path, "0" instead of "<0;1>", and the checksum should be verified whenever we scan a wallet descriptor.
 Research online for different formats used by different wallets.
 A supported singlesig descriptor opens a screen that says this is a singlesig wallet descriptor and asks whether to load both the wallet and the key, or only the key. Both Wallet and Key continues as if the same content had been loaded with the plus button on Bitcoin Wallets. Only the Key continues with that descriptor's key expression.
-A supported multisig descriptor opens a screen that says this is a multisig wallet descriptor and asks whether to load the wallet and all the keys, or only a specific key. Load Both Wallet and All Keys continues as if the same content had been loaded with the plus button on Bitcoin Wallets. Below that button, after a larger gap, a menu lists the key expressions in the same order as the descriptor. Each entry is the fingerprint in hex, a space, the first 10 characters of the extended public key, and `...`. Load Only Selected Key continues with the selected key expression.
+A supported multisig descriptor opens a screen that says this is a multisig wallet descriptor and asks whether to load the wallet and all the keys, or only a specific key. Load Both Wallet and All Keys continues as if the same content had been loaded with the plus button on Bitcoin Wallets. Below that button, after a larger gap, a menu lists the key expressions in the same order as the descriptor. Each entry is the fingerprint in hex, a space, the first 10 characters of the extended public key, and `…`. Load Only Selected Key continues with the selected key expression.
 
 A bare key expression (`[fingerprint/path]xpub...`, including a `zpub`, `Zpub`, `vpub`, or `Vpub` spelling) is not stored immediately. BigSigner first checks:
 
@@ -283,7 +283,7 @@ If the user selects a SingleSig/MultiSig Xpub key expression, use the same mecha
 
 ### Load from SD Card screen
 
-Similar to QR code scanning, but simply read a text file from the SD card, trim spaces/newlines, and use the content as seed words, a key expression, or a wallet descriptor. A supported wallet descriptor uses the same choice screen as a descriptor scanned from Bitcoin Keys. The screen lists the card, including subfolders. A file or folder name that does not fit on one line wraps at the character that would overflow, for up to three lines. A name that still does not fit ends with `...` on the third line. A folder opens when tapped, and `..` goes up. The browser emulator uses the files kept beside the picture.
+Similar to QR code scanning, but simply read a text file from the SD card, trim spaces/newlines, and use the content as seed words, a key expression, or a wallet descriptor. A supported wallet descriptor uses the same choice screen as a descriptor scanned from Bitcoin Keys. The screen lists the card, including subfolders. A file or folder name that does not fit on one line wraps at the character that would overflow, for up to three lines. A name that still does not fit ends with `…` on the third line. A folder opens when tapped, and `..` goes up. The browser emulator uses the files kept beside the picture.
 Similar to QR code scanning, this mechanism should be generic as we may need the idea of loading a file from the SD card in multiple places - for example reading a PSBT from the SD card. The mechanism should first return the data and type, and then depending on the functionality verify the data type and warn the user if it's not one of the expected types.
 If the content type doesn't match, similar warning should appear (mentioning the expected type and the actual type).
 
@@ -357,25 +357,33 @@ Show all the information about the wallet. The type is one line at the top: "Typ
 
 The fingerprint nickname is shown without the account index. If the seed or seed+passphrase is loaded, the account control is a text field: tapping it opens a number keyboard, and any account index can be entered. That keyboard does not repeat the fingerprint name. If only xpubs are loaded and more than one account is available, it is a dropdown of those account indexes. Account 0 is labeled `0 (default)` in the field and in the menu. When only one account is available, the line reads `Account: N`, with ` (default)` after 0, and there is no dropdown. In a multisig wallet each key has its own control. A singlesig account change lasts while that wallet screen is open. Back from the wallet returns the account to the index it had when the wallet was opened.
 
-Below we should show the wallet descriptor (of the selected accounts) with xpubs replaced by 12 first letters followed by "...". Clicking that should show the full wallet descriptor, prettified (newlines and indentation after brackets), and below show it in a QR code. This screen could be scrollable.
+Below we should show the wallet descriptor (of the selected accounts) with xpubs replaced by 12 first letters followed by "…". Clicking that should show the full wallet descriptor, prettified (newlines and indentation after brackets), and below show it in a QR code. This screen could be scrollable.
 
-Addresses opens the wallet addresses screen. Show Descriptor follows it. That screen is titled Descriptor. The QR is above the descriptor, and the descriptor puts each key on its own indented line. On a multisig wallet, grey text after the descriptor says a Native-Segwit multisig descriptor can list its key expressions in any order, and the checksum changes with that order. The page scrolls. Brightness is under the text. `<` and `>` at the bottom switch the QR format, and the format name is between them. The formats are UR and Plain QR. UR is the default. It is a crypto-output Uniform Resource, written in capitals in the QR, the encoding Sparrow uses for a wallet descriptor. Plain QR is the descriptor text. After Plain QR, `>` returns to UR. On UR, `<` goes to Plain QR. Export to SD Card is the next button. It writes a BSMS 1.0 file: `BSMS 1.0`, the wallet descriptor with its checksum, `/0/*,/1/*`, and the first receive address. The next screen lists the SD card. Choosing a file asks to replace it. New File asks for a name and then writes that file. A name wider than the field scrolls sideways inside it. The passphrase field scrolls the same way. There is no format menu. Delete Wallet stays last and red.
+Addresses opens the wallet addresses screen. Show Descriptor follows it. That screen is titled Descriptor. The QR is above the descriptor, and the descriptor puts each key on its own indented line. On a multisig wallet, grey text after the descriptor says a Native-Segwit multisig descriptor can list its key expressions in any order, and the checksum changes with that order. The page scrolls. Brightness is under the text. `<` and `>` at the bottom switch the QR format, and the format name is between them. The formats are UR and Plain QR. UR is the default. It is a crypto-output Uniform Resource, written in capitals in the QR, the encoding Sparrow uses for a wallet descriptor. Plain QR is the descriptor text. After Plain QR, `>` returns to UR. On UR, `<` goes to Plain QR. Export Descriptor to SD Card is the next button. It breaks after Descriptor. It writes a BSMS 1.0 file: `BSMS 1.0`, the wallet descriptor with its checksum, `/0/*,/1/*`, and the first receive address. The next screen lists the SD card. Choosing a file asks to replace it. New File asks for a name and then writes that file. A name wider than the field scrolls sideways inside it. The passphrase field scrolls the same way. There is no format menu. Delete Wallet stays last and red.
 
 Then there should be a Sign Transaction button that will open the Sign transaction screen.
 
 Then there should be a Sign Message button that will open the Sign message screen.
 
-Then a Verify Address button.
-
-Finally there should be a red Delete Wallet button.
+Finally there should be a red Delete Wallet button. Verifying an address is on Addresses Tools, reached from the Addresses screen.
 
 ### Wallet addresses screen
 
-Two tabs: Receive and Change.
+Receive and Change sit at the top. Receive is selected when the screen opens. The selected one is the brighter blue. The other is navy.
 
-Then a scrollable list of addresses in one line each - avoid overflowing by replacing that last characters with "...".
-Clicking an address will open a dialog with the address, whether it's recieve/change, the full derivation path (with xpubs replaced by 12 first letters followed by "..."), and the address as a QR code.
-No need to support exporting the address to an SD card.
+The list between those buttons and Addresses Tools scrolls. Each row is one line: the index starting at 0, a period, a space, and the address. A line that does not fit ends with `…` and does not wrap. Only the rows near the scroll position are derived. Rows farther away are dropped. Clicking a row opens the address. Its title is Receive Address or Change Address and the index. An index of more than four digits shows the first three digits and ….
+
+Address shows a QR code of the address, then the address in groups of four characters separated by spaces. The first group is black and every second group is grey. Below that is Derivation Path:, or Derivation Paths: when the wallet has more than one key. Each path starts with the fingerprint hex, then the origin, the branch, and the index, such as `73c5da0a/84h/0h/0h/0/0`. The address and the path are centered. The path is large enough to read, and 25 characters still fit on one line. A longer path continues on the next line. The break is before a slash, and that slash starts the next line. Export to SD Card writes the address alone. The suggested file name is the first fingerprint, receive or change, and the index.
+
+Addresses Tools is fixed under the list. It opens Find Address by Index and Verify Address.
+
+Find Address by Index asks for Receive or Change, then an index from 0 through 2147483647. Show Address opens that Address screen.
+
+### Verify address screen
+
+Verify Address accepts three entries: Manual Entry, a QR code, or a text file on the SD card. The entry keyboard is a row of digits, then lowercase letters. It has no space bar and no mode switch. Spaces and newlines are removed. A `bitcoin:` or `bitcoin://` prefix is removed. A `?` query and a `#` fragment are removed, so `amount`, `label`, `message`, `lightning`, and payjoin (`pj`) do not have to match. The rest is made lowercase. It must be a valid native or Taproot address for the current network: `bc1` on mainnet, `tb1` on testnet, or `bcrt1` on regtest. A legacy or wrapped-segwit address is refused. A descriptor, a key expression, a Uniform Resource, or any text that still contains a derivation path is refused.
+
+A typed address that is not valid stays on the entry screen so it can be corrected. A scan or an SD card file is recognized first. The message names what it was, for example a compact seed, a seed, a BSMS file, a wallet descriptor, a key expression, or a transaction, and says that an address was required. An unrecognized scan or file says it is not an address. Either one returns to Verify Address. The search covers receive and change indexes in a range of 100, starting at 0-99. A match says it was found as a Receive or Change address at that index, and Go to Address opens it. Back from that message, and from the address, returns to Addresses. A miss says it was not found in that range and offers the next range, such as 100-199. While that search runs, the button is grey and says Searching….
 
 ### Sign message screen
 
@@ -449,14 +457,6 @@ If we there were no signatures to add in the first place (either it's a read-onl
 
 The next page should allow exporting the signed PSBT as a single QR code or a sequence of QR codes (default should be a sequence), or as a file on the SD card.
 Make a research of the various formats, and let the user switch between them.
-
-### Verify address screen
-
-Scan a QR code of an address or enter it manually.
-The first 100 receive/change addresses should be scanned to see if we found that address.
-Warning should tell the user we could not find that address in the wallet's first 100 addresses, then ask the user if they want to scan the next 100 addresses (addresses 100-199, etc.).
-
-I'm not sure whether it should be a 100 constant or less/more. Check what SeedSigner & Specter-DIY do.
 
 ### Settings screen
 

@@ -12,7 +12,7 @@ Spaces and capitalization are part of the passphrase. If it starts or ends with 
 
 ## What you should see
 
-After the phrase is accepted, BigSigner shows the fingerprint and its calculated name: an adjective, a color, an animal, and the last two hex characters of the fingerprint. The name is not editable. How that name is calculated is described in [Fingerprint names](fingerprint-names.md). On the Bitcoin Keys card, a seed also shows its first word followed by "...", and a passphrase seed adds "+ Passphrase" plus the number assigned to that passphrase.
+After the phrase is accepted, BigSigner shows the fingerprint and its calculated name: an adjective, a color, an animal, and the last two hex characters of the fingerprint. The name is not editable. How that name is calculated is described in [Fingerprint names](fingerprint-names.md). On the Bitcoin Keys card, a seed also shows its first word followed by "…", and a passphrase seed adds "+ Passphrase" plus the number assigned to that passphrase.
 
 Before the words are shown again, confirm that nobody else can see the screen.
 

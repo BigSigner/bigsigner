@@ -5,6 +5,7 @@ import unicodedata
 from embit import bip32, bip39
 from embit.bip85 import derive_mnemonic
 from embit.descriptor import Descriptor
+from embit.script import address_to_scriptpubkey
 from embit.descriptor.checksum import checksum
 from embit.networks import NETWORKS
 
@@ -23,6 +24,46 @@ from .paths import (
 
 class SessionError(ValueError):
     pass
+
+
+# One Verify Address search. The next try continues at this many indexes.
+ADDRESS_RANGE = 100
+_ADDRESS_HRP = {"main": "bc", "test": "tb", "regtest": "bcrt"}
+_PATH_MARKS = ("[", "]", "xpub", "tpub", "ypub", "zpub", "vpub", "upub", "wpkh", "wsh(", "tr(", "pkh(", "sh(", "sortedmulti", "combo(", "ur:")
+
+
+def normalize_address_text(text: str, network: str) -> str:
+    """A bc1, tb1, or bcrt1 address from typed text, a QR code, or a file.
+
+    A BIP21 URI may carry amount, label, message, lightning, or payjoin in the
+    query. Those are removed. A descriptor, key expression, or derivation path
+    is refused.
+    """
+    raw = "".join(str(text).split())
+    if not raw:
+        raise SessionError("Enter an address.")
+    lowered = raw.lower()
+    if lowered.startswith("bitcoin://"):
+        body = raw[len("bitcoin://") :]
+    elif lowered.startswith("bitcoin:"):
+        body = raw[len("bitcoin:") :]
+    elif ":" in raw.split("?", 1)[0]:
+        raise SessionError("This QR code is not a Bitcoin address.")
+    else:
+        body = raw
+    body = body.split("?", 1)[0].split("#", 1)[0]
+    folded = body.lower()
+    if "/" in body or any(mark in folded for mark in _PATH_MARKS):
+        raise SessionError("This text includes a derivation path. Enter the address alone.")
+    address = folded
+    prefix = _ADDRESS_HRP.get(network, "bc") + "1"
+    if not address.startswith(prefix):
+        raise SessionError(f"Only a {prefix} address can be verified.")
+    try:
+        address_to_scriptpubkey(address)
+    except Exception as exc:
+        raise SessionError("This address is not valid.") from exc
+    return address
 
 
 def bip85_mnemonic(root, words: int, index: int) -> str:
@@ -86,6 +127,7 @@ class Session:
         self.passphrases = {}
         self.passphrase_counter = 0
         self.key_counter = 0
+        self._descriptor_cache = None
 
     def set_network(self, network: str):
         if network not in ("main", "test", "regtest"):
@@ -274,22 +316,46 @@ class Session:
         return _descriptor(wallet, self)
 
     def addresses(self, wallet_index: int, branch: int, start: int, count: int) -> list[str]:
-        wallet = self._wallet(wallet_index)
-        descriptor = Descriptor.from_string(_descriptor(wallet, self))
+        if count <= 0:
+            return []
+        descriptor = self._parsed_descriptor(self._wallet(wallet_index))
         network = NETWORKS[_network_name(self.network)]
         return [
             descriptor.derive(index, branch_index=branch).address(network=network)
             for index in range(start, start + count)
         ]
 
+    def address_paths(self, wallet_index: int, branch: int, index: int) -> list[str]:
+        """Fingerprint and origin for each key, then /branch/index."""
+        wallet = self._wallet(wallet_index)
+        paths = []
+        for fingerprint in wallet.fingerprints:
+            key = _public_for(self, fingerprint, wallet.role, wallet.accounts[fingerprint])
+            origin = format_path(list(key.path))[2:]
+            paths.append(f"{fingerprint.hex()}/{origin}/{branch}/{index}")
+        return paths
+
     def find_address(self, wallet_index: int, address: str, start: int, count: int):
+        if count <= 0:
+            return None
+        descriptor = self._parsed_descriptor(self._wallet(wallet_index))
+        network = NETWORKS[_network_name(self.network)]
+        target = address.lower()
         for branch, label in ((0, "receive"), (1, "change")):
-            for index, candidate in enumerate(
-                self.addresses(wallet_index, branch, start, count), start=start
-            ):
-                if candidate.lower() == address.lower():
+            for index in range(start, start + count):
+                candidate = descriptor.derive(index, branch_index=branch).address(network=network)
+                if candidate.lower() == target:
                     return {"branch": label, "index": index, "address": candidate}
         return None
+
+    def _parsed_descriptor(self, wallet: WalletRecord):
+        text = _descriptor(wallet, self)
+        cached = self._descriptor_cache
+        if cached is not None and cached[0] == text:
+            return cached[1]
+        parsed = Descriptor.from_string(text)
+        self._descriptor_cache = (text, parsed)
+        return parsed
 
     def _add_watch_key(self, key) -> dict:
         self._check_watch_key(key)
@@ -638,7 +704,7 @@ class Session:
     def seed_summary(self, key) -> str:
         word = key.mnemonic[0]
         titled = word[:1].upper() + word[1:]
-        summary = f"{titled}..."
+        summary = f"{titled}\u2026"
         if key.passphrase:
             summary += f" + Passphrase{self.passphrase_index(key.passphrase)}"
         return summary

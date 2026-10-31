@@ -19,9 +19,17 @@ from ..parse import ParseError
 from ..paths import HARDENED, MULTISIG_NATIVE, SINGLESIG_NATIVE, SINGLESIG_TAPROOT, format_path
 from ..psbt_review import ReviewError, review_psbt, sign_with
 from ..qr import qr_matrix
-from ..session import Session, SessionError, _passphrase_warnings, _public_for, account_index_phrase
+from ..session import (
+    ADDRESS_RANGE,
+    Session,
+    SessionError,
+    _passphrase_warnings,
+    _public_for,
+    account_index_phrase,
+    normalize_address_text,
+)
 from ..bsms import bsms_text
-from ..scan import QrSequence, import_scanned
+from ..scan import QrSequence, import_scanned, read_address
 from ..sdcard import SdError, child_path, file_exists, list_folder, parent_path, read_text, write_text
 from ..licenses import NOTICES
 from ..seedqr import compact_bytes
@@ -29,6 +37,7 @@ from ..slip132 import display_form, label_of
 from ..ur import descriptor_ur
 from .canvas import (
     BLUE,
+    ELLIPSIS,
     HEADER,
     HEIGHT,
     INK,
@@ -78,10 +87,67 @@ SEED_CARD_FONT = 36
 XPUB_ACCOUNT_PREVIEW = 20
 # External Key screen. Nineteen letters and the ellipsis fit on one centered line.
 XPUB_KEY_PREVIEW = 19
+# One address row. The list derives a window around the scroll position and drops the rest.
+ADDRESS_ROW = 64
+ADDRESS_GAP = 8
+ADDRESS_AHEAD = 12
+ADDRESS_QR = 400
+# 25 monospace characters at this size stay inside the page margins.
+ADDRESS_PATH_SIZE = 28
+ADDRESS_PATH_CHARS = 25
 # Floating plus button. About 10% smaller than the previous 104px circle.
 _PLUS_DIAMETER = 94
 _PLUS_GLYPH = 49
 _PLUS_CLEARANCE = 28 + _PLUS_DIAMETER
+
+
+def _address_screen_title(branch: int, index: int) -> str:
+    """Receive Address 5, or Change Address 100… when the index has more than four digits."""
+    kind = "Receive" if branch == 0 else "Change"
+    text = str(index)
+    if len(text) > 4:
+        text = text[:3] + ELLIPSIS
+    return f"{kind} Address {text}"
+
+
+def _address_path_lines(path: str, limit: int = ADDRESS_PATH_CHARS) -> list[str]:
+    """Keep a path of `limit` characters on one line. A longer path breaks before a slash.
+
+    The slash stays at the start of the next line, so `/100000` is not shown as `100000`.
+    """
+    if len(path) <= limit:
+        return [path]
+    lines = []
+    current = ""
+    for part in path.split("/"):
+        piece = part if not current else f"{current}/{part}"
+        if len(piece) <= limit:
+            current = piece
+            continue
+        if current:
+            lines.append(current)
+        continued = f"/{part}" if lines else part
+        while len(continued) > limit:
+            lines.append(continued[:limit])
+            continued = continued[limit:]
+        current = continued
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _ellipsize(draw, text: str, face, width: int) -> str:
+    if draw.textlength(text, font=face) <= width:
+        return text
+    ellipsis = ELLIPSIS
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if draw.textlength(text[:mid] + ellipsis, font=face) <= width:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo] + ellipsis
 
 
 def _fingerprint_name_lines(nickname: str) -> list[str]:
@@ -260,6 +326,19 @@ class App:
         self.derive_account = 0
         self.bip85_words = 24
         self.bip85_index = 0
+        self.address_branch = 0
+        self.address_index = 0
+        self.address_find_branch = 0
+        self.address_find_index = 0
+        self.address_text = ""
+        self.address_cursor = 0
+        self.verify_address = ""
+        self.verify_start = 0
+        self.verify_found = None
+        self.address_search_pending = None
+        self.address_search_shown = False
+        self._address_cache = {}
+        self._address_cache_key = None
         self.qr_source = "stored"
         self.descriptor_choice = None
         self.descriptor_key_index = 0
@@ -306,6 +385,8 @@ class App:
                 delays.append(max(0, self.boot_until - time.monotonic()))
         if self.qr_hint_until is not None and time.monotonic() < self.qr_hint_until:
             delays.append(max(0, self.qr_hint_until - time.monotonic()))
+        if self.address_search_pending is not None and self.address_search_shown:
+            delays.append(0.05)
         if not delays:
             return None
         return min(delays)
@@ -330,6 +411,7 @@ class App:
             self._pass_picture = None
         self._expire_notice()
         self._advance_boot()
+        self._advance_address_search()
         frame = Frame()
         painter = {
             "boot": self._boot,
@@ -356,6 +438,12 @@ class App:
             "qr": self._qr,
             "seed-show": self._seed_show,
             "addresses": self._addresses,
+            "address": self._address,
+            "address-tools": self._address_tools,
+            "address-find": self._address_find,
+            "address-verify": self._address_verify,
+            "address-type": self._address_type,
+            "address-verify-result": self._address_verify_result,
             "generate": self._generate,
             "dice": self._dice,
             "coins": self._coins,
@@ -381,6 +469,8 @@ class App:
         if self.confirm:
             self._confirm(frame)
         self.hits = frame.hits
+        if self.address_search_pending is not None:
+            self.address_search_shown = True
         return frame.image
 
     def tap(self, x: int, y: int, camera: dict | None = None):
@@ -662,6 +752,8 @@ class App:
             self._read_sd_file(action[len("sd-read:") :])
         elif action.startswith("sd-write:"):
             self._choose_export_file(action[len("sd-write:") :])
+        elif action == "export-address":
+            self._open_address_export()
         elif action == "export-seed":
             self._open_seed_export()
         elif action == "seed-backup-continue":
@@ -884,6 +976,8 @@ class App:
             index = int(action[8:])
             if self.screen == "export-name":
                 self.filename_cursor = max(0, min(len(self.filename), index))
+            elif self.screen == "address-type":
+                self.address_cursor = max(0, min(len(self.address_text), index))
             else:
                 self.passphrase_cursor = max(0, min(len(self.passphrase_text), index))
         elif action.startswith("passmode-"):
@@ -933,7 +1027,64 @@ class App:
             self.go("editor")
             self.screen_after_editor = "psbt"
         elif action == "addresses":
+            self.address_branch = 0
+            self.scroll["addresses"] = 0
             self.go("addresses")
+        elif action == "address-receive":
+            self.address_branch = 0
+            self.scroll["addresses"] = 0
+        elif action == "address-change":
+            self.address_branch = 1
+            self.scroll["addresses"] = 0
+        elif action.startswith("open-address-"):
+            self.address_index = int(action[len("open-address-") :])
+            self.scroll["address"] = 0
+            self.go("address")
+        elif action == "address-tools":
+            self.go("address-tools")
+        elif action == "address-find":
+            self.address_find_branch = 0
+            self.address_find_index = 0
+            self.go("address-find")
+        elif action == "address-find-receive":
+            self.address_find_branch = 0
+        elif action == "address-find-change":
+            self.address_find_branch = 1
+        elif action == "address-find-dec":
+            if self.address_find_index > 0:
+                self.address_find_index -= 1
+        elif action == "address-find-inc":
+            if self.address_find_index < 0x7FFFFFFF:
+                self.address_find_index += 1
+        elif action == "address-find-edit":
+            self._edit_address_index()
+        elif action == "address-find-show":
+            self.address_branch = self.address_find_branch
+            self.address_index = self.address_find_index
+            self.scroll["address"] = 0
+            self.go("address")
+        elif action == "address-verify":
+            self.go("address-verify")
+        elif action == "address-type":
+            self.address_text = ""
+            self.address_cursor = 0
+            self.passphrase_mode = "lower"
+            self.hscroll = 0
+            self.go("address-type")
+        elif action == "address-scan":
+            self.scan_kind = "address"
+            self.qr_sequence.reset()
+            self.go("scan")
+        elif action == "address-sd":
+            self._open_sd("address")
+        elif action == "address-verify-text":
+            self._verify_entered_address(self.address_text)
+        elif action.startswith("address-search-"):
+            if self.address_search_pending is None:
+                self.address_search_pending = int(action[len("address-search-") :])
+                self.address_search_shown = False
+        elif action == "address-go":
+            self._open_found_address()
         else:
             self.set_notice("")
 
@@ -1123,7 +1274,13 @@ class App:
         try:
             text = read_text(relative)
         except SdError as exc:
+            if self.sd_expect == "address":
+                self.set_notice(str(exc))
+                return
             self._show_load_error(str(exc), self.sd_expect)
+            return
+        if self.sd_expect == "address":
+            self._verify_loaded_address(text, "file")
             return
         self._import_payload(text, self.sd_expect, "file")
 
@@ -1199,6 +1356,24 @@ class App:
         self.scroll["sd"] = 0
         self.go("sd")
 
+    def _open_address_export(self):
+        if self.wallet_index >= len(self.session.wallets):
+            self.set_notice("This wallet is no longer loaded.")
+            return
+        try:
+            address = self.session.addresses(self.wallet_index, self.address_branch, self.address_index, 1)[0]
+        except SessionError as exc:
+            self.set_notice(str(exc))
+            return
+        self.export_label = "Address"
+        self.export_text = address
+        self.export_return = "address"
+        self.export_back = list(self.back)
+        self.sd_mode = "export"
+        self.sd_dir = ""
+        self.scroll["sd"] = 0
+        self.go("sd")
+
     def _choose_export_format(self, index: int):
         formats = self._key_qr_formats()
         if index < 0 or index >= len(formats):
@@ -1224,6 +1399,11 @@ class App:
         self.go("export-name")
 
     def _suggested_export_name(self) -> str:
+        if self.export_label == "Address" and self.wallet_index < len(self.session.wallets):
+            wallet = self.session.wallets[self.wallet_index]
+            fingerprint = wallet.fingerprints[0].hex()
+            branch = "receive" if self.address_branch == 0 else "change"
+            return f"{fingerprint}-{branch}-{self.address_index}.txt"
         if self.export_label == "BSMS" and self.wallet_index < len(self.session.wallets):
             title = self._wallet_title(self.session.wallets[self.wallet_index])
             return "-".join(title.lower().split()) + ".bsms"
@@ -1374,11 +1554,18 @@ class App:
             return "Reading the QR sequence."
         if self.scan_kind == "descriptor":
             return "Point the camera at one wallet descriptor QR code."
+        if self.scan_kind == "address":
+            return "Point the camera at an address QR code."
         return "Point the camera at one QR code."
 
     def _scan(self, frame: Frame):
-        descriptor = self.scan_kind == "descriptor"
-        frame.header("Scan descriptor" if descriptor else "Scan QR", "back")
+        if self.scan_kind == "descriptor":
+            title = "Scan descriptor"
+        elif self.scan_kind == "address":
+            title = "Scan Address"
+        else:
+            title = "Scan QR"
+        frame.header(title, "back")
         self._viewfinder(frame)
         frame.text(
             self.scan_prompt(),
@@ -1410,6 +1597,19 @@ class App:
     def accept_qr(self, text: str):
         """Import a payload read from a QR code. Ignored unless the scan screen is open."""
         if self.screen != "scan":
+            return
+        if self.scan_kind == "address":
+            try:
+                payload = self.qr_sequence.take(text, self.session.network, "QR code", "address")
+            except SessionError as exc:
+                self.qr_sequence.reset()
+                self.set_notice(str(exc))
+                self._return_to_verify()
+                return
+            if payload is None:
+                return
+            self.qr_sequence.reset()
+            self._verify_loaded_address(payload, "QR code")
             return
         try:
             payload = self.qr_sequence.take(text, self.session.network, "QR code", self.scan_kind)
@@ -1918,7 +2118,7 @@ class App:
         y = self._flow_text(frame, y, f"Type: {self._external_kind(key)}", paint, offset, size=text_size)
         if key.account is not None:
             y = self._flow_text(frame, y, f"Account: {key.account}", paint, offset, size=text_size)
-        preview = key.xpub.to_string()[:XPUB_KEY_PREVIEW] + "\u2026"
+        preview = key.xpub.to_string()[:XPUB_KEY_PREVIEW] + ELLIPSIS
         y = self._flow_value_below(frame, y, "Derivation Path:", format_path(list(key.path)), paint, offset, text_size)
         y = self._flow_value_below(frame, y, "Extended Public Key:", preview, paint, offset, text_size)
         if key.role == SINGLESIG_NATIVE:
@@ -2150,7 +2350,7 @@ class App:
         box = self._derive_account_box
         self._account_textbox(frame, box[1], str(self.derive_account), left=box[0], right=box[2])
         self._paint_centered_value(frame, self._derive_path_box, format_path(list(key.path)))
-        preview = key.xpub.to_string()[:XPUB_ACCOUNT_PREVIEW] + "\u2026"
+        preview = key.xpub.to_string()[:XPUB_ACCOUNT_PREVIEW] + ELLIPSIS
         self._paint_centered_value(frame, self._derive_xpub_box, preview)
         frame.header("Derive Key", "back")
         top = min(box[1], self._derive_path_box[1], self._derive_xpub_box[1])
@@ -2179,7 +2379,7 @@ class App:
         y += icon + 16
         y = self._flow_text(frame, y, f"Type: {self._external_kind(key)}", paint, offset, size=text_size)
         y = self._account_selector(frame, y, self.derive_account, paint, offset)
-        preview = key.xpub.to_string()[:XPUB_ACCOUNT_PREVIEW] + "\u2026"
+        preview = key.xpub.to_string()[:XPUB_ACCOUNT_PREVIEW] + ELLIPSIS
         y = self._flow_value_below(frame, y, "Derivation Path:", format_path(list(key.path)), paint, offset, text_size)
         self._derive_path_box = self._flow_value_box
         y = self._flow_value_below(frame, y, "Extended Public Key:", preview, paint, offset, text_size)
@@ -2825,7 +3025,9 @@ class App:
                     y += 64 + 16
         y = self._flow_button(frame, y, "Addresses", "addresses", paint, offset)
         y = self._flow_button(frame, y, "Show Descriptor", "show-descriptor", paint, offset)
-        y = self._flow_button(frame, y, "Export to SD Card", "export-wallet", paint, offset)
+        y = self._flow_button(
+            frame, y, "Export Descriptor\nto SD Card", "export-wallet", paint, offset, "Export Descriptor to SD Card",
+        )
         return y, open_field, open_fp
 
     def _step_account(self, fingerprint: bytes, delta: int):
@@ -2877,17 +3079,23 @@ class App:
         if self.account_fp is None:
             return
         if not self.account_text.isdigit():
-            self.set_notice("Enter an index." if self.account_for == "bip85" else "Enter an account index.")
+            self.set_notice(
+                "Enter an index." if self.account_for in ("bip85", "address-find") else "Enter an account index."
+            )
             return
         account = int(self.account_text)
-        if self.account_for in ("derive", "bip85"):
+        if self.account_for in ("derive", "bip85", "address-find"):
             if account >= 0x80000000:
                 self.set_notice(
-                    "The index is too large." if self.account_for == "bip85" else "The account index is too large."
+                    "The index is too large."
+                    if self.account_for in ("bip85", "address-find")
+                    else "The account index is too large."
                 )
                 return
             if self.account_for == "bip85":
                 self.bip85_index = account
+            elif self.account_for == "address-find":
+                self.address_find_index = account
             else:
                 self.derive_account = account
             self.back_one()
@@ -2906,7 +3114,7 @@ class App:
             self.set_notice(str(exc))
 
     def _account(self, frame: Frame):
-        choosing_index = self.account_for == "bip85"
+        choosing_index = self.account_for in ("bip85", "address-find")
         title = "Index" if choosing_index else "Account"
         save_label = "Use This Index" if choosing_index else "Use This Account"
         frame.header(title, "back")
@@ -2953,16 +3161,400 @@ class App:
     def _addresses(self, frame: Frame):
         frame.header("Addresses", "back")
         if self.wallet_index >= len(self.session.wallets):
+            frame.text("This wallet is no longer loaded.", MARGIN, HEADER + 24, size=TITLE_SIZE)
             return
-        addresses = self.session.addresses(self.wallet_index, 0, 0, 8)
-        y = HEADER + 16
-        for address in addresses:
-            y += self._text_height(frame, address, TITLE_SIZE, mono=True)
-        offset = self._scroll_offset("addresses", y, clearance=16)
-        y = HEADER + 16 - offset
-        for address in addresses:
-            y = frame.text(address, MARGIN, y, size=TITLE_SIZE, mono=True)
+        tabs = self._pair_buttons(
+            frame,
+            HEADER + 12,
+            ("Receive", "address-receive", self.address_branch == 0),
+            ("Change", "address-change", self.address_branch == 1),
+        )
+        tools_h = frame.button_height("Addresses Tools")
+        tools_y = HEIGHT - 16 - tools_h
+        list_top = tabs
+        list_bottom = tools_y - 8
+        stride = ADDRESS_ROW + ADDRESS_GAP
+        view = max(stride, list_bottom - list_top)
+        limit = max(0, 0x80000000 * stride - view)
+        offset = max(0, min(self.scroll.get("addresses", 0), limit))
+        self.scroll["addresses"] = offset
+        self.scroll_max["addresses"] = limit
+        first = offset // stride
+        visible = view // stride + 2
+        self._fill_address_cache(self.address_branch, first, first + visible + ADDRESS_AHEAD)
+        face = font(TITLE_SIZE, mono=True)
+        room = WIDTH - 2 * MARGIN - 32
+        # Rows are drawn in the list and cannot paint over the tabs or the tools button.
+        layer = Image.new("RGB", (WIDTH, list_bottom - list_top), PAPER)
+        layer_draw = ImageDraw.Draw(layer)
+        for index in range(first, first + visible):
+            if index > 0x7FFFFFFF:
+                break
+            row_top = list_top + index * stride - offset
+            local_top = row_top - list_top
+            if local_top >= layer.height or local_top + ADDRESS_ROW <= 0:
+                continue
+            address = self._address_cache.get((self.address_branch, index), "")
+            label = _ellipsize(frame.draw, f"{index}. {address}", face, room)
+            box = (MARGIN, local_top, WIDTH - MARGIN, local_top + ADDRESS_ROW)
+            layer_draw.rounded_rectangle(box, radius=12, fill=WHITE, outline=LINE)
+            _left, text_top, _right, text_bottom = layer_draw.textbbox((0, 0), label, font=face)
+            text_y = local_top + (ADDRESS_ROW - (text_bottom - text_top)) / 2 - text_top
+            layer_draw.text((MARGIN + 16, text_y), label, font=face, fill=INK)
+            hit_top = max(list_top, row_top)
+            hit_bottom = min(list_bottom, row_top + ADDRESS_ROW)
+            if hit_bottom - hit_top >= 8:
+                frame.hit((MARGIN, hit_top, WIDTH - MARGIN, hit_bottom), f"open-address-{index}", label)
+        frame.image.paste(layer, (0, list_top))
+        frame.button(tools_y, "Addresses Tools", "address-tools")
+        self._still_boxes.append((0, HEADER, WIDTH, list_top))
+        self._still_boxes.append((0, tools_y, WIDTH, HEIGHT))
         frame.header("Addresses", "back")
+
+    def _address_identity(self):
+        wallet = self.session.wallets[self.wallet_index]
+        accounts = tuple((fingerprint, wallet.accounts[fingerprint]) for fingerprint in wallet.fingerprints)
+        return (self.wallet_index, wallet.role, accounts, self.session.network)
+
+    def _fill_address_cache(self, branch: int, start: int, end: int):
+        """Derive the rows on screen and one page ahead. Drop rows farther away."""
+        key = self._address_identity()
+        if key != self._address_cache_key:
+            self._address_cache = {}
+            self._address_cache_key = key
+        start = max(0, start)
+        end = min(0x80000000, max(start, end))
+        keep_from = max(0, start - ADDRESS_AHEAD)
+        self._address_cache = {
+            item: value
+            for item, value in self._address_cache.items()
+            if item[0] == branch and keep_from <= item[1] < end
+        }
+        missing = [index for index in range(start, end) if (branch, index) not in self._address_cache]
+        if not missing:
+            return
+        span_start = missing[0]
+        span_end = missing[-1] + 1
+        derived = self.session.addresses(self.wallet_index, branch, span_start, span_end - span_start)
+        for index, address in enumerate(derived, start=span_start):
+            self._address_cache[(branch, index)] = address
+
+    def _pair_buttons(self, frame: Frame, y: int, left, right) -> int:
+        gap = 12
+        height = frame.button_height(left[0])
+        width = (WIDTH - 2 * MARGIN - gap) // 2
+        face = font(BODY_SIZE)
+        for index, (label, action, selected) in enumerate((left, right)):
+            x = MARGIN + index * (width + gap)
+            box = (x, y, x + width, y + height)
+            frame.draw.rounded_rectangle(box, radius=14, fill=BLUE if selected else NAVY)
+            text_width = frame.draw.textlength(label, font=face)
+            _left, text_top, _right, text_bottom = frame.draw.textbbox((0, 0), label, font=face)
+            text_y = y + (height - (text_bottom - text_top)) / 2 - text_top
+            frame.draw.text((x + (width - text_width) / 2, text_y), label, font=face, fill=WHITE)
+            frame.hit(box, action, label)
+        return y + height + 12
+
+    def _address(self, frame: Frame):
+        title = _address_screen_title(self.address_branch, self.address_index)
+        if self.wallet_index >= len(self.session.wallets):
+            frame.header(title, "back")
+            frame.text("This wallet is no longer loaded.", MARGIN, HEADER + 24, size=TITLE_SIZE)
+            return
+        try:
+            address = self.session.addresses(self.wallet_index, self.address_branch, self.address_index, 1)[0]
+            paths = self.session.address_paths(self.wallet_index, self.address_branch, self.address_index)
+        except SessionError as exc:
+            frame.header(title, "back")
+            frame.text(str(exc), MARGIN, HEADER + 24, size=TITLE_SIZE)
+            return
+        label = "Derivation Path:" if len(paths) == 1 else "Derivation Paths:"
+        path_lines = [line for path in paths for line in _address_path_lines(path)]
+        button_h = frame.button_height("Export to SD Card")
+        end = HEADER + 12 + ADDRESS_QR + 4 + self._grouped_address_height(frame, address) + 8
+        end += self._text_height(frame, label, TITLE_SIZE)
+        end += len(path_lines) * (ADDRESS_PATH_SIZE + 8)
+        end += 4 + button_h
+        offset = self._scroll_offset("address", end, clearance=8)
+        y = HEADER + 12 - offset
+        image = _qr_image(address, ADDRESS_QR)
+        if y + image.height > HEADER and y < HEIGHT:
+            frame.image.paste(image, ((WIDTH - image.width) // 2, y))
+        y += image.height + 4
+        y = self._grouped_address(frame, address, y)
+        y = frame.text(label, MARGIN, y + 8, size=TITLE_SIZE, fill=MUTED)
+        for line in path_lines:
+            y = self._centered_mono(frame, line, y, ADDRESS_PATH_SIZE, MUTED)
+        if y + button_h > HEADER and y < HEIGHT:
+            frame.button(y + 4, "Export to SD Card", "export-address")
+        frame.header(title, "back")
+
+    def _grouped_address_height(self, frame: Frame, address: str) -> int:
+        return self._grouped_address(frame, address, 0, paint=False)
+
+    def _grouped_address(self, frame: Frame, address: str, y: int, paint: bool = True) -> int:
+        groups = [address[index : index + 4] for index in range(0, len(address), 4)]
+        face = font(TITLE_SIZE, mono=True)
+        space = frame.draw.textlength(" ", font=face)
+        line_h = TITLE_SIZE + 8
+        limit = WIDTH - 2 * MARGIN
+        lines: list[list[tuple[str, tuple, float]]] = []
+        current: list[tuple[str, tuple, float]] = []
+        width = 0.0
+        for index, group in enumerate(groups):
+            group_width = frame.draw.textlength(group, font=face)
+            gap = space if current else 0
+            if current and width + gap + group_width > limit:
+                lines.append(current)
+                current = []
+                width = 0.0
+                gap = 0
+            color = MUTED if index % 2 else INK
+            current.append((group, color, group_width))
+            width += gap + group_width
+        if current:
+            lines.append(current)
+        for line in lines:
+            total = sum(item[2] for item in line) + space * (len(line) - 1)
+            x = (WIDTH - total) / 2
+            if paint and y + line_h > HEADER and y < HEIGHT:
+                for index, (group, color, group_width) in enumerate(line):
+                    frame.draw.text((x, y), group, font=face, fill=color)
+                    x += group_width
+                    if index < len(line) - 1:
+                        x += space
+            y += line_h
+        return y
+
+    def _centered_mono(self, frame: Frame, text: str, y: int, size: int, fill) -> int:
+        face = font(size, mono=True)
+        width = frame.draw.textlength(text, font=face)
+        if y >= HEADER and y < HEIGHT:
+            frame.draw.text(((WIDTH - width) / 2, y), text, font=face, fill=fill)
+        return y + size + 8
+
+    def _address_tools(self, frame: Frame):
+        frame.header("Addresses Tools", "back")
+        y = frame.button(HEADER + 24, "Find Address by Index", "address-find")
+        frame.button(y, "Verify Address", "address-verify")
+
+    def _address_find(self, frame: Frame):
+        frame.header("Find Address", "back")
+        y = self._pair_buttons(
+            frame,
+            HEADER + 16,
+            ("Receive", "address-find-receive", self.address_find_branch == 0),
+            ("Change", "address-find-change", self.address_find_branch == 1),
+        )
+        y = self._account_selector(
+            frame,
+            y,
+            self.address_find_index,
+            True,
+            0,
+            caption="Index",
+            down="address-find-dec",
+            up="address-find-inc",
+            edit="address-find-edit",
+        )
+        frame.button(y + 8, "Show Address", "address-find-show")
+
+    def _edit_address_index(self):
+        if self.wallet_index >= len(self.session.wallets):
+            self.set_notice("This wallet is no longer loaded.")
+            return
+        wallet = self.session.wallets[self.wallet_index]
+        self.account_fp = wallet.fingerprints[0]
+        self.account_text = str(self.address_find_index)
+        self.account_for = "address-find"
+        self.go("account")
+
+    def _address_verify(self, frame: Frame):
+        frame.header("Verify Address", "back")
+        y = frame.text(
+            "Enter an address, scan its QR code, or load it from the SD card.",
+            MARGIN,
+            HEADER + 24,
+            size=TITLE_SIZE,
+        )
+        y = frame.button(y + 8, "Manual Entry", "address-type")
+        y = frame.button(y, "Scan QR Code", "address-scan")
+        frame.button(y, "Load from SD Card", "address-sd")
+
+    def _address_type(self, frame: Frame):
+        frame.header("Manual Entry", "back")
+        y = HEADER + 16
+        box = (MARGIN, y, WIDTH - MARGIN, y + 72)
+        self._paint_hscroll_field(frame, box, self.address_text, self.address_cursor, "Type an address")
+        self._address_keyboard(frame)
+        verify_h = frame.button_height("Verify")
+        frame.button(self.keyboard_top - 12 - verify_h, "Verify", "address-verify-text")
+
+    def _address_keyboard(self, frame: Frame):
+        """Digits, then lowercase letters. No space and no other modes."""
+        rows = ("1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm")
+        key_h = 56
+        gap = 8
+        y = HEIGHT - 16 - (len(rows) * key_h + (len(rows) - 1) * gap)
+        self.keyboard_top = y
+        key_w = (WIDTH - 2 * MARGIN - gap * 9) // 10
+        face = font(TITLE_SIZE)
+        for row_index, letters in enumerate(rows):
+            delete = row_index == len(rows) - 1
+            del_w = 96 if delete else 0
+            row_w = key_w * len(letters) + gap * (len(letters) - 1)
+            extra = del_w + (gap if delete else 0)
+            x = (WIDTH - row_w - extra) / 2
+            for index, char in enumerate(letters):
+                box = (x, y, x + key_w, y + key_h)
+                frame.draw.rounded_rectangle(box, radius=8, fill=WHITE, outline=LINE)
+                text_width = frame.draw.textlength(char, font=face)
+                _left, text_top, _right, text_bottom = frame.draw.textbbox((0, 0), char, font=face)
+                text_y = y + (key_h - (text_bottom - text_top)) / 2 - text_top
+                frame.draw.text((x + (key_w - text_width) / 2, text_y), char, font=face, fill=INK)
+                frame.hit(
+                    self._key_hit(box, bottom=row_index == len(rows) - 1, left=index == 0 and not delete, right=False),
+                    f"passkey-{char}",
+                    char,
+                )
+                x += key_w + gap
+            if delete:
+                box = (x, y, x + del_w, y + key_h)
+                frame.draw.rounded_rectangle(box, radius=8, fill=BLUE)
+                text_width = frame.draw.textlength("del", font=face)
+                _left, text_top, _right, text_bottom = frame.draw.textbbox((0, 0), "del", font=face)
+                text_y = y + (key_h - (text_bottom - text_top)) / 2 - text_top
+                frame.draw.text((box[0] + (del_w - text_width) / 2, text_y), "del", font=face, fill=WHITE)
+                frame.hit(self._key_hit(box, bottom=True, right=True), "passkey-backspace", "del")
+            y += key_h + gap
+
+    def _type_address(self, key: str):
+        if key == "backspace":
+            if self.address_cursor > 0:
+                self.address_text = (
+                    self.address_text[: self.address_cursor - 1] + self.address_text[self.address_cursor :]
+                )
+                self.address_cursor -= 1
+            return
+        if len(key) != 1 or key not in "0123456789abcdefghijklmnopqrstuvwxyz":
+            return
+        if len(self.address_text) >= 180:
+            return
+        self.address_text = (
+            self.address_text[: self.address_cursor] + key + self.address_text[self.address_cursor :]
+        )
+        self.address_cursor += len(key)
+
+    def _verify_entered_address(self, text: str):
+        if self.wallet_index >= len(self.session.wallets):
+            self.set_notice("This wallet is no longer loaded.")
+            return
+        try:
+            address = normalize_address_text(text, self.session.network)
+        except SessionError as exc:
+            self.set_notice(str(exc))
+            if self.screen == "address-type":
+                return
+            self._return_to_verify()
+            return
+        self._search_address(address, 0)
+
+    def _verify_loaded_address(self, text: str, source: str):
+        if self.wallet_index >= len(self.session.wallets):
+            self.set_notice("This wallet is no longer loaded.")
+            return
+        try:
+            address = read_address(text, self.session.network, source)
+        except SessionError as exc:
+            self.set_notice(str(exc))
+            self._return_to_verify()
+            return
+        self._search_address(address, 0)
+
+    def _return_to_verify(self):
+        if self.screen == "address-verify":
+            return
+        self.back = [
+            screen for screen in self.back if screen not in ("scan", "sd", "address-type", "address-verify-result")
+        ]
+        if self.back and self.back[-1] == "address-verify":
+            self.back.pop()
+        self.screen = "address-verify"
+
+    def _advance_address_search(self):
+        """The searching frame is already on screen. This render does the lookup."""
+        if self.address_search_pending is None or not self.address_search_shown:
+            return
+        if self.screen != "address-verify-result":
+            self.address_search_pending = None
+            self.address_search_shown = False
+            return
+        start = self.address_search_pending
+        self.address_search_pending = None
+        self.address_search_shown = False
+        self._search_address(self.verify_address, start)
+
+    def _search_address(self, address: str, start: int):
+        if self.wallet_index >= len(self.session.wallets):
+            self.set_notice("This wallet is no longer loaded.")
+            return
+        start = max(0, min(start, 0x7FFFFFFF))
+        count = min(ADDRESS_RANGE, 0x80000000 - start)
+        self.verify_address = address
+        self.verify_start = start
+        self.verify_found = self.session.find_address(self.wallet_index, address, start, count)
+        if self.verify_found:
+            self.back = ["addresses"]
+        else:
+            self.back = [screen for screen in self.back if screen not in ("scan", "sd", "address-type")]
+            if not self.back or self.back[-1] != "address-verify":
+                self.back.append("address-verify")
+        self.screen = "address-verify-result"
+
+    def _open_found_address(self):
+        found = self.verify_found
+        if not found:
+            return
+        self.address_branch = 0 if found["branch"] == "receive" else 1
+        self.address_index = found["index"]
+        self.scroll["address"] = 0
+        self.back = ["addresses"]
+        self.screen = "address"
+
+    def _address_verify_result(self, frame: Frame):
+        frame.header("Verify Address", "back")
+        found = self.verify_found
+        if found:
+            kind = "Receive" if found["branch"] == "receive" else "Change"
+            frame.text(
+                f"This address was found as a {kind} address at index {found['index']}.",
+                MARGIN,
+                HEADER + 24,
+                size=TITLE_SIZE,
+            )
+            frame.button(HEIGHT - 120, "Go to Address", "address-go")
+            return
+        start = self.verify_start
+        end = start + ADDRESS_RANGE - 1
+        y = frame.text(
+            f"This address was not found in the index range of {start}-{end}.",
+            MARGIN,
+            HEADER + 24,
+            size=TITLE_SIZE,
+        )
+        nxt = start + ADDRESS_RANGE
+        if nxt <= 0x7FFFFFFF:
+            following = min(0x7FFFFFFF, nxt + ADDRESS_RANGE - 1)
+            y = frame.text(
+                f"Search the next range, {nxt}-{following}?",
+                MARGIN,
+                y + 8,
+                size=TITLE_SIZE,
+            )
+            if self.address_search_pending is not None:
+                frame.button(y + 12, "Searching\u2026", "address-search-wait", enabled=False)
+            else:
+                frame.button(y + 12, f"Search {nxt}-{following}", f"address-search-{nxt}")
 
     def _settings(self, frame: Frame):
         frame.header("Settings", "menu")
@@ -3672,6 +4264,9 @@ class App:
     def _passphrase_key(self, key: str):
         if self.screen == "export-name":
             self._type_filename(key)
+            return
+        if self.screen == "address-type":
+            self._type_address(key)
             return
         if key == "backspace":
             if self.passphrase_cursor > 0:
@@ -5198,8 +5793,8 @@ def _filename_lines(draw, text: str, face, width: int, limit: int = 3) -> list[s
         if draw.textlength(rest, font=face) <= width:
             lines.append(rest)
             break
-        count = _fit_count(draw, rest, face, width, "...")
-        lines.append(rest[:count] + "...")
+        count = _fit_count(draw, rest, face, width, ELLIPSIS)
+        lines.append(rest[:count] + ELLIPSIS)
         break
     return lines or [""]
 
@@ -5227,9 +5822,9 @@ def _one_line(frame: Frame, text: str, size: int, width: int, mono: bool = False
     face = font(size, mono=mono)
     if frame.draw.textlength(text, font=face) <= width:
         return text
-    while text and frame.draw.textlength(text + "...", font=face) > width:
+    while text and frame.draw.textlength(text + ELLIPSIS, font=face) > width:
         text = text[:-1]
-    return text + "..."
+    return text + ELLIPSIS
 
 
 def _zoom_grid_box() -> tuple[int, int, int]:

@@ -55,20 +55,12 @@ def join_bbqr(parts: list[str], encoding: str) -> bytes:
 
 
 def text_from_bbqr(file_type: str, raw: bytes, expect: str, source: str) -> str:
-    if file_type == "U":
+    del expect, source
+    if file_type in ("U", "J"):
         try:
             return raw.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise SessionError("This BBQr could not be read.") from exc
-    if file_type == "J":
-        try:
-            return raw.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise SessionError("This BBQr could not be read.") from exc
-    if file_type == "P":
+    if file_type in ("P", "T"):
         return base64.b64encode(raw).decode("ascii")
-    if file_type == "T":
-        if expect == "descriptor":
-            raise SessionError("This is a transaction, not a wallet descriptor.")
-        raise SessionError(f"That {source} is a transaction, not a key.")
     raise SessionError("This QR code uses a format this version does not read.")

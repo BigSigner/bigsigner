@@ -47,7 +47,11 @@ Bitcoin operations go through embit 0.8.0, the release SeedSigner pins. Pillow d
 
 The side menu reaches Bitcoin Keys, Bitcoin Wallets, Settings, and About. Every other screen has a back button. Scroll offset is stored per screen, and the title bar stays put.
 
+Addresses (`addresses`) keeps a window of derived receive or change rows and drops rows far from the scroll position. Address (`address`) shows the QR, the address in groups of four, and the derivation path starting with the fingerprint. Verify Address searches ranges of 100 through `normalize_address_text` and `find_address`.
+
 A seed key opens Derive Key (`derive`) for one of the three supported paths. The screen derives the extended key in memory with `_public_for` and does not store it. Single-signature derivations can create or open the wallet at the selected account. Multisig derivation only shows the key. Derive a BIP85 Child Seed opens `bip85`. `session.bip85_mnemonic` asks embit for the English mnemonic at `m/83696968h/39h/0h/{12 or 24}h/{index}h`. The child is stored with `add_mnemonic`, and the back stack is replaced with Bitcoin Keys.
+
+`scan.classify_content` names a QR payload or an SD card file: an address, a seed, a compact seed, a numeric seed, a BSMS file, a wallet descriptor, a key expression, or a transaction. The screen that asked for one kind refuses the others by that name.
 
 Load External Key is two screens, `external-review` and `external-details`. A failed QR or SD import uses `load-error`. The license list is `licenses`, and one notice is `license`.
 

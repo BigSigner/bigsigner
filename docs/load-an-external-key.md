@@ -18,7 +18,7 @@ A descriptor this version does not support opens Error loading key. OK returns t
 
 A supported singlesig descriptor (`wpkh` or `tr`) opens a screen titled Wallet Descriptor. It says this is a singlesig wallet descriptor and asks whether to load both the wallet and the key, or only the key. Both Wallet and Key continues as if that text had been loaded from the plus button on Bitcoin Wallets. Only the Key continues with the key expression, through the review below.
 
-A supported multisig descriptor opens the same screen. It says this is a multisig wallet descriptor and asks whether to load the wallet and all the keys, or only a specific key. Load Both Wallet and All Keys continues as if that text had been loaded from the plus button on Bitcoin Wallets. Below that button, after a larger gap, a menu lists the key expressions in descriptor order. Each entry is the fingerprint in hex, a space, the first 10 characters of the extended public key, and `...`. Load Only Selected Key continues with the selected key expression, through the review below.
+A supported multisig descriptor opens the same screen. It says this is a multisig wallet descriptor and asks whether to load the wallet and all the keys, or only a specific key. Load Both Wallet and All Keys continues as if that text had been loaded from the plus button on Bitcoin Wallets. Below that button, after a larger gap, a menu lists the key expressions in descriptor order. Each entry is the fingerprint in hex, a space, the first 10 characters of the extended public key, and `…`. Load Only Selected Key continues with the selected key expression, through the review below.
 
 ## Before it is stored
 

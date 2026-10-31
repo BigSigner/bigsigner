@@ -22,6 +22,8 @@ LIGHT_BLUE = (58, 146, 216)
 RED = (168, 36, 42)
 GREEN = (20, 110, 78)
 LINE = (214, 218, 224)
+# Text cut off because it does not fit ends with this one character.
+ELLIPSIS = "\u2026"
 
 ROOT = Path(__file__).resolve().parents[1] / "resources"
 _FONTS: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}

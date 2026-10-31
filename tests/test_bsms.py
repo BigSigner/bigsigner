@@ -62,8 +62,8 @@ def test_a_bsms_multisig_on_the_keys_page_offers_the_wallet_or_one_key(monkeypat
     assert app.session.wallets == []
     assert "Bitcoin Wallets" not in app._descriptor_choice_message()
     assert app.descriptor_choice["labels"] == [
-        "73c5da0a xpub6DkFAX...",
-        "80dfd80b xpub6FN69k...",
+        "73c5da0a xpub6DkFAX\u2026",
+        "80dfd80b xpub6FN69k\u2026",
     ]
     _tap(app, "dropdown-descriptor-key")
     _tap(app, "dropdown-pick-descriptor-key-0")
@@ -157,8 +157,8 @@ def test_exporting_a_wallet_writes_a_bsms_file(tmp_path, monkeypatch):
         for hit in sorted(app.hits, key=lambda hit: hit["box"][1])
         if hit["action"] in ("addresses", "show-descriptor", "export-wallet", "delete-wallet")
     ]
-    assert labels == ["Addresses", "Show Descriptor", "Export to SD Card", "Delete Wallet"]
-    _tap(app, "Export to SD Card")
+    assert labels == ["Addresses", "Show Descriptor", "Export Descriptor to SD Card", "Delete Wallet"]
+    _tap(app, "Export Descriptor to SD Card")
     assert app.screen == "sd"
     _tap(app, "New File")
     assert app.filename == "2-of-2-native-segwit.bsms"

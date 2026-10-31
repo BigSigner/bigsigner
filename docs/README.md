@@ -7,5 +7,6 @@ These notes explain how to use BigSigner with another Bitcoin wallet. They are d
 - [Load an external key](load-an-external-key.md)
 - [Load a multisig wallet](load-a-multisig-descriptor.md)
 - [Sign a transaction](sign-a-transaction.md)
+- [Addresses](addresses.md)
 
 The code map is [Architecture](architecture.md). Notes for coding agents are in `AGENTS.md` at the repository root.

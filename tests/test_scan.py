@@ -97,7 +97,7 @@ def test_key_scan_offers_a_multisig_descriptor_choice():
     source._create_selected_multisig()
     descriptor = source.session.descriptor_text(source.wallet_index)
     parsed = parse_wallet(descriptor, "main")
-    expected = [f"{key.fingerprint.hex()} {key.canonical[:10]}..." for key in parsed.keys]
+    expected = [f"{key.fingerprint.hex()} {key.canonical[:10]}\u2026" for key in parsed.keys]
     app = App()
     app.screen = "scan"
     app.scan_kind = "key"

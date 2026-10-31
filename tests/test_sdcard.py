@@ -284,7 +284,7 @@ def test_a_long_filename_wraps_at_the_overflowing_character(tmp_path, monkeypatc
     assert len(spaced_lines) > 1
     _assert_packed(draw, face, width, spaced, spaced_lines)
     assert len(huge_lines) == 3
-    assert huge_lines[-1].endswith("...")
+    assert huge_lines[-1].endswith("\u2026")
     _assert_packed(draw, face, width, huge, huge_lines)
     boxes = {hit["label"]: hit["box"] for hit in app.hits}
     assert boxes[short][3] - boxes[short][1] == 76
@@ -298,17 +298,17 @@ def _assert_packed(draw, face, width, text, lines):
     consumed = 0
     for index, line in enumerate(lines):
         assert draw.textlength(line, font=face) <= width
-        last = index == len(lines) - 1 and line.endswith("...")
-        body = line[:-3] if last else line
+        last = index == len(lines) - 1 and line.endswith("\u2026")
+        body = line[:-1] if last else line
         assert text.startswith(body, consumed)
         consumed += len(body)
         if last:
             assert consumed < len(text)
-            assert draw.textlength(body + text[consumed] + "...", font=face) > width
+            assert draw.textlength(body + text[consumed] + "\u2026", font=face) > width
             continue
         if consumed < len(text):
             assert draw.textlength(line + text[consumed], font=face) > width
-    if not lines[-1].endswith("..."):
+    if not lines[-1].endswith("\u2026"):
         assert consumed == len(text)
 
 
