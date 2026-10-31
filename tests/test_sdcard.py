@@ -176,7 +176,7 @@ def test_descriptor_load_rejects_a_seed_file(tmp_path, monkeypatch):
     app = App()
     app.screen = "wallets"
     _tap(app, "plus")
-    _tap(app, "Load Descriptor from SD Card")
+    _tap(app, "Load from SD Card")
     assert app.sd_expect == "descriptor"
     _tap(app, "seed.txt")
     assert app.screen == "load-error"

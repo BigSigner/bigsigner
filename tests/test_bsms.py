@@ -38,7 +38,7 @@ def test_the_seedsigner_bsms_file_loads_a_multisig_wallet(monkeypatch):
     app = App()
     app.screen = "wallets"
     _tap(app, "plus")
-    _tap(app, "Load Descriptor from SD Card")
+    _tap(app, "Load from SD Card")
     _tap(app, "My SeedSigner Trezor Wallet.bsms")
     _finish_wallet_wizard(app)
     assert app.screen == "wallet"
@@ -132,7 +132,7 @@ def test_a_singlesig_bsms_file_is_a_descriptor(tmp_path, monkeypatch):
     app = App()
     app.screen = "wallets"
     _tap(app, "plus")
-    _tap(app, "Load Descriptor from SD Card")
+    _tap(app, "Load from SD Card")
     _tap(app, "single.bsms")
     _finish_wallet_wizard(app)
     assert app.screen == "wallet"

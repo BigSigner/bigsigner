@@ -268,7 +268,7 @@ def test_multisig_wallet_import_verifies_each_new_key_saves_screenshots(tmp_path
     )
     record.note("A new 2-of-2 descriptor is loaded from the SD card. Neither key is stored yet.")
     record.click(app, "plus")
-    record.click(app, "Load Descriptor from SD Card")
+    record.click(app, "Load from SD Card")
     record.click(app, "wallet.txt")
     assert app.screen == "external-review"
     assert app._wallet_key_warning().endswith("extended public keys (xpubs) are indeed theirs.")
@@ -305,7 +305,7 @@ def test_an_existing_wallet_reports_descriptor_accounts_without_adding_another(t
     record.note("The same multisig was loaded from the SD card with its keys in the other order.")
     app.render()
     record.click(app, "plus")
-    record.click(app, "Load Descriptor from SD Card")
+    record.click(app, "Load from SD Card")
     record.click(app, "wallet.txt")
     record.shot(app, "already-loaded")
     assert app.screen == "wallet-import-note"

@@ -2084,8 +2084,8 @@ class App:
             self._speed_dial(
                 frame,
                 (
-                    ("Scan Descriptor QR Code", "wallet-scan"),
-                    ("Load Descriptor from SD Card", "wallet-sd"),
+                    ("Scan QR Code", "wallet-scan"),
+                    ("Load from SD Card", "wallet-sd"),
                     ("Select from Existing SingleSig Key", "wallet-singlesig"),
                     ("Select from Existing MultiSig Keys", "wallet-multisig"),
                 ),

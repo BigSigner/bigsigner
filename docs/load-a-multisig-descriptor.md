@@ -51,7 +51,7 @@ Messages name a wallet briefly. A single-signature wallet is the fingerprint's n
 
 ## Importing a descriptor
 
-From Bitcoin Wallets, Scan Descriptor QR Code and Load Descriptor from SD Card use the same steps.
+From Bitcoin Wallets, Scan QR Code and Load from SD Card use the same steps.
 
 If the file is a seed, a transaction, or a key expression, the error screen says what it is and that it is not a wallet descriptor. If it is a descriptor of a kind this version does not accept, the error says the wallet descriptor is not supported. OK returns to Bitcoin Wallets.
 
