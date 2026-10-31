@@ -8,6 +8,7 @@
 -->
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BigSigner</title>
+<link rel="icon" href="icon.png">
 <style>
   body { margin: 0; background: #111; color: #ddd; font: 15px/1.4 sans-serif; }
   #warning { margin: 0; padding: 14px 16px; background: #a8242a; color: white; text-align: center; font: 600 18px/1.4 sans-serif; }
@@ -24,7 +25,6 @@
   #size button, #sd-new button, #sd-drop label { background: transparent; color: #ddd; border: 1px solid #555; border-radius: 8px; font: 14px/1 sans-serif; padding: 8px 12px; cursor: pointer; }
   #size-note, #sd-note { margin: 0; max-width: 52mm; color: #9a9a9a; font: 13px/1.4 sans-serif; text-align: center; }
   #sd-column { width: min(22rem, 100%); display: grid; gap: 12px; align-content: start; position: sticky; top: 16px; }
-  #sd-column h2 { margin: 0; font: 600 18px/1.2 sans-serif; text-align: center; }
   #sd-panel { display: grid; gap: 12px; padding: 12px; border: 1px solid #333; border-radius: 12px; background: #1b1b1b; }
   #sd-path { display: flex; flex-wrap: wrap; gap: 4px; }
   #sd-path button { background: transparent; color: #9ec1ff; border: 0; padding: 0; cursor: pointer; font: inherit; }
@@ -59,7 +59,6 @@
     <p id="size-note">The 4 inch Waveshare picture is 51.8 mm wide. Match a ruler, then leave it. Do not type a real seed into this page.</p>
   </div>
   <aside id="sd-column">
-    <h2>SD Card</h2>
     <div id="sd-panel">
       <div id="sd-path"></div>
       <form id="sd-new">
@@ -211,7 +210,7 @@ function renderSd() {
   sdPath.replaceChildren();
   const root = document.createElement("button");
   root.type = "button";
-  root.textContent = "Card";
+  root.textContent = "SD Card";
   root.setAttribute("data-path", "");
   sdPath.append(root);
   if (sdHere) {
@@ -220,7 +219,7 @@ function renderSd() {
       built = built ? built + "/" + part : part;
       const button = document.createElement("button");
       button.type = "button";
-      button.textContent = part;
+      button.textContent = part + "/";
       button.setAttribute("data-path", built);
       sdPath.append(button);
     }
@@ -263,7 +262,7 @@ function renderRow(name, path, kind) {
     const open = document.createElement("button");
     open.type = "button";
     open.className = "enter";
-    open.textContent = name;
+    open.textContent = name + "/";
     open.setAttribute("data-path", path);
     item.append(open);
   } else {
