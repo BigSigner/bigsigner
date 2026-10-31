@@ -54,8 +54,10 @@ def test_scrolling_drops_rows_that_are_far_away():
     assert 0 not in indexes
 
 
-def test_export_address_writes_the_address_to_the_card(tmp_path, monkeypatch):
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+def test_export_address_writes_the_address_to_the_card():
+    from bigsigner.sdcard import mount_memory, read_text
+
+    mount_memory({"files": {}})
     app = _wallet()
     app.address_branch = 0
     app.address_index = 0
@@ -71,7 +73,7 @@ def test_export_address_writes_the_address_to_the_card(tmp_path, monkeypatch):
     fingerprint = app.session.wallets[app.wallet_index].fingerprints[0].hex()
     assert app.filename == f"{fingerprint}-receive-0.txt"
     app._act("export-save-new")
-    assert (tmp_path / app.filename).read_text(encoding="utf-8").strip() == address
+    assert read_text(app.filename) == address
     assert app.screen == "address"
     assert app.notice == f"Saved {app.filename}."
 

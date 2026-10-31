@@ -173,18 +173,26 @@ class Frame:
         self.image = Image.new("RGB", (WIDTH, HEIGHT), PAPER)
         self.draw = ImageDraw.Draw(self.image)
         self.hits = []
+        self.marks = []
 
     def hit(self, box, action: str, label: str = ""):
         self.hits.append({"box": box, "action": action, "label": label})
+
+    def mark(self, text: str, box) -> None:
+        """Remember where a string was drawn, so a device test can find it."""
+        self.marks.append({"text": text, "box": [int(box[0]), int(box[1]), int(box[2]), int(box[3])]})
 
     def header(self, title: str, left: str | None = None):
         self.draw.rectangle((0, 0, WIDTH, HEADER), fill=NAVY)
         face = font(TITLE_SIZE)
         if left is None:
             width = self.draw.textlength(title, font=face)
-            self.draw.text(((WIDTH - width) / 2, 28), title, font=face, fill=WHITE)
+            x = (WIDTH - width) / 2
+            self.draw.text((x, 28), title, font=face, fill=WHITE)
+            self.mark(title, self.draw.textbbox((x, 28), title, font=face))
             return
         self.draw.text((84, 28), title, font=face, fill=WHITE)
+        self.mark(title, self.draw.textbbox((84, 28), title, font=face))
         self.hit((0, 0, 84, HEADER), left, left)
         if left == "menu":
             self.draw.text((26, 24), "≡", font=font(36), fill=WHITE)
@@ -279,5 +287,6 @@ class Frame:
             # A scrolled line that starts under the title bar would be sliced in half.
             if y >= HEADER:
                 self.draw.text((x, y), line, font=face, fill=fill)
+                self.mark(line, self.draw.textbbox((x, y), line, font=face))
             y += size + 8
         return y

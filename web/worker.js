@@ -167,12 +167,12 @@ def tick(raw):
     kind = payload.get("kind")
     if kind == "start" and app is None:
         os.environ["BIGSIGNER_INITIAL_SEED"] = str(payload.get("seed") or "").strip()
-        os.environ["BIGSIGNER_INITIAL_WALLET_DESCRIPTOR"] = str(payload.get("descriptor") or "").strip()
         _install_pbkdf2()
         # No libsecp256k1 in the browser. A failed import selects embit's pure Python curve.
         sys.modules["embit.util.ctypes_secp256k1"] = None
         from bigsigner.ui.app import App
         app = App()
+        app.initial_wallet_descriptor = str(payload.get("descriptor") or "").strip()
     elif kind == "tap":
         if app is None:
             raise RuntimeError("The emulator has not started.")

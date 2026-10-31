@@ -25,7 +25,7 @@ PYTHONPATH=src python -m bigsigner.bundle
 python3 -m http.server 8780 --directory web
 ```
 
-Open http://127.0.0.1:8780/ . Run the bundle command again after changing Python, then reload the page. `web/bundle.json` and `web/external-assets/` are gitignored. That folder holds `pyodide/`, `pillow/`, `embit/`, and `qrcode/`, pinned by the bundle command. Do not type a real seed into the emulator. The hash supplies `seed` and `descriptor`. The SD card is the files stored in the browser. `BIGSIGNER_INITIAL_SEED`, `BIGSIGNER_INITIAL_WALLET_DESCRIPTOR`, and `BIGSIGNER_SDCARD_PATH` are for tests and the panel, not this page.
+Open http://127.0.0.1:8780/ . Run the bundle command again after changing Python, then reload the page. `web/bundle.json` and `web/external-assets/` are gitignored. That folder holds `pyodide/`, `pillow/`, `embit/`, and `qrcode/`, pinned by the bundle command. Do not type a real seed into the emulator. The hash supplies `seed` and `descriptor`. The SD card is the files stored in the browser. `BIGSIGNER_INITIAL_SEED` is for tests and the panel, not this page.
 
 ## Tests
 
@@ -33,7 +33,7 @@ Open http://127.0.0.1:8780/ . Run the bundle command again after changing Python
 pytest
 ```
 
-Screenshot tests write `artifacts/screenshots/<test name>/` and an `index.html` gallery. A flow that stands in for scanning a QR code writes the payload into a temporary directory, sets `BIGSIGNER_SDCARD_PATH`, and clicks the plus button, then Load from SD Card, then the file. The browser camera is not a stand-in for that path.
+`PYTHONPATH=src python tests/panel_device.py` syncs to seedsigner.local and drives the panel. Do not run it unless asked. Screenshot tests write `artifacts/screenshots/<test name>/` and an `index.html` gallery. A flow that stands in for scanning a QR code mounts the payload on the in-memory SD card and clicks the plus button, then Load from SD Card, then the file. The browser camera is not a stand-in for that card.
 
 ## External keys
 

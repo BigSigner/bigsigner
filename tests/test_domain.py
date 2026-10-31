@@ -150,7 +150,7 @@ def test_every_24_bit_prefix_has_its_own_name():
 def test_unknown_seed_nickname_ends_with_uppercase_hex():
     from bigsigner.names import animal_name
 
-    assert animal_name(bytes.fromhex("73c5da0a")).endswith(" 24")
+    assert animal_name(bytes.fromhex("00000024")).endswith(" 24")
     assert animal_name(bytes.fromhex("010203c9")).endswith(" C9")
 
 

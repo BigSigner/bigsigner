@@ -259,61 +259,6 @@ def test_initial_seed_accepts_18_and_24_words_and_reports_a_bad_phrase(monkeypat
     assert "12, 18, or 24" in rejected.notice
 
 
-def test_initial_wallet_descriptor_loads_when_boot_finishes(monkeypatch):
-    from test_domain import expression
-
-    descriptor = f"wpkh({expression(ABANDON, 'm/84h/0h/0h')})"
-    monkeypatch.setenv("BIGSIGNER_INITIAL_WALLET_DESCRIPTOR", descriptor)
-    app = App()
-    app.render()
-    assert app.session.wallets == []
-    app.tap(240, 400)
-    assert app.screen == "warning"
-    assert len(app.session.wallets) == 1
-    assert not app.session.wallets[0].multisig
-    assert app.wallet_index == 0
-    assert len(app.session.fingerprints) == 1
-    assert "wallet" in app.notice.lower()
-
-
-def test_initial_wallet_descriptor_accepts_bsms_and_rejects_a_seed(monkeypatch):
-    monkeypatch.setenv(
-        "BIGSIGNER_INITIAL_WALLET_DESCRIPTOR",
-        Path("emulator-sdcard/My SeedSigner Trezor Wallet.bsms").read_text(encoding="utf-8"),
-    )
-    app = App()
-    app.render()
-    app.tap(240, 400)
-    assert len(app.session.wallets) == 1
-    assert app.session.wallets[0].multisig
-    assert app.session.wallets[0].threshold == 2
-
-    monkeypatch.setenv("BIGSIGNER_INITIAL_WALLET_DESCRIPTOR", ABANDON)
-    rejected = App()
-    rejected.render()
-    rejected.tap(240, 400)
-    assert rejected.session.wallets == []
-    assert "BIGSIGNER_INITIAL_WALLET_DESCRIPTOR" in rejected.notice
-    assert "seed" in rejected.notice.lower()
-
-
-def test_initial_seed_is_loaded_before_the_wallet_descriptor(monkeypatch):
-    from test_domain import expression
-
-    monkeypatch.setenv("BIGSIGNER_INITIAL_SEED", ABANDON.replace(" ", ", "))
-    monkeypatch.setenv(
-        "BIGSIGNER_INITIAL_WALLET_DESCRIPTOR",
-        f"wpkh({expression(ABANDON, 'm/84h/0h/0h')})",
-    )
-    app = App()
-    app.render()
-    app.tap(240, 400)
-    record = next(iter(app.session.fingerprints.values()))
-    assert record.keys[0].has_seed
-    assert len(app.session.wallets) == 1
-    assert app.session.wallets[0].fingerprints == (record.fingerprint,)
-
-
 def test_boot_advances_when_startup_is_finished():
     app = App()
     assert app.boot_until is None

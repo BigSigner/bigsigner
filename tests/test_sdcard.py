@@ -32,13 +32,15 @@ def _tap(app, label):
     raise AssertionError(label)
 
 
-def test_sd_card_folder_lists_subdirectories_and_loads_a_seed(tmp_path, monkeypatch):
-    seeds = tmp_path / "seeds"
-    nested = seeds / "nested"
-    nested.mkdir(parents=True)
-    (seeds / "abandon.txt").write_text(f"\n  {ABANDON}\n")
-    (nested / "note.txt").write_text("hello")
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+def test_sd_card_folder_lists_subdirectories_and_loads_a_seed():
+    mount_memory(
+        {
+            "files": {
+                "seeds/abandon.txt": f"\n  {ABANDON}\n",
+                "seeds/nested/note.txt": "hello",
+            }
+        }
+    )
 
     app = App()
     app.screen = "keys"
@@ -65,9 +67,8 @@ def test_sd_card_folder_lists_subdirectories_and_loads_a_seed(tmp_path, monkeypa
     assert " ".join(saved.keys[0].mnemonic) == ABANDON
 
 
-def test_a_file_that_is_not_a_key_opens_an_error_screen(tmp_path, monkeypatch):
-    (tmp_path / "note.txt").write_text("hello from the card")
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+def test_a_file_that_is_not_a_key_opens_an_error_screen():
+    mount_memory({"files": {"note.txt": "hello from the card\n"}})
     app = App()
     app.screen = "keys"
     _tap(app, "plus")
@@ -81,39 +82,26 @@ def test_a_file_that_is_not_a_key_opens_an_error_screen(tmp_path, monkeypatch):
     assert app.screen == "keys"
 
 
-def test_missing_sd_card_path_is_reported(monkeypatch):
-    monkeypatch.delenv("BIGSIGNER_SDCARD_PATH", raising=False)
+def test_a_missing_card_is_reported():
     app = App()
     app.screen = "sd"
     app.render()
     assert app.screen == "sd"
-    try:
+    with pytest.raises(SdError, match="No SD card"):
         list_folder("")
-    except SdError as exc:
-        assert "No SD card" in str(exc)
-    else:
-        raise AssertionError("A missing card should be reported.")
 
 
-def test_reading_outside_the_card_is_refused(tmp_path, monkeypatch):
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
-    secret = tmp_path.parent / "secret.txt"
-    secret.write_text("nope")
-    try:
+def test_reading_outside_the_card_is_refused():
+    mount_memory({"files": {}})
+    with pytest.raises(SdError, match="outside"):
         read_text("../secret.txt")
-    except SdError as exc:
-        assert "outside" in str(exc)
-    else:
-        raise AssertionError("A path outside the card should be refused.")
-    secret.unlink()
 
 
-def test_a_singlesig_descriptor_from_keys_asks_before_loading_both(tmp_path, monkeypatch):
+def test_a_singlesig_descriptor_from_keys_asks_before_loading_both():
     from test_domain import expression
 
     descriptor = f"wpkh({expression(ABANDON, 'm/84h/0h/0h')})"
-    (tmp_path / "wallet.txt").write_text(descriptor + "\n")
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+    mount_memory({"files": {"wallet.txt": descriptor + "\n"}})
     app = App()
     app.screen = "keys"
     _tap(app, "plus")
@@ -170,9 +158,8 @@ def test_a_singlesig_descriptor_from_keys_asks_before_loading_both(tmp_path, mon
     assert scanned.wallet_plan is None
 
 
-def test_descriptor_load_rejects_a_seed_file(tmp_path, monkeypatch):
-    (tmp_path / "seed.txt").write_text(ABANDON)
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+def test_descriptor_load_rejects_a_seed_file():
+    mount_memory({"files": {"seed.txt": ABANDON + "\n"}})
     app = App()
     app.screen = "wallets"
     _tap(app, "plus")
@@ -185,17 +172,16 @@ def test_descriptor_load_rejects_a_seed_file(tmp_path, monkeypatch):
     assert app.screen == "wallets"
 
 
-def test_write_text_stays_on_the_card(tmp_path, monkeypatch):
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+def test_write_text_stays_on_the_card():
+    mount_memory({"files": {}})
     write_text("note.txt", "hello")
-    assert (tmp_path / "note.txt").read_text() == "hello\n"
+    assert read_text("note.txt") == "hello"
     with pytest.raises(SdError):
         write_text("../note.txt", "nope")
 
 
-def test_export_to_sd_card_chooses_a_format_then_a_file(tmp_path, monkeypatch):
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
-    (tmp_path / "old.txt").write_text("old\n")
+def test_export_to_sd_card_chooses_a_format_then_a_file():
+    mount_memory({"files": {"old.txt": "old\n"}})
     app = App()
     added = app.session.add_mnemonic(ABANDON.split())
     fingerprint = added["fingerprint"]
@@ -223,7 +209,7 @@ def test_export_to_sd_card_chooses_a_format_then_a_file(tmp_path, monkeypatch):
     assert app._confirm_message() == 'Replace "old.txt"?'
     app._act("confirm-yes")
     assert app.screen == "derive"
-    assert (tmp_path / "old.txt").read_text().startswith("zpub")
+    assert read_text("old.txt").startswith("zpub")
 
     app._act("export-derived")
     app._act("export-format-0")
@@ -231,7 +217,7 @@ def test_export_to_sd_card_chooses_a_format_then_a_file(tmp_path, monkeypatch):
     assert app.screen == "export-name"
     assert app.filename == f"{fingerprint.hex()}-key-expression.txt"
     app._act("export-save-new")
-    body = (tmp_path / app.filename).read_text().strip()
+    body = read_text(app.filename)
     assert body.startswith(f"[{fingerprint.hex()}/84h/0h/0h]xpub")
     assert body.endswith("/<0;1>/*")
     assert app.screen == "derive"
@@ -257,7 +243,7 @@ def test_export_to_sd_card_chooses_a_format_then_a_file(tmp_path, monkeypatch):
     assert [label for _top, label in sorted(buttons)] == ["Show Full Details", "Export to SD Card", "Delete Key"]
 
 
-def test_a_long_filename_wraps_at_the_overflowing_character(tmp_path, monkeypatch):
+def test_a_long_filename_wraps_at_the_overflowing_character():
     from PIL import ImageDraw
 
     from bigsigner.ui.app import _filename_lines
@@ -266,9 +252,7 @@ def test_a_long_filename_wraps_at_the_overflowing_character(tmp_path, monkeypatc
     short = "hello.txt"
     spaced = "My SeedSigner Trezor " + "backup" * 8 + ".txt"
     huge = "multisig-key-expression-" + "x" * 90 + ".txt"
-    for name in (short, spaced, huge):
-        (tmp_path / name).write_text("hello")
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+    mount_memory({"files": {name: "hello\n" for name in (short, spaced, huge)}})
     app = App()
     app.screen = "keys"
     _tap(app, "plus")
@@ -338,15 +322,6 @@ def test_a_memory_card_lists_folders_and_loads_a_seed():
     assert app.notice == "The seed was added successfully."
 
 
-def test_a_mounted_memory_card_ignores_the_sd_card_path(tmp_path, monkeypatch):
-    (tmp_path / "disk.txt").write_text("disk\n")
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
-    mount_memory({"dirs": [], "files": {"memory.txt": "memory\n"}})
-    assert [item["name"] for item in list_folder("")] == ["memory.txt"]
-    unmount_memory()
-    assert [item["name"] for item in list_folder("")] == ["disk.txt"]
-
-
 def test_write_text_on_a_memory_card_is_reported_once():
     mount_memory({"dirs": ["keep"], "files": {}})
     assert consume_memory_change() is None
@@ -368,8 +343,8 @@ def test_memory_card_rejects_a_bad_shape():
         mount_memory({"dirs": "seeds", "files": {}})
 
 
-def test_export_seed_writes_words_that_load_from_the_card(tmp_path, monkeypatch):
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+def test_export_seed_writes_words_that_load_from_the_card():
+    mount_memory({"files": {}})
     app = App()
     added = app.session.add_mnemonic(ABANDON.split(), passphrase="secret")
     app.selected_fp = added["fingerprint"]
@@ -390,12 +365,12 @@ def test_export_seed_writes_words_that_load_from_the_card(tmp_path, monkeypatch)
     app._act("export-new")
     assert app.filename == f"{added['fingerprint'].hex()}-seed.txt"
     app._act("export-save-new")
-    body = (tmp_path / app.filename).read_text(encoding="utf-8")
-    assert body.strip() == ABANDON
+    body = read_text(app.filename)
+    assert body == ABANDON
     assert "secret" not in body
     assert app.screen == "key"
 
-    (tmp_path / "spaced.txt").write_text("  " + ABANDON.replace(" ", "\n") + "\n")
+    write_text("spaced.txt", "  " + ABANDON.replace(" ", "\n"))
     fresh = App()
     fresh.screen = "keys"
     _tap(fresh, "plus")

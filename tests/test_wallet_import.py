@@ -256,11 +256,12 @@ def test_extended_public_key_details_counts_the_keys_being_reviewed():
     assert single._external_details_title() == "Extended Public Key Details"
 
 
-def test_multisig_wallet_import_verifies_each_new_key_saves_screenshots(tmp_path, monkeypatch):
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+def test_multisig_wallet_import_verifies_each_new_key_saves_screenshots():
+    from bigsigner.sdcard import mount_memory
+
     first = expression(ABANDON, "m/48h/0h/0h/2h")
     second = expression(LEGAL, "m/48h/0h/1h/2h")
-    (tmp_path / "wallet.txt").write_text(_multisig(first, second) + "\n")
+    mount_memory({"files": {"wallet.txt": _multisig(first, second) + "\n"}})
     app = App()
     app.screen = "wallets"
     record = ScreenRecord(
@@ -289,14 +290,15 @@ def test_multisig_wallet_import_verifies_each_new_key_saves_screenshots(tmp_path
     record.shot(app, "wallet")
 
 
-def test_an_existing_wallet_reports_descriptor_accounts_without_adding_another(tmp_path, monkeypatch):
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+def test_an_existing_wallet_reports_descriptor_accounts_without_adding_another():
+    from bigsigner.sdcard import mount_memory
+
     first = expression(ABANDON, "m/48h/0h/0h/2h")
     second = expression(LEGAL, "m/48h/0h/7h/2h")
     app = App()
     app.session.add_text(_multisig(first, second))
     swapped = _multisig(second, first)
-    (tmp_path / "wallet.txt").write_text(swapped + "\n")
+    mount_memory({"files": {"wallet.txt": swapped + "\n"}})
     app.screen = "wallets"
     record = ScreenRecord(
         __import__("pathlib").Path("artifacts/screenshots")
@@ -379,13 +381,14 @@ def test_the_wallet_screen_keeps_the_descriptor_fingerprint_order():
     assert _account_dropdowns(app) == []
 
 
-def test_a_repeated_fingerprint_is_refused(tmp_path, monkeypatch):
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+def test_a_repeated_fingerprint_is_refused():
+    from bigsigner.sdcard import mount_memory
+
     repeated = _multisig(
         expression(ABANDON, "m/48h/0h/0h/2h"),
         expression(ABANDON, "m/48h/0h/3h/2h"),
     )
-    (tmp_path / "twice.txt").write_text(repeated + "\n")
+    mount_memory({"files": {"twice.txt": repeated + "\n"}})
     app = App()
     app.screen = "wallets"
     app._act("toggle-add")

@@ -230,21 +230,22 @@ def test_testnet_external_key_formats_saves_screenshots():
     assert any(hit["label"] == "Vpub (SLIP-132)" for hit in multi.hits)
 
 
-def _load_key_file(app, record, folder, name, text):
-    (folder / name).write_text(text + "\n")
+def _load_key_file(app, record, name, text):
+    from bigsigner.sdcard import mount_memory
+
+    mount_memory({"files": {name: text + "\n"}})
     app.screen = "keys"
     record.click(app, "plus")
     record.click(app, "Load from SD Card")
     record.click(app, name)
 
 
-def test_external_key_unsupported_path_saves_screenshots(tmp_path, monkeypatch):
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+def test_external_key_unsupported_path_saves_screenshots():
     bad = expression(ABANDON, "m/84h/0h/0h").replace("84h/0h/0h", "44h/0h/0h", 1)
     app = App()
     record = ScreenRecord(_folder("test_external_key_unsupported_path_saves_screenshots"))
     record.note("A legacy derivation path was loaded from the SD card.")
-    _load_key_file(app, record, tmp_path, "bad-path.txt", bad)
+    _load_key_file(app, record, "bad-path.txt", bad)
     record.shot(app, "unsupported-path")
     assert app.screen == "load-error"
     assert app.load_error == PATH_ERROR
@@ -254,14 +255,13 @@ def test_external_key_unsupported_path_saves_screenshots(tmp_path, monkeypatch):
     assert app.screen == "keys"
 
 
-def test_external_key_duplicate_saves_screenshots(tmp_path, monkeypatch):
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+def test_external_key_duplicate_saves_screenshots():
     text = expression(ABANDON, "m/84h/0h/0h")
     app = App()
     app.session.commit_external_key(app.session.prepare_external_key(text))
     record = ScreenRecord(_folder("test_external_key_duplicate_saves_screenshots"))
     record.note("The same key expression was loaded again from the SD card.")
-    _load_key_file(app, record, tmp_path, "again.txt", text)
+    _load_key_file(app, record, "again.txt", text)
     record.shot(app, "already-loaded")
     assert app.screen == "load-error"
     assert app.load_error == "This key is already loaded."
@@ -270,13 +270,12 @@ def test_external_key_duplicate_saves_screenshots(tmp_path, monkeypatch):
     assert app.screen == "keys"
 
 
-def test_external_key_from_loaded_seed_saves_screenshots(tmp_path, monkeypatch):
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+def test_external_key_from_loaded_seed_saves_screenshots():
     app = App()
     app.session.add_mnemonic(ABANDON.split())
     record = ScreenRecord(_folder("test_external_key_from_loaded_seed_saves_screenshots"))
     record.note("An SD card file holds the xpub of a seed that is already loaded.")
-    _load_key_file(app, record, tmp_path, "from-seed.txt", expression(ABANDON, "m/84h/0h/0h"))
+    _load_key_file(app, record, "from-seed.txt", expression(ABANDON, "m/84h/0h/0h"))
     record.shot(app, "seed-already-loaded")
     nickname = next(iter(app.session.fingerprints.values())).nickname
     assert app.screen == "load-error"
@@ -289,8 +288,7 @@ def test_external_key_from_loaded_seed_saves_screenshots(tmp_path, monkeypatch):
     assert app.screen == "keys"
 
 
-def test_external_key_seed_mismatch_saves_screenshots(tmp_path, monkeypatch):
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+def test_external_key_seed_mismatch_saves_screenshots():
     app = App()
     app.session.add_mnemonic(ABANDON.split())
     forged = expression(LEGAL, "m/84h/0h/0h").replace(
@@ -300,7 +298,7 @@ def test_external_key_seed_mismatch_saves_screenshots(tmp_path, monkeypatch):
     )
     record = ScreenRecord(_folder("test_external_key_seed_mismatch_saves_screenshots"))
     record.note("An SD card file matches a loaded seed's fingerprint, but not its xpub.")
-    _load_key_file(app, record, tmp_path, "forged.txt", forged)
+    _load_key_file(app, record, "forged.txt", forged)
     record.shot(app, "suspicious-xpub")
     nickname = next(iter(app.session.fingerprints.values())).nickname
     assert app.load_error == (
@@ -315,10 +313,11 @@ def test_external_key_seed_mismatch_saves_screenshots(tmp_path, monkeypatch):
     assert app.screen == "keys"
 
 
-def test_sd_card_key_expression_opens_the_review_saves_screenshots(tmp_path, monkeypatch):
+def test_sd_card_key_expression_opens_the_review_saves_screenshots():
+    from bigsigner.sdcard import mount_memory
+
     text = expression(ABANDON, "m/86h/0h/3h")
-    (tmp_path / "key.txt").write_text(text + "\n")
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+    mount_memory({"files": {"key.txt": text + "\n"}})
     app = App()
     app.screen = "keys"
     record = ScreenRecord(_folder("test_sd_card_key_expression_opens_the_review_saves_screenshots"))

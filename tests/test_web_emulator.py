@@ -19,6 +19,8 @@ def test_the_static_page_reads_the_bundle_and_checks_downloads():
     assert 'params.get("descriptor")' in page
     assert "BIGSIGNER_SDCARD_PATH" not in page
     assert "BIGSIGNER_SDCARD_PATH" not in worker
+    assert "BIGSIGNER_INITIAL_WALLET_DESCRIPTOR" not in page
+    assert "BIGSIGNER_INITIAL_WALLET_DESCRIPTOR" not in worker
     assert "bigsigner-sdcard" in page
     assert "mount_memory" in worker
     assert "cardJson" in worker

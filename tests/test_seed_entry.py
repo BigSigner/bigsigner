@@ -91,6 +91,39 @@ def test_seed_entry_starts_with_a_keyboard():
     assert any(hit["label"] == "24 words" and hit["action"] == "dropdown-seed-length" for hit in app.hits)
 
 
+def test_the_word_count_control_accepts_a_press_above_it():
+    app = App()
+    app.screen = "seed"
+    app.back = ["keys"]
+    app.render()
+    drawn = next(hit["box"] for hit in app.hits if hit["action"] == "dropdown-seed-length")
+    # The back button stays a back button. The raised target starts to its right.
+    app.tap(40, 70)
+    assert app.screen == "keys"
+    app.screen = "seed"
+    app.back = ["keys"]
+    app.render()
+    # The drawn control starts under the title. The press this panel reports is higher.
+    app.tap(240, drawn[1] - 30)
+    assert app.open_dropdown == "seed-length"
+
+
+def test_a_word_count_choice_stays_on_its_own_row():
+    app = App()
+    app.screen = "seed"
+    app._act("dropdown-seed-length")
+    app.render()
+    twelve = next(hit["box"] for hit in app.hits if hit["label"] == "12 words")
+    eighteen = next(hit["box"] for hit in app.hits if hit["label"] == "18 words")
+    app.tap((twelve[0] + twelve[2]) // 2, (twelve[1] + twelve[3]) // 2)
+    assert app.seed_length == 12
+    app._act("dropdown-seed-length")
+    app.render()
+    eighteen = next(hit["box"] for hit in app.hits if hit["label"] == "18 words")
+    app.tap((eighteen[0] + eighteen[2]) // 2, (eighteen[1] + eighteen[3]) // 2)
+    assert app.seed_length == 18
+
+
 def test_manual_entry_opens_at_24_words():
     app = App()
     app.screen = "keys"

@@ -61,17 +61,16 @@ The hash is a query string, so a seed in it is not sent to the server. A reload 
 http://127.0.0.1:8780/#seed=abandon,abandon,abandon,abandon,abandon,abandon,abandon,abandon,abandon,abandon,abandon,about
 ```
 
-SD Card, beside the picture, keeps files in the browser. Load from SD Card reads those files. New Folder adds a directory, and Delete removes a file or a directory and what is inside it. A file saved from the picture is added to that same card. This page does not use `BIGSIGNER_SDCARD_PATH`, `BIGSIGNER_INITIAL_SEED`, or `BIGSIGNER_INITIAL_WALLET_DESCRIPTOR`.
+SD Card, beside the picture, keeps files in the browser. Load from SD Card reads those files. New Folder adds a directory, and Delete removes a file or a directory and what is inside it. A file saved from the picture is added to that same card.
 
 These variables are for the panel and the tests. Do not set them on a device that holds real funds.
 
 | Variable | Purpose |
 | --- | --- |
-| `BIGSIGNER_SDCARD_PATH` | A folder treated as the microSD card, including its subfolders. Load from SD Card reads text files from it. |
 | `BIGSIGNER_INITIAL_SEED` | A 12, 18, or 24 word mnemonic loaded when the boot screen is left. Commas are treated as spaces. An invalid value is printed and shown on screen. |
-| `BIGSIGNER_INITIAL_WALLET_DESCRIPTOR` | A wallet descriptor loaded when the boot screen is left, after the initial seed. It is imported the same way as a descriptor from the Bitcoin Wallets page, including a BSMS 1.0 file. An invalid value is printed and shown on screen. |
 | `BIGSIGNER_CPU_SERIAL` | A string mixed into camera entropy. The default is `bigsigner-emulator`. |
 | `BIGSIGNER_TAP` | Path of a pipe the panel reads in addition to the touchscreen. Leave it unset on a device that holds real funds; a missing file does nothing. Create the pipe before the process starts. A line `x y` is a tap. `down x y`, `move x y`, and `up x y` are those phases, and they go through the same press handling as a finger. Each release is logged as `bigsigner: tap x,y N ms`. |
+| `BIGSIGNER_UI` | Path of a file the panel appends after each paint, one JSON line with the screen, the frame time, and a box for every control and text line. Leave it unset on a device that holds real funds. |
 
 ```bash
 mkfifo /tmp/bigsigner-tap
@@ -80,6 +79,12 @@ printf '240 726\n' > /tmp/bigsigner-tap
 ```
 
 `python -m bigsigner` runs the panel. It needs `/dev/fb0`. BigSigner OS starts the device by running `src/main.py`. Syncing this checkout to a dev image and restarting uses that file.
+
+`tests/panel_device.py` drives a dev board at seedsigner.local. It syncs the tree, taps through the Abandon test seed, and writes `artifacts/panel/device/`. A scroll on the descriptor QR has to paint in under 500 ms.
+
+```bash
+PYTHONPATH=src .venv/bin/python tests/panel_device.py
+```
 
 The operating-system image is built from [bigsigner-os](https://github.com/BigSigner/bigsigner-os), not from this repository. See that project's documentation for how to build and flash a microSD card.
 

@@ -7,6 +7,7 @@ from ..ui.app import App
 from .camera import LiveCamera, jpeg_bytes, paste_preview, read_qr
 from .display import framebuffer_info, pack_image, silence_console
 from .touch import ABS_X, ABS_Y, axis_range, find_touch, read_points
+from .ui_dump import append_snapshot
 
 # Seconds between frames while a finger drags a list.
 DRAG_INTERVAL = 0.15
@@ -31,6 +32,8 @@ def run_panel():
     ranges = (axis_range(touch, ABS_X), axis_range(touch, ABS_Y)) if touch else None
     tap_path = os.environ.get("BIGSIGNER_TAP", "").strip()
     inject = os.open(tap_path, os.O_RDWR | os.O_NONBLOCK) if tap_path and os.path.exists(tap_path) else None
+    ui_path = os.environ.get("BIGSIGNER_UI", "").strip()
+    dump_error = False
     _kmsg(f"framebuffer {width}x{height} {bpp}bpp, touch {touch_path or 'missing'}")
     silence_console()
 
@@ -42,7 +45,7 @@ def run_panel():
     pending = False
 
     def blit():
-        nonlocal frames, painted_at, pending
+        nonlocal frames, painted_at, pending, dump_error
         pending = False
         started = time.monotonic()
         painted_at = started
@@ -61,6 +64,12 @@ def run_panel():
         frames += 1
         if frames == 1 or elapsed >= 500:
             _kmsg(f"frame {frames} {elapsed} ms")
+        if ui_path and not dump_error:
+            try:
+                append_snapshot(ui_path, app, elapsed, frames)
+            except Exception as exc:
+                dump_error = True
+                _kmsg(f"ui dump {exc}")
         return elapsed
 
     def _write(image):

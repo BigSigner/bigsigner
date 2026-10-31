@@ -195,6 +195,9 @@ QR_HINT_HOLD = 2.0
 # that comes back. A finger that stays down this long is a scroll as well.
 SCROLL_DELTA_X = 24
 SCROLL_DELTA_Y = 24
+# This panel reports a press above the finger. A dropdown sits against the
+# title bar, so the missed press lands on the title unless the target reaches up.
+DROPDOWN_RAISE = 48
 SCROLL_HOLD = 0.4
 # Touch reports that stop for this long end the gesture. A short one inside
 # the box is a click.
@@ -240,6 +243,7 @@ class App:
         self.menu = False
         self.add_menu = False
         self.hits = []
+        self.texts = []
         self.qr_zoom = None
         self.qr_text = ""
         self.qr_kind = "plain"
@@ -254,6 +258,8 @@ class App:
         self._qr_strip = None
         self._qr_strip_key = None
         self._qr_strip_due = False
+        self.qr_line_marks = []
+        self.qr_strip_size = 0
         self.seed_format = 0
         self.qr_brightness = QR_BRIGHTNESS_DEFAULT
         self.descriptor_format = 0
@@ -335,6 +341,7 @@ class App:
         self.verify_address = ""
         self.verify_start = 0
         self.verify_found = None
+        self.initial_wallet_descriptor = ""
         self.address_search_pending = None
         self.address_search_shown = False
         self._address_cache = {}
@@ -469,6 +476,7 @@ class App:
         if self.confirm:
             self._confirm(frame)
         self.hits = frame.hits
+        self.texts = list(frame.marks)
         if self.address_search_pending is not None:
             self.address_search_shown = True
         return frame.image
@@ -1109,6 +1117,21 @@ class App:
                 str(self.entropy_words),
             )
 
+    def _hit_above(self, frame: Frame, box, action: str, label: str, reach: int) -> None:
+        """A target above the drawn box. The back button in the title bar stays clear."""
+        left, top, right, _bottom = box
+        strip_top = max(0, top - reach)
+        if strip_top >= top:
+            return
+        back_right = 84
+        if strip_top < HEADER and left < back_right:
+            if right > back_right:
+                frame.hit((back_right, strip_top, right, min(top, HEADER)), action, label)
+            if top > HEADER:
+                frame.hit((left, HEADER, right, top), action, label)
+            return
+        frame.hit((left, strip_top, right, top), action, label)
+
     def _dropdown_field(self, frame: Frame, y: int, name: str, label: str, enabled: bool = True):
         height = 64
         box = (MARGIN, y, WIDTH - MARGIN, y + height)
@@ -1130,6 +1153,7 @@ class App:
         frame.glyph(Icons.CHEVRON_UP if open_now else Icons.CHEVRON_DOWN, box[2] - 36, y + height / 2, 28, ink if not enabled else MUTED)
         if enabled:
             frame.hit(box, f"dropdown-{name}", label)
+            self._hit_above(frame, box, f"dropdown-{name}", label, DROPDOWN_RAISE)
         return box
 
     def _dropdown_menu(self, frame: Frame, field, name: str, options, selected: str):
@@ -1157,6 +1181,18 @@ class App:
             if index < len(options) - 1:
                 frame.draw.line((left + 16, row[3], right - 16, row[3]), fill=LINE, width=2)
             frame.hit(row, f"dropdown-pick-{name}-{key}", label)
+        # Registered after the rows, so a press reported above an item still
+        # chooses that item, and the center of the row above it does not.
+        for index, (key, label) in enumerate(options):
+            row_top = menu_top + index * row_h
+            raise_by = min(24, row_h // 2 - 1)
+            self._hit_above(
+                frame,
+                (left, row_top, right, row_top + row_h),
+                f"dropdown-pick-{name}-{key}",
+                label,
+                raise_by,
+            )
 
     def _dice(self, frame: Frame):
         target = 50 if self.entropy_words == 12 else 99
@@ -1796,8 +1832,11 @@ class App:
         y = logo_top + mark.height + 48
         caption_size = 42
         for caption in (f"Version {__version__}", "Fork of SeedSigner"):
-            caption_width = frame.draw.textlength(caption, font=font(caption_size))
-            frame.draw.text(((WIDTH - caption_width) / 2, y), caption, font=font(caption_size), fill=WHITE)
+            face = font(caption_size)
+            caption_width = frame.draw.textlength(caption, font=face)
+            x = (WIDTH - caption_width) / 2
+            frame.draw.text((x, y), caption, font=face, fill=WHITE)
+            frame.mark(caption, frame.draw.textbbox((x, y), caption, font=face))
             y += caption_size + 20
         frame.hit((0, 0, WIDTH, HEIGHT), "boot", "boot")
 
@@ -1831,13 +1870,13 @@ class App:
         self.selected_fp = added["fingerprint"]
 
     def _load_initial_wallet_descriptor(self):
-        raw = os.environ.get("BIGSIGNER_INITIAL_WALLET_DESCRIPTOR", "").strip()
+        raw = (self.initial_wallet_descriptor or "").strip()
         if not raw:
             return
         try:
             added = self.session.load_descriptor_now(raw)
         except SessionError as exc:
-            self._initial_notice(f"BIGSIGNER_INITIAL_WALLET_DESCRIPTOR: {exc}")
+            self._initial_notice(str(exc))
             return
         message = added["message"]
         if added.get("warnings"):
@@ -4422,12 +4461,15 @@ class App:
         text_width = frame.draw.textlength(label, font=face)
         text_left, text_top, _text_right, text_bottom = frame.draw.textbbox((0, 0), label, font=face)
         text_y = y + (height - (text_bottom - text_top)) / 2 - text_top
-        frame.draw.text(((WIDTH - text_width) / 2 - text_left, text_y), label, font=face, fill=INK)
+        x = (WIDTH - text_width) / 2 - text_left
+        frame.draw.text((x, text_y), label, font=face, fill=INK)
+        frame.mark(label, frame.draw.textbbox((x, text_y), label, font=face))
 
     def _brightness_button(self, frame: Frame, box, label: str, enabled: bool, action: str):
         fill = BLUE if enabled else (186, 190, 196)
         text = WHITE if enabled else (132, 136, 142)
         frame.draw.rounded_rectangle(box, radius=12, fill=fill)
+        frame.mark(label, box)
         rendered = glyph_sprite(label, 32, text, text=True)
         if rendered is not None:
             glyph, (center_x, center_y) = rendered
@@ -5446,6 +5488,7 @@ class App:
         if self.notice:
             self._toast(frame)
         self.hits = frame.hits
+        self.texts = list(frame.marks)
         return frame.image
 
     def build_qr_strip(self):
@@ -5478,7 +5521,10 @@ class App:
         strip.paste(code, ((WIDTH - layout.qr_size) // 2, 0))
         draw = ImageDraw.Draw(strip)
         text_y = layout.qr_size + layout.text_gap
+        self.qr_line_marks = []
+        self.qr_strip_size = layout.qr_size
         for line in lines:
+            self.qr_line_marks.append({"text": line, "y": text_y, "h": layout.line_h})
             draw.text((MARGIN, text_y), line, font=face, fill=INK)
             text_y += layout.line_h
         if note_lines:

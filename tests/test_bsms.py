@@ -1,19 +1,25 @@
-from pathlib import Path
-
 import pytest
 
 from bigsigner.bsms import descriptor_from_bsms
 from bigsigner.parse import ParseError
+from bigsigner.sdcard import mount_memory
 from bigsigner.ui.app import App
 from test_domain import expression
 from test_sdcard import _tap
 
 ABANDON = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-SAMPLE = Path("emulator-sdcard/My SeedSigner Trezor Wallet.bsms")
+# 2-of-2 native-segwit multisig from the abandon and access test phrases.
+# access x11 is completed by the checksum word "account".
+SAMPLE_NAME = "test-multisig.bsms"
+SAMPLE = """BSMS 1.0
+wsh(sortedmulti(2,[73c5da0a/48h/0h/0h/2h]xpub6DkFAXWQ2dHxq2vatrt9qyA3bXYU4ToWQwCHbf5XB2mSTexcHZCeKS1VZYcPoBd5X8yVcbXFHJR9R8UCVpt82VX1VhR28mCyxUFL4r6KFrf/<0;1>/*,[80dfd80b/48h/0h/0h/2h]xpub6FN69kubrvHWcnW8eSinkgP6v3N9e9HE3SfchCHbGM8RwUtwXdii4HUfbDKdBnMbkmCr21wYpx1Lv2c6CPEBYCbErrySdiFmAWpcyK9TnC3/<0;1>/*))#gp338dgt
+/0/*,/1/*
+bc1q55zv608fddfty35kc8jt6yxerf34nwyqevzs0hurm9np6pjyg6wquana76
+"""
 
 
 def _lines():
-    return SAMPLE.read_text(encoding="utf-8").splitlines()
+    return SAMPLE.strip().splitlines()
 
 
 def _finish_wallet_wizard(app):
@@ -33,13 +39,13 @@ def _finish_wallet_wizard(app):
     raise AssertionError(app.screen)
 
 
-def test_the_seedsigner_bsms_file_loads_a_multisig_wallet(monkeypatch):
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", "emulator-sdcard")
+def test_the_seedsigner_bsms_file_loads_a_multisig_wallet():
+    mount_memory({"files": {SAMPLE_NAME: SAMPLE}})
     app = App()
     app.screen = "wallets"
     _tap(app, "plus")
     _tap(app, "Load from SD Card")
-    _tap(app, "My SeedSigner Trezor Wallet.bsms")
+    _tap(app, SAMPLE_NAME)
     _finish_wallet_wizard(app)
     assert app.screen == "wallet"
     assert len(app.session.wallets) == 1
@@ -50,13 +56,13 @@ def test_the_seedsigner_bsms_file_loads_a_multisig_wallet(monkeypatch):
     assert "multisig" in app.notice.lower()
 
 
-def test_a_bsms_multisig_on_the_keys_page_offers_the_wallet_or_one_key(monkeypatch):
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", "emulator-sdcard")
+def test_a_bsms_multisig_on_the_keys_page_offers_the_wallet_or_one_key():
+    mount_memory({"files": {SAMPLE_NAME: SAMPLE}})
     app = App()
     app.screen = "keys"
     _tap(app, "plus")
     _tap(app, "Load from SD Card")
-    _tap(app, "My SeedSigner Trezor Wallet.bsms")
+    _tap(app, SAMPLE_NAME)
     assert app.screen == "descriptor-choice"
     assert app.notice == ""
     assert app.session.wallets == []
@@ -77,7 +83,7 @@ def test_a_bsms_multisig_on_the_keys_page_offers_the_wallet_or_one_key(monkeypat
     both.screen = "keys"
     _tap(both, "plus")
     _tap(both, "Load from SD Card")
-    _tap(both, "My SeedSigner Trezor Wallet.bsms")
+    _tap(both, SAMPLE_NAME)
     _tap(both, "Load Both Wallet and All Keys")
     _finish_wallet_wizard(both)
     assert both.screen == "wallet"
@@ -112,14 +118,14 @@ def test_an_unsupported_script_is_refused():
             "BSMS 1.0",
             "sh(wpkh([73c5da0a/84h/0h/0h]xpub6CatWdiZiodmUeTDp8LT5or8nmbKNcuyvz7WyksVFkKB4RHwCD3XyuvPEbvqAQY3rAPshWcMLoP2fMFMKHPJ4ZeZXYVUhLv1VMrjPC7PW6V/<0;1>/*))",
             "/0/*,/1/*",
-            "bc1q55zv608fddfty35kc8jt6yxerf34nwyqevzs0hurm9np6pjyg6wquana76",
+            "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu",
         ]
     )
     with pytest.raises(ParseError, match="does not support"):
         descriptor_from_bsms(text, "main")
 
 
-def test_a_singlesig_bsms_file_is_a_descriptor(tmp_path, monkeypatch):
+def test_a_singlesig_bsms_file_is_a_descriptor():
     from embit.descriptor import Descriptor
     from embit.networks import NETWORKS
 
@@ -127,8 +133,7 @@ def test_a_singlesig_bsms_file_is_a_descriptor(tmp_path, monkeypatch):
     address = Descriptor.from_string(descriptor).derive(0, branch_index=0).address(network=NETWORKS["main"])
     text = "\n".join(["BSMS 1.0", descriptor, "/0/*,/1/*", address])
     assert descriptor_from_bsms(text, "main") == descriptor
-    (tmp_path / "single.bsms").write_text(text + "\n", encoding="utf-8")
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+    mount_memory({"files": {"single.bsms": text + "\n"}})
     app = App()
     app.screen = "wallets"
     _tap(app, "plus")
@@ -140,8 +145,8 @@ def test_a_singlesig_bsms_file_is_a_descriptor(tmp_path, monkeypatch):
     assert not app.session.wallets[0].multisig
 
 
-def test_exporting_a_wallet_writes_a_bsms_file(tmp_path, monkeypatch):
-    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+def test_exporting_a_wallet_writes_a_bsms_file():
+    mount_memory({"files": {}})
     app = App()
     first = app.session.add_mnemonic(ABANDON)
     second = app.session.add_mnemonic(ABANDON, passphrase="second")
@@ -165,7 +170,9 @@ def test_exporting_a_wallet_writes_a_bsms_file(tmp_path, monkeypatch):
     _tap(app, "Save")
     assert app.screen == "wallet"
     assert app.notice == "Saved 2-of-2-native-segwit.bsms."
-    saved = (tmp_path / "2-of-2-native-segwit.bsms").read_text(encoding="utf-8")
+    from bigsigner.sdcard import read_text
+
+    saved = read_text("2-of-2-native-segwit.bsms") + "\n"
     descriptor = app.session.descriptor_text(app.wallet_index)
     assert descriptor_from_bsms(saved, "main") == descriptor
     lines = saved.strip().splitlines()
