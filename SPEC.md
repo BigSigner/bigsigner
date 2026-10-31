@@ -305,12 +305,12 @@ Wallets can be created from a SingleSig Xpub or a Seed/Seed+Passphrase screen, a
 
 They could be also created from a hovering plus button on the bottom right corner of the screen of this screen. Clicking the button should open a menu of:
 
-- Scan Descriptor QR Code
-- Load Descriptor from SD Card
+- Scan QR Code
+- Load from SD Card
 - Select from Existing SingleSig Key
 - Select from Existing MultiSig Keys
 
-Scan Descriptor QR Code and Load Descriptor from SD Card should both expect a descriptor that belongs to one of the following formats:
+Scan QR Code and Load from SD Card should both expect a descriptor that belongs to one of the following formats:
 - SingleSig Native-Segwit wallet descriptor: `wpkh([{fingerprint}/84h/0h/{account}h]{xpub}/<0;1>/*)#{checksum}`
 - SingleSig Taproot wallet descriptor: `tr([{fingerprint}/86h/0h/0h]{xpub1}/<0;1>/*)#{checksum}`
 - Multisig wallet descriptor: `wsh(sortedmulti({m},[{fingerprint1}/48h/0h/{account1}h/2h]{xpub1}/<0;1>/*,[{fingerprint2}/48h/0h/{account2}h/2h]{xpub2}/<0;1>/*, ...))#{checksum}`
@@ -329,7 +329,7 @@ A wallet's short name is `<fingerprint name> Native-Segwit` or `<fingerprint nam
 
 The descriptor that creates a multisig wallet sets that key order. When this device creates the wallet from Select from Existing MultiSig Keys, the keys are ordered by the compressed public key of each key's first receive address, compared as raw bytes. That is the order Sparrow uses for the receive descriptor. A descriptor loaded from elsewhere keeps the order written in that descriptor. The Wallet screen lists the keys in the saved order. A later descriptor does not reorder them. Messages that name account indexes as (X,Y,Z) use the order saved on the existing wallet. A descriptor that repeats one fingerprint is refused, because a wallet keeps one account index per fingerprint.
 
-Scan Descriptor QR Code and Load Descriptor from SD Card follow one flow. A seed, a transaction, or a bare key expression is an error that names what it is and says it is not a wallet descriptor. An unsupported descriptor is an error that says it is not supported. OK returns to Bitcoin Wallets.
+Scan QR Code and Load from SD Card follow one flow. A seed, a transaction, or a bare key expression is an error that names what it is and says it is not a wallet descriptor. An unsupported descriptor is an error that says it is not supported. OK returns to Bitcoin Wallets.
 
 A descriptor may arrive as the text itself, as a crypto-output UR, or as a BBQr of that text. A UR is one code, or a fountain-coded sequence of codes. A BBQr is one code, or a numbered sequence, in hex, base32, or zlib. The camera stays on the scan screen until every part has been read, and the line under the viewfinder counts the parts. An SD card file is decoded the same way when the file is one complete code. One part of a sequence in a file asks for the camera. The same decoding applies when Bitcoin Keys scans a QR code.
 
