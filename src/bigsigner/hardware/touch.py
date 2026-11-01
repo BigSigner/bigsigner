@@ -5,13 +5,16 @@ import glob
 import os
 import select
 import struct
+import time
 
 from ..rpc import feed_lines
 
+EV_SYN = 0x00
 EV_KEY = 0x01
 EV_ABS = 0x03
 ABS_X = 0x00
 ABS_Y = 0x01
+ABS_PRESSURE = 0x18
 BTN_TOUCH = 0x14A
 EVENT_FORMAT = "llHHi"
 EVENT_SIZE = struct.calcsize(EVENT_FORMAT)
@@ -22,6 +25,8 @@ _MIN_MOVEMENT = 5
 # A gap longer than this between reports drops a gesture that never lifted.
 _LONG_STALE = 2
 _SHORT_STALE = 0.6
+# A resistive panel reports a lift when the contact lightens. Wait before ending it.
+_LIFT_HOLD = 0.1
 LIFTED = 0
 DETECTING = 1
 DETECTED = 2
@@ -47,6 +52,11 @@ def axis_range(handle, axis):
     return minimum, maximum
 
 
+def _lift_tail(ev_type: int, code: int) -> bool:
+    """The pressure and sync that the driver sends together with the lift."""
+    return ev_type == EV_SYN or (ev_type == EV_ABS and code == ABS_PRESSURE)
+
+
 def scale(value, low, high, pixels):
     if high == low:
         return 0
@@ -70,11 +80,39 @@ class _Contact:
     def _reset(self) -> None:
         self.touching = LIFTED
         self.raw = [None, None]
+        self._lift_at = None
+        self._lift_deadline = None
+
+    def lift_timeout(self) -> float | None:
+        """Seconds until a held lift becomes an up, or None when none is waiting."""
+        if self._lift_deadline is None:
+            return None
+        return max(0.0, self._lift_deadline - time.monotonic())
+
+    def finish_lift(self, sec: int | None = None, usec: int = 0) -> list[tuple]:
+        """End a lift once it has stayed up for 100ms. Event time, or the wall clock."""
+        if self._lift_at is None:
+            return []
+        if sec is None:
+            if self._lift_deadline is None or time.monotonic() < self._lift_deadline:
+                return []
+        elif self._since(self._lift_at, sec, usec) < _LIFT_HOLD:
+            return []
+        return self._release()
+
+    def _release(self) -> list[tuple]:
+        actions = []
+        if self.touching in (DETECTED, MOVING):
+            actions.append(("up", self.last[0], self.last[1]))
+        self._reset()
+        return actions
 
     def feed(self, packet: bytes) -> list[tuple]:
         actions = []
         for offset in range(0, len(packet) - EVENT_SIZE + 1, EVENT_SIZE):
             sec, usec, ev_type, code, value = struct.unpack_from(EVENT_FORMAT, packet, offset)
+            if self._lift_at is not None and self._since(self._lift_at, sec, usec) >= _LIFT_HOLD:
+                actions.extend(self._release())
             lift = ev_type == EV_KEY and code == BTN_TOUCH and not value
             # Reset the gesture if no event has arrived for a while.
             # A still finger sends nothing until the lift, so if no event has arrived for a short while,
@@ -83,14 +121,23 @@ class _Contact:
             if gap > _LONG_STALE or (gap > _SHORT_STALE and not lift):
                 self._reset()
             self._stamp = (sec, usec)
+            # Any later report that is not itself a lift means the finger is still down.
+            # Pressure and sync travel in the lift report, so those do not count.
+            if self._lift_at is not None and not lift and not _lift_tail(ev_type, code):
+                self._lift_at = None
+                self._lift_deadline = None
+                if ev_type == EV_KEY and code == BTN_TOUCH:
+                    continue
             if ev_type == EV_KEY and code == BTN_TOUCH:
                 if value:
                     self.touching = DETECTING
                     self.raw = [None, None]
                 else:
-                    if self.touching in (DETECTED, MOVING):
-                        actions.append(("up", self.last[0], self.last[1]))
-                    self._reset()
+                    if self.touching in (DETECTED, MOVING) and self._lift_at is None:
+                        self._lift_at = (sec, usec)
+                        self._lift_deadline = time.monotonic() + _LIFT_HOLD
+                    elif self.touching not in (DETECTED, MOVING):
+                        self._reset()
                 continue
             if ev_type != EV_ABS:
                 continue
@@ -134,9 +181,11 @@ class _Contact:
         """Seconds and microseconds are one clock. The microseconds field wraps each second."""
         if self._stamp is None:
             return False
-        prev_sec, prev_usec = self._stamp
-        elapsed = (sec - prev_sec) + (usec - prev_usec) / 1_000_000
-        return elapsed
+        return self._since(self._stamp, sec, usec)
+
+    def _since(self, stamp: tuple[int, int], sec: int, usec: int) -> float:
+        prev_sec, prev_usec = stamp
+        return (sec - prev_sec) + (usec - prev_usec) / 1_000_000
 
 
 def coalesce(actions: list[tuple]) -> list[tuple]:
@@ -224,11 +273,22 @@ def read_points(handle, width, height, x_range, y_range, wait=None, inject=None,
     rpc_pending = bytearray()
     while True:
         timeout = wait() if callable(wait) else wait
+        if contact is not None:
+            lift_wait = contact.lift_timeout()
+            if lift_wait is not None:
+                timeout = lift_wait if timeout is None else min(timeout, lift_wait)
         watch = [item for item in (handle, inject, rpc) if item is not None]
         if not watch:
             return
         ready, _, _ = select.select(watch, [], [], timeout)
         if not ready:
+            # A lift is waiting out its 100ms. Quiet time does not end it early,
+            # and it is not a finger that is still held down.
+            if contact is not None and contact.lift_timeout() is not None:
+                released = coalesce(contact.finish_lift())
+                if released:
+                    yield from released
+                continue
             # The pen is still down and the controller has gone quiet. Keep the
             # gesture alive so a long hold is not mistaken for the end of a tap.
             if contact is not None and contact.touching != LIFTED and contact.last is not None:

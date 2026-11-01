@@ -3,7 +3,20 @@ import struct
 import threading
 import time
 
-from bigsigner.hardware.touch import BTN_TOUCH, EVENT_FORMAT, EV_ABS, EV_KEY, ABS_X, ABS_Y, _Contact, coalesce, read_points
+from bigsigner.hardware.touch import (
+    ABS_PRESSURE,
+    ABS_X,
+    ABS_Y,
+    BTN_TOUCH,
+    DETECTED,
+    EVENT_FORMAT,
+    EV_ABS,
+    EV_KEY,
+    EV_SYN,
+    _Contact,
+    coalesce,
+    read_points,
+)
 
 
 def _packet(*events, sec=0, usec=0):
@@ -18,7 +31,8 @@ def test_a_press_is_the_sample_after_the_button():
     contact = _contact()
     assert contact.feed(_packet((EV_KEY, BTN_TOUCH, 1))) == []
     assert contact.feed(_packet((EV_ABS, ABS_X, 100), (EV_ABS, ABS_Y, 200))) == [("down", 100, 200)]
-    assert contact.feed(_packet((EV_KEY, BTN_TOUCH, 0))) == [("up", 100, 200)]
+    assert contact.feed(_packet((EV_KEY, BTN_TOUCH, 0))) == []
+    assert contact.finish_lift(sec=0, usec=100_000) == [("up", 100, 200)]
     assert contact.touching == 0
     assert contact.anchor == (100, 200)
 
@@ -56,7 +70,8 @@ def test_a_gap_before_a_new_press_drops_the_old_gesture():
 def test_a_late_lift_still_ends_the_gesture():
     contact = _contact()
     contact.feed(_packet((EV_KEY, BTN_TOUCH, 1), (EV_ABS, ABS_X, 10), (EV_ABS, ABS_Y, 20), sec=5))
-    assert contact.feed(_packet((EV_KEY, BTN_TOUCH, 0), sec=8)) == [("up", 10, 20)]
+    assert contact.feed(_packet((EV_KEY, BTN_TOUCH, 0), sec=6)) == []
+    assert contact.finish_lift(sec=6, usec=100_000) == [("up", 10, 20)]
     assert contact.touching == 0
 
 
@@ -78,7 +93,8 @@ def test_a_finger_that_comes_back_keeps_reporting_moves():
     )) == [("down", 100, 200)]
     assert contact.feed(_packet((EV_ABS, ABS_X, 100), (EV_ABS, ABS_Y, 280))) == [("move", 100, 280)]
     assert contact.feed(_packet((EV_ABS, ABS_X, 100), (EV_ABS, ABS_Y, 205))) == [("move", 100, 205)]
-    assert contact.feed(_packet((EV_KEY, BTN_TOUCH, 0))) == [("up", 100, 205)]
+    assert contact.feed(_packet((EV_KEY, BTN_TOUCH, 0))) == []
+    assert contact.finish_lift(sec=0, usec=100_000) == [("up", 100, 205)]
 
 
 def test_a_lift_leaves_the_anchor_until_the_next_press():
@@ -87,7 +103,10 @@ def test_a_lift_leaves_the_anchor_until_the_next_press():
     assert contact.anchor == (100, 200)
     contact.feed(_packet((EV_KEY, BTN_TOUCH, 0)))
     assert contact.anchor == (100, 200)
+    assert contact.touching == DETECTED
+    assert contact.finish_lift(sec=0, usec=100_000) == [("up", 100, 200)]
     assert contact.touching == 0
+    assert contact.anchor == (100, 200)
     assert contact.feed(_packet((EV_KEY, BTN_TOUCH, 1), (EV_ABS, ABS_X, 4), (EV_ABS, ABS_Y, 5))) == [("down", 4, 5)]
     assert contact.anchor == (4, 5)
 
@@ -100,7 +119,8 @@ def test_a_small_drift_is_not_a_move():
         (EV_ABS, ABS_Y, 200),
     )) == [("down", 100, 200)]
     assert contact.feed(_packet((EV_ABS, ABS_X, 115), (EV_ABS, ABS_Y, 210))) == []
-    assert contact.feed(_packet((EV_KEY, BTN_TOUCH, 0))) == [("up", 115, 210)]
+    assert contact.feed(_packet((EV_KEY, BTN_TOUCH, 0))) == []
+    assert contact.finish_lift(sec=0, usec=100_000) == [("up", 115, 210)]
 
 
 def test_the_reader_sleeps_until_a_touch_when_nothing_is_pending():
@@ -123,12 +143,15 @@ def test_the_reader_sleeps_until_a_touch_when_nothing_is_pending():
 
     threading.Thread(target=tap_later, daemon=True).start()
     try:
-        point = next(read_points(reader, 480, 800, (0, 479), (0, 799), wait=wait))
+        points = read_points(reader, 480, 800, (0, 479), (0, 799), wait=wait)
+        first = next(points)
+        second = next(points)
     finally:
         os.close(reader)
         os.close(writer)
-    assert point == ("up", 30, 40)
-    assert len(polls) == 1
+    assert first == ("down", 30, 40)
+    assert second == ("up", 30, 40)
+    assert len(polls) == 2
 
 
 def test_two_taps_in_one_burst_stay_two_taps():
@@ -185,4 +208,53 @@ def test_a_tap_in_one_burst_is_a_single_release():
         (EV_ABS, ABS_Y, 40),
         (EV_KEY, BTN_TOUCH, 0),
     ))
-    assert coalesce(actions) == [("up", 30, 40)]
+    assert actions == [("down", 30, 40)]
+    assert contact.finish_lift(sec=0, usec=100_000) == [("up", 30, 40)]
+
+
+def test_a_lift_that_returns_within_100ms_stays_one_gesture():
+    contact = _contact()
+    assert contact.feed(_packet(
+        (EV_KEY, BTN_TOUCH, 1),
+        (EV_ABS, ABS_X, 100),
+        (EV_ABS, ABS_Y, 200),
+        sec=1,
+    )) == [("down", 100, 200)]
+    assert contact.feed(_packet((EV_KEY, BTN_TOUCH, 0), sec=1, usec=10_000)) == []
+    assert contact.finish_lift(sec=1, usec=50_000) == []
+    assert contact.feed(_packet(
+        (EV_KEY, BTN_TOUCH, 1),
+        (EV_ABS, ABS_X, 100),
+        (EV_ABS, ABS_Y, 260),
+        sec=1,
+        usec=50_000,
+    )) == [("move", 100, 260)]
+    assert contact.touching == 3
+    assert contact.feed(_packet((EV_KEY, BTN_TOUCH, 0), sec=1, usec=60_000)) == []
+    assert contact.finish_lift(sec=1, usec=160_000) == [("up", 100, 260)]
+
+
+def test_a_coordinate_during_the_lift_wait_keeps_the_gesture():
+    contact = _contact()
+    contact.feed(_packet(
+        (EV_KEY, BTN_TOUCH, 1),
+        (EV_ABS, ABS_X, 100),
+        (EV_ABS, ABS_Y, 200),
+        sec=2,
+    ))
+    assert contact.feed(_packet(
+        (EV_KEY, BTN_TOUCH, 0),
+        (EV_ABS, ABS_PRESSURE, 0),
+        (EV_SYN, 0, 0),
+        sec=2,
+        usec=5_000,
+    )) == []
+    assert contact.finish_lift(sec=2, usec=50_000) == []
+    assert contact.feed(_packet(
+        (EV_ABS, ABS_X, 100),
+        (EV_ABS, ABS_Y, 240),
+        sec=2,
+        usec=40_000,
+    )) == [("move", 100, 240)]
+    assert contact.finish_lift(sec=2, usec=140_000) == []
+    assert contact.touching == 3
