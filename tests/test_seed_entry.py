@@ -342,6 +342,55 @@ def test_last_word_must_match_the_checksum():
     assert app.screen == "passphrase-ask"
     app._act("passphrase-no")
     assert app.screen == "key"
+    assert app.confirm == "create-wallet"
+
+
+def test_a_new_seed_can_create_a_singlesig_wallet():
+    from bigsigner.paths import SINGLESIG_NATIVE, SINGLESIG_TAPROOT
+
+    app = App()
+    app.screen = "seed"
+    app.seed_length = 12
+    app.seed_words = ["abandon"] * 11
+    app._pick_word("about")
+    app._act("passphrase-no")
+    assert app.screen == "key"
+    assert app.confirm == "create-wallet"
+    app.render()
+    assert any(hit["label"] == "Confirm" for hit in app.hits)
+    assert any(hit["label"] == "Cancel" for hit in app.hits)
+    app._act("confirm-no")
+    assert app.confirm is None
+    assert app.screen == "key"
+
+    app._ask_seed_wallet()
+    app._act("confirm-yes")
+    assert app.screen == "wallet-type"
+    app.render()
+    assert any(hit["label"] == "Native-Segwit" and hit["action"] == "wallet-native" for hit in app.hits)
+    assert any(hit["label"] == "Taproot" and hit["action"] == "wallet-taproot" for hit in app.hits)
+    app._act("wallet-native")
+    assert app.screen == "wallet"
+    assert app.back == ["wallets"]
+    assert app.session.wallets[0].role == SINGLESIG_NATIVE
+    app._act("back")
+    assert app.screen == "wallets"
+
+    app.screen = "key"
+    app._ask_seed_wallet()
+    assert app.confirm is None
+
+    other = App()
+    other.screen = "seed"
+    other.seed_length = 12
+    other.seed_words = ["abandon"] * 11
+    other._pick_word("about")
+    other._act("passphrase-no")
+    other._act("confirm-yes")
+    other._act("wallet-taproot")
+    assert other.screen == "wallet"
+    assert other.back == ["wallets"]
+    assert other.session.wallets[0].role == SINGLESIG_TAPROOT
 
 
 def test_overflowing_seed_words_scroll_and_stay_on_the_last_word():

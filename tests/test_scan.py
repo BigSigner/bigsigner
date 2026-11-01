@@ -25,6 +25,16 @@ def _tap(app, label):
     raise AssertionError(label)
 
 
+def test_manual_entry_is_the_first_add_option():
+    app = App()
+    app.screen = "keys"
+    app.add_menu = True
+    app.render()
+    manual = next(hit for hit in app.hits if hit["action"] == "add-manual")
+    scan = next(hit for hit in app.hits if hit["action"] == "add-scan")
+    assert manual["box"][1] < scan["box"][1]
+
+
 def test_plus_menu_opens_the_scan_screen():
     app = _open_scan()
     app.render()

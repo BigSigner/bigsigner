@@ -401,6 +401,7 @@ class App:
             "derive": self._derive,
             "wallets": self._wallets,
             "wallet": self._wallet,
+            "wallet-type": self._wallet_type,
             "account": self._account,
             "settings": self._settings,
             "about": self._about,
@@ -1045,6 +1046,8 @@ class App:
         "derive-inc": lambda self: self._step_derive_account(1),
         "derive-edit": lambda self: self._edit_derive_account(),
         "derive-wallet": lambda self: self._make_derived_wallet(),
+        "wallet-native": lambda self: self._make_wallet("wpkh"),
+        "wallet-taproot": lambda self: self._make_wallet("tr"),
         "derive-details": lambda self: self._open_derived_details(),
         "make-xpub-wallet": lambda self: self._make_xpub_wallet(),
         "show-seed": _act_show_seed,
@@ -1827,6 +1830,7 @@ class App:
             self.back = ["keys"]
             self.scroll["key"] = 0
             self.screen = "key"
+            self._ask_seed_wallet()
             return
         self.back = []
         self.screen = "wallets" if self.session.wallets else "keys"
@@ -2098,8 +2102,8 @@ class App:
             self._speed_dial(
                 frame,
                 (
-                    ("Scan QR Code", "add-scan"),
                     ("Manual Entry", "add-manual"),
+                    ("Scan QR Code", "add-scan"),
                     ("Load from SD Card", "add-sd"),
                     ("Generate New Seed", "add-generate"),
                 ),
@@ -2456,6 +2460,7 @@ class App:
         self.back = ["keys"]
         self.scroll["key"] = 0
         self.screen = "key"
+        self._ask_seed_wallet()
 
     def _open_derive(self, role: str):
         record = None if self.selected_fp is None else self.session.fingerprints.get(self.selected_fp)
@@ -4756,6 +4761,27 @@ class App:
         self.screen = "key"
         self.show_secret = False
         self.show_passphrase = False
+        self._ask_seed_wallet()
+
+    def _ask_seed_wallet(self) -> None:
+        """Offer a singlesig wallet when a newly added seed has none."""
+        record = None if self.selected_fp is None else self.session.fingerprints.get(self.selected_fp)
+        if record is None or not any(key.has_seed for key in record.keys):
+            return
+        if any(self.selected_fp in wallet.fingerprints for wallet in self.session.wallets):
+            return
+        self.confirm = "create-wallet"
+
+    def _wallet_type(self, frame: Frame):
+        frame.header("SingleSig Wallet", "back")
+        y = frame.text(
+            "Which type of SingleSig wallet do you want to create?",
+            MARGIN,
+            HEADER + 24,
+            size=TITLE_SIZE,
+        )
+        y = frame.button(y + 20, "Native-Segwit", "wallet-native")
+        frame.button(y, "Taproot", "wallet-taproot")
 
     def _review(self, frame: Frame):
         frame.header("Transaction", "back")
@@ -5054,6 +5080,8 @@ class App:
     def _confirm_message(self) -> str:
         if self.confirm in ("show-seed", "show-passphrase"):
             return "Make sure nobody is looking over your shoulder!"
+        if self.confirm == "create-wallet":
+            return "Do you want to create a SingleSig wallet for this seed?"
         if self.confirm == "delete-key" and self.selected_fp is not None:
             try:
                 return self.session.deletion_message(self.selected_fp, 0)
@@ -5127,6 +5155,8 @@ class App:
         self.confirm = None
         if kind == "show-seed":
             self._open_seed_show()
+        elif kind == "create-wallet":
+            self.go("wallet-type")
         elif kind == "show-passphrase":
             self.go("passphrase-view")
         elif kind == "delete-key":
