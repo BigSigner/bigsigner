@@ -4,8 +4,7 @@ import stat
 
 import pytest
 
-from bigsigner.rpc import apply_line, command_of, feed_lines, format_line, main, open_rpc_pipe, split_line, write_pipe
-from bigsigner.session import SessionError
+from bigsigner.rpc import apply_line, command_of, feed_lines, main, open_rpc_pipe, split_line, write_pipe
 from bigsigner.ui.app import App
 
 ABANDON = (
@@ -15,24 +14,27 @@ ABANDON = (
 
 
 def test_a_seed_line_keeps_an_optional_passphrase():
-    line, fingerprint = format_line(ABANDON.replace(" ", ", "), "secret")
-    command, rest = command_of(line)
-    words, passphrase = split_line(rest)
-    assert command == "addseed"
+    words, passphrase = split_line(f"{ABANDON} secret")
     assert words == ABANDON
     assert passphrase == "secret"
-    assert fingerprint != format_line(ABANDON, None)[1]
-    assert len(fingerprint) == 8
+    plain = apply_line(App(), f"addseed {ABANDON}")
+    secret = apply_line(App(), f"addseed {ABANDON} secret")
+    assert plain == "seed 73c5da0a"
+    assert secret.startswith("seed ")
+    assert secret != plain
 
 
 def test_the_abandon_seed_has_the_known_fingerprint():
-    _line, fingerprint = format_line(ABANDON, None)
-    assert fingerprint == "73c5da0a"
+    assert apply_line(App(), f"addseed {ABANDON}") == "seed 73c5da0a"
 
 
-def test_a_bad_checksum_is_refused_before_the_pipe():
-    with pytest.raises(SessionError, match="checksum"):
-        format_line(" ".join(["abandon"] * 12), None)
+def test_a_bad_checksum_is_refused_by_the_panel():
+    app = App()
+    app.screen = "keys"
+    report = apply_line(app, "addseed " + " ".join(["abandon"] * 12))
+    assert report.startswith("seed refused:")
+    assert "checksum" in report
+    assert app.session.fingerprints == {}
 
 
 def test_an_overlong_line_is_dropped():
@@ -44,7 +46,7 @@ def test_an_overlong_line_is_dropped():
     assert overflow is False
 
 
-def test_the_command_writes_one_line_and_prints_only_the_fingerprint(tmp_path, capsys):
+def test_the_command_writes_the_line_as_typed(tmp_path, capsys):
     path = tmp_path / "seed"
     os.mkfifo(path)
     reader = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
@@ -54,17 +56,16 @@ def test_the_command_writes_one_line_and_prints_only_the_fingerprint(tmp_path, c
     finally:
         os.close(reader)
     captured = capsys.readouterr()
-    assert captured.err.strip() == "73c5da0a"
-    assert "abandon" not in captured.err
+    assert captured.err == ""
     assert captured.out == ""
     assert data.decode() == f"addseed {ABANDON}\n"
 
 
-def test_format_prints_the_line_without_repeating_it_on_stderr(capsys):
-    assert main(["--format", "addseed", *ABANDON.split()]) == 0
+def test_format_prints_the_line_as_typed(capsys):
+    assert main(["--format", "addseed", *ABANDON.split(), "hello"]) == 0
     captured = capsys.readouterr()
-    assert captured.out == f"addseed {ABANDON}\n"
-    assert captured.err.strip() == "73c5da0a"
+    assert captured.out == f"addseed {ABANDON} hello\n"
+    assert captured.err == ""
 
 
 def test_a_base64_line_is_written_to_the_pipe(tmp_path, capsys):
@@ -79,7 +80,7 @@ def test_a_base64_line_is_written_to_the_pipe(tmp_path, capsys):
         os.close(reader)
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "abandon" not in captured.err
+    assert captured.err == ""
     assert data.decode() == f"addseed {ABANDON}\n"
 
 
@@ -101,19 +102,16 @@ def test_another_command_is_sent_without_a_fingerprint(capsys):
     assert captured.err == ""
 
 
-def test_a_passphrase_after_addseed_is_not_a_word(capsys):
-    assert main(["--format", "addseed", "--passphrase", "hello", *ABANDON.split()]) == 0
+def test_a_thirteenth_word_is_forwarded_and_read_as_the_passphrase(capsys):
+    assert main(["--format", "addseed", *ABANDON.split(), "hello"]) == 0
     captured = capsys.readouterr()
+    assert captured.out == f"addseed {ABANDON} hello\n"
+    assert captured.err == ""
     command, rest = command_of(captured.out.strip())
     words, passphrase = split_line(rest)
     assert command == "addseed"
     assert words == ABANDON
     assert passphrase == "hello"
-    assert "hello" not in captured.err
-
-
-def test_a_passphrase_belongs_on_addseed():
-    assert main(["--format", "addwallet", "--passphrase", "secret"]) == 1
 
 
 def test_the_panel_opens_its_command_pipe(tmp_path, monkeypatch):

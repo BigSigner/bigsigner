@@ -37,7 +37,7 @@ pytest
 
 ## Inject a seed
 
-`python -m bigsigner.rpc` writes one command to the pipe named by `BIGSIGNER_RPC`. The default path is `/tmp/bigsigner-rpc`. `addseed` is one command: the line is that word and then the mnemonic. The panel loads it without the manual-entry screen. On the boot screen the seed waits until Continue on Remove SD Card. After that, the seed key opens. A line with an unknown command word is refused.
+`python -m bigsigner.rpc` writes one command to the pipe named by `BIGSIGNER_RPC`, as it was typed. The default path is `/tmp/bigsigner-rpc`. It does not check the command. `addseed` is one command: the line is that word and then the mnemonic. A 13th, 19th, or 25th word is the passphrase, and that word does not have to be in the word list. The panel checks the line. It loads a good seed without the manual-entry screen and refuses a bad one. On the boot screen a new seed waits until Continue on Remove SD Card. After that, the seed key opens. A line with an unknown command word is refused.
 
 From the computer, `bigsigner-os/docs/scripts/rpc.sh` sends the line over SSH to the panel that is already running. It does not stop that process. A seed that is already loaded is left as it is. The app on the device has to already contain `rpc.py`. The panel opens `/tmp/bigsigner-rpc` when it starts. `BIGSIGNER_RPC=off` disables that.
 

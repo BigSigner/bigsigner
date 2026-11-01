@@ -122,6 +122,26 @@ def test_the_lift_after_a_scroll_does_not_open_an_address():
     assert app.screen == "addresses"
 
 
+def test_a_button_is_ignored_just_after_a_scroll():
+    app = _wallet()
+    app.screen = "addresses"
+    app.render()
+    tools = next(hit for hit in app.hits if hit["action"] == "address-tools")
+    x = (tools["box"][0] + tools["box"][2]) // 2
+    y = (tools["box"][1] + tools["box"][3]) // 2
+    app.pointer_down(240, 500)
+    app.pointer_move(240, 300)
+    assert app.scroll["addresses"] > 0
+    app.pointer_up(240, 300)
+    app.pointer_down(x, y)
+    app.pointer_up(x, y)
+    assert app.screen == "addresses"
+    app._scroll_at -= 1
+    app.pointer_down(x, y)
+    app.pointer_up(x, y)
+    assert app.screen == "address-tools"
+
+
 def test_lifting_rebuilds_around_the_new_place_without_moving_it():
     app = _wallet()
     app.screen = "addresses"

@@ -198,6 +198,8 @@ QR_HINT_HOLD = 2.0
 # that comes back.
 SCROLL_DELTA_X = 24
 SCROLL_DELTA_Y = 24
+# A tap just after a scroll is the finger arriving, not a button press.
+SCROLL_QUIET = 0.5
 # This panel reports a press above the finger. A dropdown sits against the
 # title bar, so the missed press lands on the title unless the target reaches up.
 DROPDOWN_RAISE = 48
@@ -382,7 +384,7 @@ class App:
         self._still_boxes = []
         self._press = None
         self._press_at = 0.0
-        self._press_last = 0.0
+        self._scroll_at = None
         self._ignore_lift = False
         self._painters = {
             "boot": self._boot,
@@ -495,6 +497,8 @@ class App:
         return frame.image
 
     def tap(self, x: int, y: int, camera: dict | None = None):
+        if self._scroll_at is not None and time.monotonic() - self._scroll_at < SCROLL_QUIET:
+            return
         if camera:
             self.camera_frames = list(camera.get("frames") or [])
             self.camera_final = camera.get("final") or b""
@@ -520,7 +524,6 @@ class App:
         self._ignore_lift = False
         now = time.monotonic()
         self._press_at = now
-        self._press_last = now
         self._seed_title_hold = now if self._on_seed_title(x, y) else None
         if panel == "qr":
             self._grid_origin = self.qr_scroll
@@ -564,6 +567,7 @@ class App:
         if scroll == self.hscroll:
             return False
         self.hscroll = scroll
+        self._note_scroll()
         return True
 
     def finger_down(self) -> bool:
@@ -574,9 +578,7 @@ class App:
         if self._press is None:
             return False
         if self._seed_title_hold is not None:
-            self._press_last = time.monotonic()
             return self._advance_seed_title_hold(x, y)
-        self._press_last = time.monotonic()
         origin_x, origin_y, origin_scroll, dragging, panel = self._press
         dx = x - origin_x
         dy = y - origin_y
@@ -603,12 +605,14 @@ class App:
                 return False
             self.seed_grid_scroll = offset
             self.seed_grid_stick = offset >= self.seed_grid_max
+            self._note_scroll()
             return True
         if panel == "qr":
             offset = max(0, min(self.qr_scroll_max, self._grid_origin - dy))
             if offset == self.qr_scroll:
                 return False
             self.qr_scroll = offset
+            self._note_scroll()
             return True
         if panel == "entropy":
             offset = max(0, min(self.entropy_scroll_max, self._grid_origin - dy))
@@ -616,6 +620,7 @@ class App:
                 return False
             self.entropy_scroll = offset
             self.entropy_scroll_stick = offset >= self.entropy_scroll_max
+            self._note_scroll()
             return True
         limit = self.scroll_max.get(self.screen, 0)
         if limit <= 0:
@@ -628,6 +633,7 @@ class App:
         if offset == self.scroll.get(self.screen, 0):
             return False
         self.scroll[self.screen] = offset
+        self._note_scroll()
         return True
 
     def pointer_up(self, x: int, y: int, camera: dict | None = None):
@@ -647,6 +653,9 @@ class App:
     def pointer_idle(self) -> bool:
         """A pause is not a lift. The gesture ends when the finger lifts."""
         return False
+
+    def _note_scroll(self) -> None:
+        self._scroll_at = time.monotonic()
 
     def _press_is_click(self, press) -> bool:
         if self.keyboard_top is not None and press[1] >= self.keyboard_top:
