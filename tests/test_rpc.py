@@ -18,7 +18,7 @@ def test_a_seed_line_keeps_an_optional_passphrase():
     line, fingerprint = format_line(ABANDON.replace(" ", ", "), "secret")
     command, rest = command_of(line)
     words, passphrase = split_line(rest)
-    assert command == "injectseed"
+    assert command == "addseed"
     assert words == ABANDON
     assert passphrase == "secret"
     assert fingerprint != format_line(ABANDON, None)[1]
@@ -49,7 +49,7 @@ def test_the_command_writes_one_line_and_prints_only_the_fingerprint(tmp_path, c
     os.mkfifo(path)
     reader = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
     try:
-        assert main(["--pipe", str(path), "injectseed", *ABANDON.split()]) == 0
+        assert main(["--pipe", str(path), "addseed", *ABANDON.split()]) == 0
         data = os.read(reader, 4096)
     finally:
         os.close(reader)
@@ -57,18 +57,18 @@ def test_the_command_writes_one_line_and_prints_only_the_fingerprint(tmp_path, c
     assert captured.err.strip() == "73c5da0a"
     assert "abandon" not in captured.err
     assert captured.out == ""
-    assert data.decode() == f"injectseed {ABANDON}\n"
+    assert data.decode() == f"addseed {ABANDON}\n"
 
 
 def test_format_prints_the_line_without_repeating_it_on_stderr(capsys):
-    assert main(["--format", "injectseed", *ABANDON.split()]) == 0
+    assert main(["--format", "addseed", *ABANDON.split()]) == 0
     captured = capsys.readouterr()
-    assert captured.out == f"injectseed {ABANDON}\n"
+    assert captured.out == f"addseed {ABANDON}\n"
     assert captured.err.strip() == "73c5da0a"
 
 
 def test_a_base64_line_is_written_to_the_pipe(tmp_path, capsys):
-    coded = base64.b64encode(f"injectseed {ABANDON}".encode()).decode()
+    coded = base64.b64encode(f"addseed {ABANDON}".encode()).decode()
     path = tmp_path / "seed"
     os.mkfifo(path)
     reader = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
@@ -80,7 +80,7 @@ def test_a_base64_line_is_written_to_the_pipe(tmp_path, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "abandon" not in captured.err
-    assert data.decode() == f"injectseed {ABANDON}\n"
+    assert data.decode() == f"addseed {ABANDON}\n"
 
 
 def test_a_line_without_the_command_does_not_load_the_seed():
@@ -89,7 +89,7 @@ def test_a_line_without_the_command_does_not_load_the_seed():
     report = apply_line(app, ABANDON)
     assert report == "command refused: abandon"
     assert app.session.fingerprints == {}
-    loaded = apply_line(app, f"injectseed {ABANDON}")
+    loaded = apply_line(app, f"addseed {ABANDON}")
     assert loaded == "seed 73c5da0a"
     assert app.screen == "key"
 
@@ -101,18 +101,18 @@ def test_another_command_is_sent_without_a_fingerprint(capsys):
     assert captured.err == ""
 
 
-def test_a_passphrase_after_injectseed_is_not_a_word(capsys):
-    assert main(["--format", "injectseed", "--passphrase", "hello", *ABANDON.split()]) == 0
+def test_a_passphrase_after_addseed_is_not_a_word(capsys):
+    assert main(["--format", "addseed", "--passphrase", "hello", *ABANDON.split()]) == 0
     captured = capsys.readouterr()
     command, rest = command_of(captured.out.strip())
     words, passphrase = split_line(rest)
-    assert command == "injectseed"
+    assert command == "addseed"
     assert words == ABANDON
     assert passphrase == "hello"
     assert "hello" not in captured.err
 
 
-def test_a_passphrase_belongs_on_injectseed():
+def test_a_passphrase_belongs_on_addseed():
     assert main(["--format", "addwallet", "--passphrase", "secret"]) == 1
 
 
@@ -137,8 +137,8 @@ def test_the_command_pipe_can_be_turned_off(monkeypatch):
 def test_a_seed_that_is_already_loaded_stays():
     app = App()
     app.screen = "keys"
-    assert apply_line(app, f"injectseed {ABANDON}") == "seed 73c5da0a"
-    assert apply_line(app, f"injectseed {ABANDON}") == "seed already loaded"
+    assert apply_line(app, f"addseed {ABANDON}") == "seed 73c5da0a"
+    assert apply_line(app, f"addseed {ABANDON}") == "seed already loaded"
     assert len(app.session.fingerprints) == 1
 
 

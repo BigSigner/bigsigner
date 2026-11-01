@@ -1,14 +1,14 @@
 """Send one command to a running panel.
 
 The panel reads the pipe named by ``BIGSIGNER_RPC``. Each line starts with a
-command word. ``injectseed`` is one command: it is followed by the mnemonic,
+command word. ``addseed`` is one command: it is followed by the mnemonic,
 and a tab and then a passphrase is optional. The pipe is in RAM. Nothing is
 written to the SD card.
 
 On the device, after the panel has been started with that variable:
 
-    python -m bigsigner.rpc injectseed word word ... word
-    python -m bigsigner.rpc injectseed --passphrase "secret" word word ... word
+    python -m bigsigner.rpc addseed word word ... word
+    python -m bigsigner.rpc addseed --passphrase "secret" word word ... word
 
 From the computer, ``docs/scripts/rpc.sh`` in bigsigner-os starts that panel
 over SSH when it is not already listening, then writes the same line.
@@ -60,7 +60,7 @@ def command_refusal(command: str) -> str:
 def apply_line(app, line: str) -> str:
     """Run one pipe line. The log text has no mnemonic and no passphrase."""
     command, rest = command_of(line)
-    if command == "injectseed":
+    if command == "addseed":
         return app.inject_mnemonic(rest)
     return command_refusal(command)
 
@@ -90,7 +90,7 @@ def feed_lines(pending: bytearray, chunk: bytes) -> tuple[list[str], bool]:
 
 
 def format_line(words: str, passphrase: str | None = None) -> tuple[str, str]:
-    """Validate a seed and return the injectseed line and the fingerprint hex.
+    """Validate a seed and return the addseed line and the fingerprint hex.
 
     Commas are spaces. The checksum is checked. The passphrase is the BIP39
     passphrase, one line, with no tab characters.
@@ -107,15 +107,15 @@ def format_line(words: str, passphrase: str | None = None) -> tuple[str, str]:
     mnemonic = " ".join(key.mnemonic)
     stored = key.passphrase
     body = mnemonic if stored is None else f"{mnemonic}\t{stored}"
-    line = f"injectseed {body}"
+    line = f"addseed {body}"
     if len(line.encode("utf-8")) > MAX_LINE:
         raise SessionError("The seed line is too long.")
     return line, added["fingerprint"].hex()
 
 
 def format_command(command: str, rest: str) -> tuple[str, str | None]:
-    """One pipe line, and the fingerprint when the command is injectseed."""
-    if command == "injectseed":
+    """One pipe line, and the fingerprint when the command is addseed."""
+    if command == "addseed":
         words, passphrase = split_line(rest)
         return format_line(words, passphrase)
     if not (command.isascii() and command.isidentifier() and len(command) <= 32):
@@ -184,28 +184,28 @@ def main(argv: list[str] | None = None) -> int:
         prog="python -m bigsigner.rpc",
         description="Write one command to the panel pipe. Secrets are not printed.",
     )
-    parser.add_argument("--passphrase", default=None, help="BIP39 passphrase for injectseed. One line, no tab.")
+    parser.add_argument("--passphrase", default=None, help="BIP39 passphrase for addseed. One line, no tab.")
     parser.add_argument("--pipe", default=None, help=f"pipe path (default {DEFAULT_PIPE}, or BIGSIGNER_RPC)")
     parser.add_argument("--format", action="store_true", help="print the pipe line to stdout and do not open the pipe")
     parser.add_argument("--b64", default=None, help="base64 of a pipe line already produced by --format")
-    parser.add_argument("command", nargs="?", help="command word, for example injectseed")
-    parser.add_argument("words", nargs="*", help="arguments for that command; injectseed reads stdin when omitted")
+    parser.add_argument("command", nargs="?", help="command word, for example addseed")
+    parser.add_argument("words", nargs="*", help="arguments for that command; addseed reads stdin when omitted")
     args = parser.parse_args(argv)
     if args.b64 is not None and (args.command or args.words or args.passphrase is not None):
         parser.error("--b64 is the whole line, so it takes no command and no --passphrase")
     if args.b64 is None and not args.command:
-        parser.error("name a command, for example injectseed")
+        parser.error("name a command, for example addseed")
     try:
         if args.b64 is not None:
             decoded = base64.b64decode(args.b64).decode("utf-8")
             command, rest = command_of(decoded)
             line, fingerprint = format_command(command, rest)
-        elif args.command == "injectseed":
+        elif args.command == "addseed":
             text = " ".join(args.words) if args.words else sys.stdin.read()
             line, fingerprint = format_line(text, args.passphrase)
         else:
             if args.passphrase is not None:
-                raise SessionError("The passphrase is only for injectseed.")
+                raise SessionError("The passphrase is only for addseed.")
             line, fingerprint = format_command(args.command, " ".join(args.words))
     except (SessionError, binascii.Error, UnicodeDecodeError) as exc:
         print(str(exc), file=sys.stderr)

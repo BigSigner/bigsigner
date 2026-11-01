@@ -1954,7 +1954,7 @@ class App:
         self.selected_fp = added["fingerprint"]
 
     def inject_mnemonic(self, line: str) -> str:
-        """Load one seed from an injectseed line. The returned line has no words."""
+        """Load one seed from an addseed line. The returned line has no words."""
         try:
             words, passphrase = split_line(line)
             added = self.session.add_mnemonic(words, passphrase)
