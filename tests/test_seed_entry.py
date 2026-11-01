@@ -1,5 +1,3 @@
-import time
-
 from PIL import Image, ImageDraw
 
 from bigsigner.ui.app import App, _grid_font_size
@@ -126,7 +124,16 @@ def test_a_word_count_choice_stays_on_its_own_row():
     assert app.seed_length == 18
 
 
-def test_holding_the_title_repeats_the_first_word():
+def _tap_seed_title(app):
+    app.render()
+    title = next(hit for hit in app.hits if hit["action"] == "seed-title")
+    x = (title["box"][0] + title["box"][2]) // 2
+    y = (title["box"][1] + title["box"][3]) // 2
+    app.tap(x, y)
+    return title
+
+
+def test_eight_title_taps_repeat_the_first_word():
     from bigsigner.ui.app import _WORD_INDEX, _first_checksum_word, _phrase_checksum_ok
 
     app = App()
@@ -135,38 +142,99 @@ def test_holding_the_title_repeats_the_first_word():
     app.seed_words = ["abandon"]
     app.word_prefix = "ab"
     app.word_cursor = 1
-    app.render()
-    title = next(hit for hit in app.hits if hit["action"] == "seed-title")
+    title = _tap_seed_title(app)
     assert title["label"] == "Word 2 of 12"
-    x = (title["box"][0] + title["box"][2]) // 2
-    y = (title["box"][1] + title["box"][3]) // 2
-    app.pointer_down(x, y)
-    app.render()
+    for _ in range(6):
+        _tap_seed_title(app)
     assert app.seed_words == ["abandon"]
-    app._seed_title_hold = time.monotonic() - 5
-    app.render()
+    assert app.word_prefix == "ab"
+    assert app._seed_title_count == 7
+    _tap_seed_title(app)
     assert app.seed_words[:11] == ["abandon"] * 11
     assert app.seed_words[11] == "about"
     assert app.seed_words[11] == _first_checksum_word(["abandon"] * 11)
     assert _phrase_checksum_ok([_WORD_INDEX[word] for word in app.seed_words])
     assert app.word_prefix == ""
+    assert app._seed_title_count == 0
     app.render()
     labels = {hit["label"] for hit in app.hits}
     assert "Continue" in labels
     assert any(item["text"] == "Seed words" for item in app.texts)
     assert not any(hit["action"] == "seed-title" for hit in app.hits)
 
-    app.seed_words = ["abandon"]
+    app.seed_words = ["abandon", "ability"]
     app.seed_length = 12
-    app.pointer_down(x, y)
-    app.pointer_move(200, 400)
-    assert app._seed_title_hold is None
-    app.render()
-    assert app.seed_words == ["abandon"]
-
-    app.seed_length = 24
+    app._act("seed-title")
+    assert app._seed_title_count == 0
     app.render()
     assert not any(hit["action"] == "seed-title" for hit in app.hits)
+
+    app.seed_words = ["abandon"]
+    app.seed_length = 24
+    app._act("seed-title")
+    assert app._seed_title_count == 0
+    app.render()
+    assert not any(hit["action"] == "seed-title" for hit in app.hits)
+
+
+def test_the_title_count_resets():
+    app = App()
+    app.screen = "seed"
+    app.back = ["keys"]
+    app.seed_length = 12
+    app.seed_words = ["abandon"]
+    app._seed_title_count = 4
+    app._seed_key("a")
+    assert app._seed_title_count == 0
+    assert app.word_prefix == "a"
+
+    app._seed_title_count = 4
+    app._act("dropdown-seed-length")
+    assert app._seed_title_count == 0
+    assert app.open_dropdown == "seed-length"
+
+    app._seed_title_count = 4
+    app._act("dropdown-pick-seed-length-12")
+    assert app.seed_length == 12
+    assert app._seed_title_count == 0
+
+    app.seed_length = 24
+    app.seed_words = ["abandon"] * 14
+    app._seed_title_count = 4
+    app.render()
+    box = app.seed_grid_box
+    x = 30
+    y = (box[1] + box[3]) // 2
+    app.pointer_down(x, y)
+    app.pointer_move(x, y + 10)
+    assert app._seed_title_count == 4
+    assert app.pointer_move(x, y + 90)
+    assert app._seed_title_count == 0
+
+    app.screen = "seed"
+    app.back = ["keys"]
+    app.seed_length = 12
+    app.seed_words = ["abandon"]
+    app._seed_title_count = 5
+    app._act("back")
+    assert app.screen == "keys"
+    assert app._seed_title_count == 0
+
+    app._seed_title_count = 5
+    app._act("add-manual")
+    assert app.screen == "seed"
+    assert app._seed_title_count == 0
+
+    app.back = ["keys"]
+    app._seed_title_count = 5
+    app._act("seed-continue")
+    assert app.screen == "passphrase-ask"
+    assert app._seed_title_count == 0
+
+    app._seed_title_count = 5
+    app._act("back")
+    assert app.screen == "seed"
+    assert app._seed_title_count == 0
 
 
 def test_manual_entry_opens_at_24_words():

@@ -270,7 +270,7 @@ class App:
         self.seed_words = []
         self.word_prefix = ""
         self.word_cursor = 0
-        self._seed_title_hold = None
+        self._seed_title_count = 0
         self._seed_choice_key = None
         self._seed_choice_words = WORDLIST
         self._seed_picture = None
@@ -453,8 +453,6 @@ class App:
             delays.append(max(0, self.qr_hint_until - time.monotonic()))
         if self.address_search_pending is not None and self.address_search_shown:
             delays.append(0.05)
-        if self._seed_title_hold is not None:
-            delays.append(0.25)
         if not delays:
             return None
         return min(delays)
@@ -480,8 +478,6 @@ class App:
         self._expire_notice()
         self._advance_boot()
         self._advance_address_search()
-        if self._seed_title_hold is not None and self._press is not None:
-            self._advance_seed_title_hold(self._press[0], self._press[1])
         frame = Frame()
         self._painters[self.screen](frame)
         if self.menu:
@@ -522,9 +518,7 @@ class App:
             panel = ""
         self._press = (x, y, self.scroll.get(self.screen, 0), False, panel)
         self._ignore_lift = False
-        now = time.monotonic()
-        self._press_at = now
-        self._seed_title_hold = now if self._on_seed_title(x, y) else None
+        self._press_at = time.monotonic()
         if panel == "qr":
             self._grid_origin = self.qr_scroll
         elif panel == "entropy":
@@ -577,8 +571,6 @@ class App:
         """Drag the current page, or the seed-word list, vertically."""
         if self._press is None:
             return False
-        if self._seed_title_hold is not None:
-            return self._advance_seed_title_hold(x, y)
         origin_x, origin_y, origin_scroll, dragging, panel = self._press
         dx = x - origin_x
         dy = y - origin_y
@@ -603,6 +595,8 @@ class App:
             offset = max(0, min(self.seed_grid_max, self._grid_origin - dy))
             if offset == self.seed_grid_scroll:
                 return False
+            if self.screen == "seed":
+                self._seed_title_count = 0
             self.seed_grid_scroll = offset
             self.seed_grid_stick = offset >= self.seed_grid_max
             self._note_scroll()
@@ -639,7 +633,6 @@ class App:
     def pointer_up(self, x: int, y: int, camera: dict | None = None):
         press = self._press
         self._press = None
-        self._seed_title_hold = None
         if press is None:
             if self._ignore_lift:
                 self._ignore_lift = False
@@ -697,6 +690,8 @@ class App:
         return offset
 
     def go(self, screen: str):
+        if self.screen == "seed" or screen == "seed":
+            self._seed_title_count = 0
         self.back.append(self.screen)
         self.screen = screen
         if screen == "scan":
@@ -712,6 +707,9 @@ class App:
             self.screen == "qr" and self.qr_kind in ("key", "descriptor")
         )
         leaving_wallet = self.screen == "wallet"
+        destination = self.back[-1] if self.back else "keys"
+        if self.screen == "seed" or destination == "seed":
+            self._seed_title_count = 0
         self.screen = self.back.pop() if self.back else "keys"
         if leaving_wallet:
             self._restore_wallet_accounts()
@@ -1027,6 +1025,7 @@ class App:
         "show-passphrase": _act_show_passphrase,
         "copy-passphrase": lambda self: self._start_passphrase_copy(),
         "seed-continue": lambda self: self.go("passphrase-ask"),
+        "seed-title": lambda self: self._act_seed_title(),
         "passphrase-no": lambda self: self._save_entered_seed(None),
         "passphrase-yes": _act_passphrase_yes,
         "passphrase-save": _act_passphrase_save,
@@ -1124,6 +1123,8 @@ class App:
             self.open_dropdown = None
         elif action.startswith("dropdown-"):
             name = action[len("dropdown-") :]
+            if name == "seed-length":
+                self._seed_title_count = 0
             self.open_dropdown = None if self.open_dropdown == name else name
         elif action.startswith("die-") and action[4:].isdigit():
             self.entropy_scroll_stick = True
@@ -1138,7 +1139,10 @@ class App:
         elif action.startswith("nav-"):
             if self.screen == "wallet":
                 self._restore_wallet_accounts()
-            self.screen = action[4:]
+            target = action[4:]
+            if self.screen == "seed" or target == "seed":
+                self._seed_title_count = 0
+            self.screen = target
             self.back = []
             self.menu = False
             self.add_menu = False
@@ -1986,7 +1990,7 @@ class App:
         self.confirm = None
         self.open_dropdown = None
         self._press = None
-        self._seed_title_hold = None
+        self._seed_title_count = 0
         self._ignore_lift = True
         self._show_imported(added)
         return f"seed {fingerprint}"
@@ -3959,27 +3963,18 @@ class App:
                 str(self.seed_length),
             )
 
-    def _on_seed_title(self, x: int, y: int) -> bool:
-        if self.screen != "seed" or self.open_dropdown or self.menu or self.confirm:
-            return False
+    def _act_seed_title(self):
+        """Eight taps on the title repeat the one entered word into a 12-word seed."""
         if len(self.seed_words) != 1 or self.seed_length != 12:
-            return False
-        return 84 <= x < WIDTH and 0 <= y < HEADER
-
-    def _advance_seed_title_hold(self, x: int, y: int) -> bool:
-        """Fill the seed once the finger has stayed on the title for five seconds."""
-        if self._seed_title_hold is None:
-            return False
-        if not self._on_seed_title(x, y):
-            self._seed_title_hold = None
-            return False
-        if time.monotonic() - self._seed_title_hold < 5:
-            return False
-        self._seed_title_hold = None
-        return self._fill_repeated_seed()
+            return
+        self._seed_title_count += 1
+        if self._seed_title_count < 8:
+            return
+        self._seed_title_count = 0
+        self._fill_repeated_seed()
 
     def _seed_title_target(self, frame: Frame, title: str) -> None:
-        """The title is a hold target only while one word is entered in 12-word mode."""
+        """The title counts taps while one word is entered in 12-word mode."""
         if len(self.seed_words) != 1 or self.seed_length != 12:
             return
         frame.hit((84, 0, WIDTH, HEADER), "seed-title", title)
@@ -4094,6 +4089,7 @@ class App:
 
     def _set_seed_length(self, length: int):
         """Keep entered words. A shorter seed drops its last word so the checksum can be retyped."""
+        self._seed_title_count = 0
         if length < self.seed_length:
             kept = self.seed_words[: length - 1]
             if len(kept) < len(self.seed_words):
@@ -4380,6 +4376,7 @@ class App:
         return enabled
 
     def _seed_key(self, key: str):
+        self._seed_title_count = 0
         if key == "backspace":
             if self.word_cursor > 0:
                 self.word_prefix = self.word_prefix[: self.word_cursor - 1] + self.word_prefix[self.word_cursor :]
