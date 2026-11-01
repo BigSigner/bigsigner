@@ -24,10 +24,33 @@ def _wallet():
     return app
 
 
+def _open_addresses(app):
+    app._act("addresses")
+    app.render()
+    return app.render()
+
+
+def test_the_addresses_button_shows_loading_before_the_list():
+    app = _wallet()
+    app.render()
+    box = next(hit["box"] for hit in app.hits if hit["action"] == "addresses")
+    app._act("addresses")
+    assert app.screen == "wallet"
+    loading = app.render()
+    assert app.screen == "wallet"
+    assert not any(hit["action"] == "addresses" for hit in app.hits)
+    y = (box[1] + box[3]) // 2
+    assert any(
+        loading.getpixel((x, y))[:3] == (186, 190, 196) for x in range(box[0] + 8, box[2] - 8)
+    )
+    assert app.notice_delay() == 0
+    app.render()
+    assert app.screen == "addresses"
+
+
 def test_receive_is_selected_and_rows_do_not_wrap():
     app = _wallet()
-    app._act("addresses")
-    image = app.render()
+    image = _open_addresses(app)
     receive = next(hit for hit in app.hits if hit["action"] == "address-receive")
     change = next(hit for hit in app.hits if hit["action"] == "address-change")
     tools = next(hit for hit in app.hits if hit["action"] == "address-tools")
@@ -39,7 +62,7 @@ def test_receive_is_selected_and_rows_do_not_wrap():
     assert all("\n" not in hit["label"] for hit in rows)
     assert rows[-1]["box"][3] <= tools["box"][1]
     assert 0 in {index for branch, index in app._address_cache if branch == 0}
-    assert all(branch == 0 for branch, _index in app._address_cache)
+    assert 0 in {index for branch, index in app._address_cache if branch == 1}
 
 
 def _top_index(app):
@@ -203,10 +226,36 @@ def test_export_address_writes_the_address_to_the_card():
     assert app.notice == f"Saved {app.filename}."
 
 
+def test_switching_tabs_reuses_the_cached_screens():
+    app = _wallet()
+    receive = _open_addresses(app)
+    assert set(app._address_tops) == {0, 1}
+    calls = []
+    real = app.session.addresses
+
+    def wrapped(*args, **kwargs):
+        calls.append(args)
+        return real(*args, **kwargs)
+
+    app.session.addresses = wrapped
+    app._act("address-change")
+    change = app.render()
+    assert app.address_branch == 1
+    assert app.scroll["addresses"] == 0
+    assert calls == []
+    change_tab = next(hit for hit in app.hits if hit["action"] == "address-change")
+    assert change.getpixel((change_tab["box"][0] + 24, (change_tab["box"][1] + change_tab["box"][3]) // 2))[:3] == BLUE
+    again = app.render()
+    assert again.tobytes() == change.tobytes()
+    app._act("address-receive")
+    back = app.render()
+    assert calls == []
+    assert back.tobytes() == receive.tobytes()
+
+
 def test_an_address_row_opens_its_qr_and_its_path():
     app = _wallet()
-    app._act("addresses")
-    app.render()
+    _open_addresses(app)
     app._act("open-address-0")
     assert app.screen == "address"
     image = app.render()

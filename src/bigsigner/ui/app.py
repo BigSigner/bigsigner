@@ -346,6 +346,10 @@ class App:
         self.initial_wallet_descriptor = ""
         self.address_search_pending = None
         self.address_search_shown = False
+        self._addresses_loading = False
+        self._addresses_loading_shown = False
+        self._address_tops = {}
+        self._address_top_key = None
         self._address_cache = {}
         self._address_cache_key = None
         self._address_pages = []
@@ -453,6 +457,8 @@ class App:
             delays.append(max(0, self.qr_hint_until - time.monotonic()))
         if self.address_search_pending is not None and self.address_search_shown:
             delays.append(0.05)
+        if self._addresses_loading and self._addresses_loading_shown:
+            delays.append(0)
         if not delays:
             return None
         return min(delays)
@@ -478,6 +484,7 @@ class App:
         self._expire_notice()
         self._advance_boot()
         self._advance_address_search()
+        self._advance_addresses_open()
         frame = Frame()
         self._painters[self.screen](frame)
         if self.menu:
@@ -490,6 +497,8 @@ class App:
         self.texts = list(frame.marks)
         if self.address_search_pending is not None:
             self.address_search_shown = True
+        if self._addresses_loading:
+            self._addresses_loading_shown = True
         return frame.image
 
     def tap(self, x: int, y: int, camera: dict | None = None):
@@ -910,9 +919,26 @@ class App:
         self.screen_after_editor = "psbt"
 
     def _act_addresses(self):
+        """Show Loading… on the wallet. The next render does the heavy open."""
+        if self.screen != "wallet" or self.wallet_index >= len(self.session.wallets):
+            return
+        if self._addresses_loading:
+            return
+        self._addresses_loading = True
+        self._addresses_loading_shown = False
+
+    def _advance_addresses_open(self):
+        """The loading button is already on screen. Build both address tabs, then open them."""
+        if not self._addresses_loading or not self._addresses_loading_shown:
+            return
+        self._addresses_loading = False
+        self._addresses_loading_shown = False
+        if self.screen != "wallet" or self.wallet_index >= len(self.session.wallets):
+            return
         self.address_branch = 0
         self.scroll["addresses"] = 0
         self.go("addresses")
+        self._warm_address_tops()
 
     def _act_address_receive(self):
         if self.address_branch != 0:
@@ -2316,11 +2342,12 @@ class App:
 
     def _flow_button(
         self, frame: Frame, y: int, label: str, action: str, paint: bool, offset: int, hit_label: str = "",
+        enabled: bool = True,
     ) -> int:
         height = frame.button_height(label)
         top = y - offset
         if paint and top + height > HEADER and top < HEIGHT:
-            frame.button(top, label, action, label=hit_label)
+            frame.button(top, label, action, label=hit_label, enabled=enabled)
         return y + height + 12
 
     def _open_derive_menu(self):
@@ -3188,7 +3215,10 @@ class App:
                     y += field[3] - (y - offset) + 16
                 else:
                     y += 64 + 16
-        y = self._flow_button(frame, y, "Addresses", "addresses", paint, offset)
+        if self._addresses_loading:
+            y = self._flow_button(frame, y, "Loading\u2026", "addresses", paint, offset, enabled=False)
+        else:
+            y = self._flow_button(frame, y, "Addresses", "addresses", paint, offset)
         y = self._flow_button(frame, y, "Show Descriptor", "show-descriptor", paint, offset)
         y = self._flow_button(
             frame, y, "Export Descriptor\nto SD Card", "export-wallet", paint, offset, "Export Descriptor to SD Card",
@@ -3326,6 +3356,83 @@ class App:
     def _addresses(self, frame: Frame):
         if self._paint_address_scroll(frame):
             return
+        if self._use_address_top():
+            saved = self._address_top_for(self.address_branch)
+            if saved is not None:
+                self._apply_address_top(frame, saved)
+                return
+        self._paint_addresses(frame)
+        if self._use_address_top():
+            self._remember_address_top(frame)
+
+    def _use_address_top(self) -> bool:
+        return self._press is None and self.scroll.get("addresses", 0) == 0
+
+    def _address_top_for(self, branch: int):
+        if self.wallet_index >= len(self.session.wallets):
+            return None
+        if self._address_top_key != self._address_identity():
+            return None
+        return self._address_tops.get(branch)
+
+    def _remember_address_top(self, frame: Frame) -> None:
+        if self.wallet_index >= len(self.session.wallets):
+            return
+        identity = self._address_identity()
+        if identity != self._address_top_key:
+            self._address_tops = {}
+            self._address_top_key = identity
+        self._address_tops[self.address_branch] = {
+            "image": frame.image.copy(),
+            "hits": [dict(hit) for hit in frame.hits],
+            "marks": [dict(mark) for mark in frame.marks],
+            "pages": list(self._address_pages),
+            "page_key": self._address_page_key,
+            "view_h": self._address_view_h,
+            "chrome": self._address_chrome,
+            "frame": None if self._address_frame is None else self._address_frame.copy(),
+            "fixed_hits": [dict(hit) for hit in self._address_fixed_hits],
+            "still": list(self._address_still),
+            "list_band": self._address_list_band,
+            "scroll_max": self.scroll_max.get("addresses", 0),
+        }
+
+    def _apply_address_top(self, frame: Frame, saved: dict) -> None:
+        frame.image = saved["image"].copy()
+        frame.draw = ImageDraw.Draw(frame.image)
+        frame.hits = [dict(hit) for hit in saved["hits"]]
+        frame.marks = [dict(mark) for mark in saved["marks"]]
+        self._address_pages = list(saved["pages"])
+        self._address_page_key = saved["page_key"]
+        self._address_view_h = saved["view_h"]
+        self._address_chrome = saved["chrome"]
+        self._address_frame = None if saved["frame"] is None else saved["frame"].copy()
+        self._address_fixed_hits = [dict(hit) for hit in saved["fixed_hits"]]
+        self._address_still = list(saved["still"])
+        self._still_boxes = list(saved["still"])
+        self._address_list_band = saved["list_band"]
+        self.scroll["addresses"] = 0
+        self.scroll_max["addresses"] = saved["scroll_max"]
+
+    def _warm_address_tops(self) -> None:
+        """Paint Receive and Change at the top and keep both bitmaps."""
+        if self.wallet_index >= len(self.session.wallets):
+            return
+        identity = self._address_identity()
+        if self._address_top_key == identity and 0 in self._address_tops and 1 in self._address_tops:
+            return
+        self._address_tops = {}
+        self._address_top_key = identity
+        for branch in (0, 1):
+            self.address_branch = branch
+            self.scroll["addresses"] = 0
+            frame = Frame()
+            self._paint_addresses(frame)
+            self._remember_address_top(frame)
+        self.address_branch = 0
+        self.scroll["addresses"] = 0
+
+    def _paint_addresses(self, frame: Frame):
         frame.header("Addresses", "back")
         if self.wallet_index >= len(self.session.wallets):
             frame.text("This wallet is no longer loaded.", MARGIN, HEADER + 24, size=TITLE_SIZE)
@@ -3483,7 +3590,7 @@ class App:
         self._address_cache = {
             item: value
             for item, value in self._address_cache.items()
-            if item[0] == branch and start <= item[1] < end
+            if item[0] != branch or start <= item[1] < end
         }
         missing = [index for index in range(start, end) if (branch, index) not in self._address_cache]
         if not missing:

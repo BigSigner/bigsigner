@@ -402,6 +402,7 @@ def test_main_screens_save_screenshots():
     record.click(app, "derive-wallet")
     record.shot(app, "wallet")
     record.click(app, "Addresses")
+    record.shot(app, "addresses-loading")
     record.shot(app, "addresses")
     record.click(app, "back")
     record.click(app, "Show Descriptor")
@@ -815,6 +816,8 @@ def test_leaving_a_singlesig_wallet_forgets_the_account_change():
     app._act(f"account-inc-{fingerprint.hex()}")
     assert app.session.wallets[0].accounts[fingerprint] == 1
     app._act("addresses")
+    app.render()
+    app.render()
     app._act("back")
     assert app.screen == "wallet"
     assert app.session.wallets[0].accounts[fingerprint] == 1
