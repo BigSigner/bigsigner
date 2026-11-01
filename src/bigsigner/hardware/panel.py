@@ -95,8 +95,8 @@ def run_panel():
     def wait():
         # Keep painting while the viewfinder shows a live picture. A camera that
         # could not open has nothing new to show, so wait for a touch instead.
-        # A finger that is down is polled, so a long hold can become a scroll
-        # and a pause in the reports can end a click.
+        # A finger that is down is polled, so a long hold can become a scroll.
+        # The gesture ends when the lift event arrives.
         delays = []
         if pending:
             delays.append(DRAG_INTERVAL)

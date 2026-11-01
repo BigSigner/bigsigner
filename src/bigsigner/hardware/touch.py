@@ -18,6 +18,12 @@ EVENT_SIZE = struct.calcsize(EVENT_FORMAT)
 EVIOCGABS = lambda axis: 0x80184540 + axis
 # Half of a seed-keyboard key. Drift inside this stays on the key that was pressed.
 _HOLD = 21
+# A gap longer than this between reports drops a gesture that never lifted.
+_STALE = 0.4
+LIFTED = 0
+DETECTING = 1
+DETECTED = 2
+MOVING = 3
 
 
 def find_touch():
@@ -47,41 +53,44 @@ def scale(value, low, high, pixels):
 
 
 class _Contact:
-    """Coordinates for one finger, across the events in a report.
-
-    The ADS7846 sends X and Y before BTN_TOUCH. Those coordinates belong to the press.
-    """
+    """One finger. The button arrives first, then X and Y, until the lift."""
 
     def __init__(self, width, height, x_range, y_range):
         self.width = width
         self.height = height
         self.x_range = x_range
         self.y_range = y_range
-        self.raw = [None, None]
-        self.touching = False
-        self.sent_down = False
-        self.left_hold = False
+        self._stamp = None
         self.anchor = (0, 0)
         self.last = (0, 0)
+        self._reset()
+
+    def _reset(self) -> None:
+        self.touching = LIFTED
+        self.raw = [None, None]
 
     def feed(self, packet: bytes) -> list[tuple]:
         actions = []
         for offset in range(0, len(packet) - EVENT_SIZE + 1, EVENT_SIZE):
-            _sec, _usec, ev_type, code, value = struct.unpack_from(EVENT_FORMAT, packet, offset)
+            sec, usec, ev_type, code, value = struct.unpack_from(EVENT_FORMAT, packet, offset)
+            lift = ev_type == EV_KEY and code == BTN_TOUCH and not value
+            # A still finger sends nothing until the lift. That lift still belongs
+            # to the gesture, even when more than 400ms has passed.
+            if self._gap(sec, usec) and not lift:
+                self._reset()
+            self._stamp = (sec, usec)
             if ev_type == EV_KEY and code == BTN_TOUCH:
                 if value:
-                    self.touching = True
-                    self._press(actions)
-                elif self.sent_down:
-                    point = self.anchor if not self.left_hold else self.last
-                    actions.append(("up", point[0], point[1]))
-                    self.touching = False
-                    self.sent_down = False
-                    self.left_hold = False
+                    self.touching = DETECTING
+                    self.raw = [None, None]
                 else:
-                    self.touching = False
+                    if self.touching in (DETECTED, MOVING):
+                        actions.append(("up", self.last[0], self.last[1]))
+                    self._reset()
                 continue
             if ev_type != EV_ABS:
+                continue
+            if self.touching == LIFTED:
                 continue
             if code == ABS_X:
                 self.raw[0] = value
@@ -89,33 +98,39 @@ class _Contact:
                 self.raw[1] = value
             else:
                 continue
-            if self.touching:
-                self._press(actions)
+            if self.raw[0] is None or self.raw[1] is None:
+                continue
+            self._sample(actions)
         return actions
 
-    def _press(self, actions: list):
-        if self.raw[0] is None or self.raw[1] is None:
-            return
+    def _sample(self, actions: list) -> None:
         self.last = (
             scale(self.raw[0], self.x_range[0], self.x_range[1], self.width),
             scale(self.raw[1], self.y_range[0], self.y_range[1], self.height),
         )
         self.raw = [None, None]
-        if not self.sent_down:
-            self.anchor = self.last
-            self.sent_down = True
-            self.left_hold = False
+        if self.touching == DETECTING:
             actions.append(("down", self.last[0], self.last[1]))
+            self.anchor = self.last
+            self.touching = DETECTED
             return
-        # Jitter around the press is not a move. After the finger leaves that
-        # box, later points are reported even when it comes back.
-        if not self.left_hold and self._near(self.last):
+        if self.touching == DETECTED and self._far(self.last):
+            self.touching = MOVING
+            actions.append(("move", self.last[0], self.last[1]))
             return
-        self.left_hold = True
-        actions.append(("move", self.last[0], self.last[1]))
+        if self.touching == MOVING:
+            actions.append(("move", self.last[0], self.last[1]))
 
-    def _near(self, point: tuple[int, int]) -> bool:
-        return abs(point[0] - self.anchor[0]) < _HOLD and abs(point[1] - self.anchor[1]) < _HOLD
+    def _far(self, point: tuple[int, int]) -> bool:
+        return abs(point[0] - self.anchor[0]) > _HOLD or abs(point[1] - self.anchor[1]) > _HOLD
+
+    def _gap(self, sec: int, usec: int) -> bool:
+        """Seconds and microseconds are one clock. The microseconds field wraps each second."""
+        if self._stamp is None:
+            return False
+        prev_sec, prev_usec = self._stamp
+        elapsed = (sec - prev_sec) + (usec - prev_usec) / 1_000_000
+        return elapsed > _STALE
 
 
 def coalesce(actions: list[tuple]) -> list[tuple]:
@@ -210,7 +225,7 @@ def read_points(handle, width, height, x_range, y_range, wait=None, inject=None,
         if not ready:
             # The pen is still down and the controller has gone quiet. Keep the
             # gesture alive so a long hold is not mistaken for the end of a tap.
-            if contact is not None and contact.touching and contact.sent_down:
+            if contact is not None and contact.touching != LIFTED and contact.last is not None:
                 yield ("hold", contact.last[0], contact.last[1])
             else:
                 yield None

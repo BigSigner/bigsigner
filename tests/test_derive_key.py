@@ -193,7 +193,7 @@ def test_a_drag_on_the_account_number_scrolls_the_page():
     assert app.scroll["derive"] == 80
 
 
-def test_a_long_hold_on_the_account_number_does_not_open_it():
+def test_a_long_hold_on_the_account_number_opens_it():
     app, _fingerprint = _seed_app()
     app._act("derive-native")
     app.render()
@@ -203,11 +203,10 @@ def test_a_long_hold_on_the_account_number_does_not_open_it():
     app.pointer_down(x, y)
     app._press_at -= 1
     app.pointer_up(x, y)
-    assert app.screen == "derive"
-    assert app.derive_account == 0
+    assert app.screen == "account"
 
 
-def test_a_quiet_press_on_the_account_number_opens_it():
+def test_a_lift_on_the_account_number_opens_it():
     app, _fingerprint = _seed_app()
     app._act("derive-native")
     app.render()
@@ -215,8 +214,7 @@ def test_a_quiet_press_on_the_account_number_opens_it():
     x = (box[0] + box[2]) // 2
     y = (box[1] + box[3]) // 2
     app.pointer_down(x, y)
-    app._press_last -= 1
-    assert app.pointer_idle()
+    app.pointer_up(x, y)
     assert app.screen == "account"
 
 

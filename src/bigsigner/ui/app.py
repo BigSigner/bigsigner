@@ -88,10 +88,12 @@ SEED_CARD_FONT = 36
 XPUB_ACCOUNT_PREVIEW = 20
 # External Key screen. Nineteen letters and the ellipsis fit on one centered line.
 XPUB_KEY_PREVIEW = 19
-# One address row. The list derives a window around the scroll position and drops the rest.
+# One address row. The list keeps three cached blocks of 3*K cards.
 ADDRESS_ROW = 64
 ADDRESS_GAP = 8
-ADDRESS_AHEAD = 12
+# Cards in one scroll window, rounded up. A cached image holds 3*K cards
+# and starts on a multiple of K, such as 0–24, 8–32, or 16–40.
+ADDRESS_WINDOW = 8
 ADDRESS_QR = 400
 # 25 monospace characters at this size stay inside the page margins.
 ADDRESS_PATH_SIZE = 28
@@ -190,19 +192,15 @@ def _draw_name_block(frame: Frame, y: int, lines: list[str], size: int, icon: st
 BOOT_HOLD = 1.0
 NOTICE_HOLD = 4.0
 QR_HINT_HOLD = 2.0
-# A click is a short press that stays inside this box. Either edge is enough
+# A click is a press that never becomes a move. Either edge is enough
 # to make it a scroll, as LVGL's scroll limit does, so there is no radius.
 # Once the finger has left the box it stays a scroll, including a fast flick
-# that comes back. A finger that stays down this long is a scroll as well.
+# that comes back.
 SCROLL_DELTA_X = 24
 SCROLL_DELTA_Y = 24
 # This panel reports a press above the finger. A dropdown sits against the
 # title bar, so the missed press lands on the title unless the target reaches up.
 DROPDOWN_RAISE = 48
-SCROLL_HOLD = 0.4
-# Touch reports that stop for this long end the gesture. A short one inside
-# the box is a click.
-SCROLL_GAP = 0.08
 SEED_FORMATS = ("words", "compact", "text")
 SEED_FORMAT_NAMES = ("Words", "Compact SeedQR", "Text QR")
 DESCRIPTOR_FORMATS = ("ur", "plain")
@@ -348,6 +346,14 @@ class App:
         self.address_search_shown = False
         self._address_cache = {}
         self._address_cache_key = None
+        self._address_pages = []
+        self._address_page_key = None
+        self._address_view_h = 0
+        self._address_chrome = None
+        self._address_frame = None
+        self._address_fixed_hits = []
+        self._address_still = []
+        self._address_list_band = (0, 0)
         self.qr_source = "stored"
         self.descriptor_choice = None
         self.descriptor_key_index = 0
@@ -377,6 +383,7 @@ class App:
         self._press = None
         self._press_at = 0.0
         self._press_last = 0.0
+        self._ignore_lift = False
 
     def set_notice(self, message: str):
         self.notice = message or ""
@@ -510,6 +517,7 @@ class App:
         else:
             panel = ""
         self._press = (x, y, self.scroll.get(self.screen, 0), False, panel)
+        self._ignore_lift = False
         now = time.monotonic()
         self._press_at = now
         self._press_last = now
@@ -547,8 +555,6 @@ class App:
     def _move_hscroll(self, dx: int, dy: int, dragging: bool, origin_x: int, origin_y: int, panel: str) -> bool:
         """Drag a wide text field sideways. A short press still moves the cursor."""
         if not dragging and abs(dx) <= SCROLL_DELTA_X and abs(dy) <= SCROLL_DELTA_Y:
-            if time.monotonic() - self._press_at >= SCROLL_HOLD:
-                self._press = (origin_x, origin_y, 0, True, panel)
             return False
         if abs(dx) <= abs(dy):
             self._press = (origin_x, origin_y, 0, True, panel)
@@ -583,8 +589,6 @@ class App:
         if panel == "hfield":
             return self._move_hscroll(dx, dy, dragging, origin_x, origin_y, panel)
         if not dragging and abs(dx) <= SCROLL_DELTA_X and abs(dy) <= SCROLL_DELTA_Y:
-            if time.monotonic() - self._press_at >= SCROLL_HOLD:
-                self._press = (origin_x, origin_y, origin_scroll, True, panel)
             return False
         if not dragging:
             dragging = True
@@ -617,6 +621,10 @@ class App:
         if limit <= 0:
             return False
         offset = max(0, min(limit, origin_scroll - dy))
+        if self.screen == "addresses":
+            # Y changes by this finger movement only. The next movement is measured from here.
+            offset = self._address_scroll_to(offset)
+            self._press = (x, y, offset, True, panel)
         if offset == self.scroll.get(self.screen, 0):
             return False
         self.scroll[self.screen] = offset
@@ -627,31 +635,40 @@ class App:
         self._press = None
         self._seed_title_hold = None
         if press is None:
+            if self._ignore_lift:
+                self._ignore_lift = False
+                return
             self.tap(x, y, camera)
             return
+        self._ignore_lift = False
         if self._press_is_click(press):
             self.tap(press[0], press[1], camera)
 
     def pointer_idle(self) -> bool:
-        """The reports stopped. A short press inside the box is a click."""
-        press = self._press
-        if press is None or time.monotonic() - self._press_last < SCROLL_GAP:
-            return False
-        self._press = None
-        self._seed_title_hold = None
-        if not self._press_is_click(press):
-            return False
-        self.tap(press[0], press[1])
-        return True
+        """A pause is not a lift. The gesture ends when the finger lifts."""
+        return False
 
     def _press_is_click(self, press) -> bool:
         if self.keyboard_top is not None and press[1] >= self.keyboard_top:
             return True
         if self._in_still_box(press[0], press[1]):
             return True
-        if press[3]:
+        # A scrollable area clicks only when the finger never moved.
+        if press[3] and self._press_scrolls(press):
             return False
-        return time.monotonic() - self._press_at < SCROLL_HOLD
+        return True
+
+    def _press_scrolls(self, press) -> bool:
+        panel = press[4]
+        if panel == "seed":
+            return self.seed_grid_max > 0
+        if panel == "qr":
+            return self.qr_scroll_max > 0
+        if panel == "entropy":
+            return self.entropy_scroll_max > 0
+        if panel == "hfield":
+            return self.hscroll_max > 0
+        return self.scroll_max.get(self.screen, 0) > 0
 
     def _in_still_box(self, x: int, y: int) -> bool:
         for left, top, right, bottom in self._still_boxes:
@@ -699,58 +716,356 @@ class App:
         self.add_menu = False
         self.open_dropdown = None
 
-    def _act(self, action: str):
-        if action == "boot":
-            self._leave_boot()
-        elif action == "warning-ok":
-            self.screen = "keys"
-            self.menu = True
-        elif action == "menu":
-            self.menu = not self.menu
-            self.add_menu = False
-        elif action == "close-menu":
-            self.menu = False
-        elif action == "toggle-add":
-            self.add_menu = not self.add_menu
-            self.menu = False
-        elif action == "close-add":
-            self.add_menu = False
-        elif action == "add-manual":
-            self.add_menu = False
-            self.seed_words = []
+    def _act_warning_ok(self):
+        self.screen = "keys"
+        self.menu = True
+
+    def _act_menu(self):
+        self.menu = not self.menu
+        self.add_menu = False
+
+    def _act_close_menu(self):
+        self.menu = False
+
+    def _act_toggle_add(self):
+        self.add_menu = not self.add_menu
+        self.menu = False
+
+    def _act_close_add(self):
+        self.add_menu = False
+
+    def _act_add_manual(self):
+        self.add_menu = False
+        self.seed_words = []
+        self.word_prefix = ""
+        self.word_cursor = 0
+        self.seed_length = 24
+        self.seed_grid_stick = True
+        self.go("seed")
+
+    def _act_add_scan(self):
+        self.add_menu = False
+        self.scan_kind = "key"
+        self.go("scan")
+
+    def _act_wallet_scan(self):
+        self.add_menu = False
+        self.scan_kind = "descriptor"
+        self.go("scan")
+
+    def _act_wallet_singlesig(self):
+        self.add_menu = False
+        self.singlesig_role = SINGLESIG_NATIVE
+        self.singlesig_selected = None
+        self.open_dropdown = None
+        self.scroll["singlesig"] = 0
+        self.go("singlesig")
+
+    def _act_wallet_multisig(self):
+        self.add_menu = False
+        self.multisig_m = 2
+        self.multisig_selected = set()
+        self.open_dropdown = None
+        self.go("multisig")
+
+    def _act_sd_up(self):
+        self.sd_dir = parent_path(self.sd_dir)
+        self.scroll["sd"] = 0
+
+    def _act_dropdown_close(self):
+        self.open_dropdown = None
+
+    def _act_add_generate(self):
+        self.add_menu = False
+        self.entropy_words = 24
+        self.entropy_digits = ""
+        self.pending_mnemonic = ""
+        self.open_dropdown = None
+        self.go("generate")
+
+    def _act_gen_dice(self):
+        self.entropy_digits = ""
+        self.entropy_scroll = 0
+        self.entropy_scroll_stick = True
+        self.go("dice")
+
+    def _act_gen_coins(self):
+        self.entropy_digits = ""
+        self.entropy_scroll = 0
+        self.entropy_scroll_stick = True
+        self.go("coins")
+
+    def _act_gen_camera(self):
+        self.camera_frames = []
+        self.camera_final = b""
+        self.go("camera")
+
+    def _act_entropy_undo(self):
+        self.entropy_digits = self.entropy_digits[:-1]
+        if self.screen in ("dice", "coins"):
+            self.entropy_scroll_stick = True
+
+    def _act_open_licenses(self):
+        self.scroll["licenses"] = 0
+        self.go("licenses")
+
+    def _act_load_error_ok(self):
+        home = self.load_error_home if self.load_error_home in ("keys", "wallets") else "keys"
+        self.load_error = ""
+        self.screen = home
+        self.back = []
+        self.menu = False
+        self.add_menu = False
+
+    def _act_external_next(self):
+        if self.pending_external is None:
+            return
+        self.open_dropdown = None
+        self.scroll["external-details"] = 0
+        self.go("external-details")
+
+    def _act_external_continue(self):
+        if self.wallet_plan is not None:
+            self._advance_wallet_import()
+        else:
+            self._commit_external_key()
+
+    def _act_add_seed(self):
+        self.seed_words = []
+        self.word_prefix = ""
+        self.word_cursor = 0
+        self.seed_length = 24
+        self.seed_grid_stick = True
+        self.go("seed")
+
+    def _act_add_text(self):
+        self.draft = ""
+        self.go("editor")
+
+    def _act_seed_undo(self):
+        if self.word_cursor > 0:
+            self._seed_key("backspace")
+        elif self.seed_words:
+            self.seed_words.pop()
             self.word_prefix = ""
             self.word_cursor = 0
-            self.seed_length = 24
-            self.seed_grid_stick = True
-            self.go("seed")
-        elif action == "add-scan":
-            self.add_menu = False
-            self.scan_kind = "key"
-            self.go("scan")
-        elif action == "wallet-scan":
-            self.add_menu = False
-            self.scan_kind = "descriptor"
-            self.go("scan")
-        elif action == "wallet-sd":
-            self._open_sd("descriptor")
-        elif action == "wallet-singlesig":
-            self.add_menu = False
-            self.singlesig_role = SINGLESIG_NATIVE
-            self.singlesig_selected = None
+
+    def _act_passphrase_yes(self):
+        self.passphrase_text = ""
+        self.passphrase_cursor = 0
+        self.passphrase_mode = "lower"
+        self.go("passphrase")
+
+    def _act_passphrase_save(self):
+        secret = self.passphrase_text
+        self._save_entered_seed(None if secret == "" else secret)
+
+    def _act_descriptor_both(self):
+        choice = self.descriptor_choice
+        if choice:
             self.open_dropdown = None
-            self.scroll["singlesig"] = 0
-            self.go("singlesig")
-        elif action == "wallet-multisig":
-            self.add_menu = False
-            self.multisig_m = 2
-            self.multisig_selected = set()
-            self.open_dropdown = None
-            self.go("multisig")
-        elif action.startswith("pick-ss-"):
+            self._start_wallet_import(choice["text"])
+
+    def _act_confirm_stay(self):
+        return
+
+    def _act_show_seed(self):
+        self.confirm = "show-seed"
+
+    def _act_show_passphrase(self):
+        self.confirm = "show-passphrase"
+
+    def _act_confirm_no(self):
+        self.confirm = None
+
+    def _act_delete_key(self):
+        self.confirm = "delete-key"
+
+    def _act_delete_wallet(self):
+        self.confirm = "delete-wallet"
+
+    def _act_toggle_slip(self):
+        self.slip_labels = not self.slip_labels
+
+    def _act_zoom_close(self):
+        self.qr_zoom = None
+
+    def _act_brightness_down(self):
+        self.qr_brightness = max(0, self.qr_brightness - 1)
+
+    def _act_brightness_up(self):
+        self.qr_brightness = min(QR_BRIGHTNESS_MAX, self.qr_brightness + 1)
+
+    def _act_review_sample(self):
+        self.set_notice("Load a PSBT from the editor.")
+        self.draft = ""
+        self.go("editor")
+        self.screen_after_editor = "psbt"
+
+    def _act_addresses(self):
+        self.address_branch = 0
+        self.scroll["addresses"] = 0
+        self.go("addresses")
+
+    def _act_address_receive(self):
+        if self.address_branch != 0:
+            self.address_branch = 0
+            self.scroll["addresses"] = 0
+
+    def _act_address_change(self):
+        if self.address_branch != 1:
+            self.address_branch = 1
+            self.scroll["addresses"] = 0
+
+    def _act_address_find(self):
+        self.address_find_branch = 0
+        self.address_find_index = 0
+        self.go("address-find")
+
+    def _act_address_find_receive(self):
+        self.address_find_branch = 0
+
+    def _act_address_find_change(self):
+        self.address_find_branch = 1
+
+    def _act_address_find_dec(self):
+        if self.address_find_index > 0:
+            self.address_find_index -= 1
+
+    def _act_address_find_inc(self):
+        if self.address_find_index < 0x7FFFFFFF:
+            self.address_find_index += 1
+
+    def _act_address_find_show(self):
+        self.address_branch = self.address_find_branch
+        self.address_index = self.address_find_index
+        self.scroll["address"] = 0
+        self.go("address")
+
+    def _act_address_type(self):
+        self.address_text = ""
+        self.address_cursor = 0
+        self.passphrase_mode = "lower"
+        self.hscroll = 0
+        self.go("address-type")
+
+    def _act_address_scan(self):
+        self.scan_kind = "address"
+        self.qr_sequence.reset()
+        self.go("scan")
+
+    _EXACT_ACTIONS = {
+        "boot": lambda self: self._leave_boot(),
+        "warning-ok": _act_warning_ok,
+        "menu": _act_menu,
+        "close-menu": _act_close_menu,
+        "toggle-add": _act_toggle_add,
+        "close-add": _act_close_add,
+        "add-manual": _act_add_manual,
+        "add-scan": _act_add_scan,
+        "wallet-scan": _act_wallet_scan,
+        "wallet-sd": lambda self: self._open_sd("descriptor"),
+        "wallet-singlesig": _act_wallet_singlesig,
+        "wallet-multisig": _act_wallet_multisig,
+        "ss-create": lambda self: self._create_selected_singlesig(),
+        "ms-create": lambda self: self._create_selected_multisig(),
+        "add-sd": lambda self: self._open_sd("key"),
+        "sd-up": _act_sd_up,
+        "export-address": lambda self: self._open_address_export(),
+        "export-seed": lambda self: self._open_seed_export(),
+        "seed-backup-continue": lambda self: self._continue_seed_export(),
+        "export-key": lambda self: self._open_export("stored"),
+        "export-derived": lambda self: self._open_export("derive"),
+        "export-wallet": lambda self: self._open_wallet_export(),
+        "export-new": lambda self: self._open_export_name(),
+        "export-save-new": lambda self: self._save_new_export_file(),
+        "account-save": lambda self: self._save_account(),
+        "add-generate": _act_add_generate,
+        "dropdown-close": _act_dropdown_close,
+        "gen-dice": _act_gen_dice,
+        "gen-coins": _act_gen_coins,
+        "gen-camera": _act_gen_camera,
+        "entropy-undo": _act_entropy_undo,
+        "camera-capture": lambda self: self._capture_camera(),
+        "entropy-save": lambda self: self._save_pending_mnemonic(),
+        "open-licenses": _act_open_licenses,
+        "load-error-ok": _act_load_error_ok,
+        "external-known": lambda self: self._continue_loaded_multisig(),
+        "external-next": _act_external_next,
+        "external-continue": _act_external_continue,
+        "wallet-import-continue": lambda self: self._finish_wallet_import(),
+        "back": lambda self: self.back_one(),
+        "add-seed": _act_add_seed,
+        "add-text": _act_add_text,
+        "seed-undo": _act_seed_undo,
+        "save-text": lambda self: self._save_text(),
+        "derive-menu": lambda self: self._open_derive_menu(),
+        "derive-bip85": lambda self: self._open_bip85(),
+        "bip85-dec": lambda self: self._step_bip85_index(-1),
+        "bip85-inc": lambda self: self._step_bip85_index(1),
+        "bip85-edit": lambda self: self._edit_bip85_index(),
+        "bip85-derive": lambda self: self._add_bip85_child(),
+        "derive-native": lambda self: self._open_derive(SINGLESIG_NATIVE),
+        "derive-multisig": lambda self: self._open_derive(MULTISIG_NATIVE),
+        "derive-taproot": lambda self: self._open_derive(SINGLESIG_TAPROOT),
+        "derive-dec": lambda self: self._step_derive_account(-1),
+        "derive-inc": lambda self: self._step_derive_account(1),
+        "derive-edit": lambda self: self._edit_derive_account(),
+        "derive-wallet": lambda self: self._make_derived_wallet(),
+        "derive-details": lambda self: self._open_derived_details(),
+        "make-xpub-wallet": lambda self: self._make_xpub_wallet(),
+        "show-seed": _act_show_seed,
+        "show-passphrase": _act_show_passphrase,
+        "copy-passphrase": lambda self: self._start_passphrase_copy(),
+        "seed-continue": lambda self: self.go("passphrase-ask"),
+        "passphrase-no": lambda self: self._save_entered_seed(None),
+        "passphrase-yes": _act_passphrase_yes,
+        "passphrase-save": _act_passphrase_save,
+        "confirm-yes": lambda self: self._confirm_yes(),
+        "confirm-no": _act_confirm_no,
+        "descriptor-both": _act_descriptor_both,
+        "descriptor-key": lambda self: self._load_chosen_descriptor_key(),
+        "confirm-stay": _act_confirm_stay,
+        "delete-key": _act_delete_key,
+        "delete-wallet": _act_delete_wallet,
+        "toggle-slip": _act_toggle_slip,
+        "show-qr": lambda self: self._show_qr(),
+        "show-descriptor": lambda self: self._open_descriptor_qr(),
+        "seed-format-next": lambda self: self._step_seed_format(1),
+        "seed-format-prev": lambda self: self._step_seed_format(-1),
+        "qr-form-next": lambda self: self._step_qr_format(1),
+        "qr-form-prev": lambda self: self._step_qr_format(-1),
+        "zoom-close": _act_zoom_close,
+        "brightness-down": _act_brightness_down,
+        "brightness-up": _act_brightness_up,
+        "review-sample": _act_review_sample,
+        "addresses": _act_addresses,
+        "address-receive": _act_address_receive,
+        "address-change": _act_address_change,
+        "address-tools": lambda self: self.go("address-tools"),
+        "address-find": _act_address_find,
+        "address-find-receive": _act_address_find_receive,
+        "address-find-change": _act_address_find_change,
+        "address-find-dec": _act_address_find_dec,
+        "address-find-inc": _act_address_find_inc,
+        "address-find-edit": lambda self: self._edit_address_index(),
+        "address-find-show": _act_address_find_show,
+        "address-verify": lambda self: self.go("address-verify"),
+        "address-type": _act_address_type,
+        "address-scan": _act_address_scan,
+        "address-sd": lambda self: self._open_sd("address"),
+        "address-verify-text": lambda self: self._verify_entered_address(self.address_text),
+        "address-go": lambda self: self._open_found_address(),
+    }
+
+    def _act(self, action: str):
+        handler = self._EXACT_ACTIONS.get(action)
+        if handler is not None:
+            handler(self)
+            return
+        if action.startswith("pick-ss-"):
             fingerprint = bytes.fromhex(action[len("pick-ss-") :])
             self.singlesig_selected = None if fingerprint == self.singlesig_selected else fingerprint
-        elif action == "ss-create":
-            self._create_selected_singlesig()
         elif action.startswith("toggle-ms-"):
             fingerprint = bytes.fromhex(action[len("toggle-ms-") :])
             if fingerprint in self.multisig_selected:
@@ -758,13 +1073,6 @@ class App:
             else:
                 self.multisig_selected.add(fingerprint)
             self._clamp_multisig_threshold()
-        elif action == "ms-create":
-            self._create_selected_multisig()
-        elif action == "add-sd":
-            self._open_sd("key")
-        elif action == "sd-up":
-            self.sd_dir = parent_path(self.sd_dir)
-            self.scroll["sd"] = 0
         elif action.startswith("sd-into:"):
             self.sd_dir = action[len("sd-into:") :]
             self.scroll["sd"] = 0
@@ -772,24 +1080,8 @@ class App:
             self._read_sd_file(action[len("sd-read:") :])
         elif action.startswith("sd-write:"):
             self._choose_export_file(action[len("sd-write:") :])
-        elif action == "export-address":
-            self._open_address_export()
-        elif action == "export-seed":
-            self._open_seed_export()
-        elif action == "seed-backup-continue":
-            self._continue_seed_export()
-        elif action == "export-key":
-            self._open_export("stored")
-        elif action == "export-derived":
-            self._open_export("derive")
-        elif action == "export-wallet":
-            self._open_wallet_export()
         elif action.startswith("export-format-"):
             self._choose_export_format(int(action[len("export-format-") :]))
-        elif action == "export-new":
-            self._open_export_name()
-        elif action == "export-save-new":
-            self._save_new_export_file()
         elif action.startswith("account-dec-"):
             self._step_account(bytes.fromhex(action[len("account-dec-") :]), -1)
         elif action.startswith("account-inc-"):
@@ -798,17 +1090,6 @@ class App:
             self._edit_account(bytes.fromhex(action[len("account-edit-") :]))
         elif action.startswith("account-key-"):
             self._type_account(action[len("account-key-") :])
-        elif action == "account-save":
-            self._save_account()
-        elif action == "add-generate":
-            self.add_menu = False
-            self.entropy_words = 24
-            self.entropy_digits = ""
-            self.pending_mnemonic = ""
-            self.open_dropdown = None
-            self.go("generate")
-        elif action == "dropdown-close":
-            self.open_dropdown = None
         elif action.startswith("dropdown-pick-"):
             name, key = action[len("dropdown-pick-") :].rpartition("-")[::2]
             if name == "entropy-words":
@@ -835,65 +1116,16 @@ class App:
         elif action.startswith("dropdown-"):
             name = action[len("dropdown-") :]
             self.open_dropdown = None if self.open_dropdown == name else name
-        elif action == "gen-dice":
-            self.entropy_digits = ""
-            self.entropy_scroll = 0
-            self.entropy_scroll_stick = True
-            self.go("dice")
-        elif action == "gen-coins":
-            self.entropy_digits = ""
-            self.entropy_scroll = 0
-            self.entropy_scroll_stick = True
-            self.go("coins")
-        elif action == "gen-camera":
-            self.camera_frames = []
-            self.camera_final = b""
-            self.go("camera")
         elif action.startswith("die-") and action[4:].isdigit():
             self.entropy_scroll_stick = True
             self._push_entropy(action[4:], "123456")
         elif action.startswith("coin-"):
             self.entropy_scroll_stick = True
             self._push_entropy(action[5:], "01")
-        elif action == "entropy-undo":
-            self.entropy_digits = self.entropy_digits[:-1]
-            if self.screen in ("dice", "coins"):
-                self.entropy_scroll_stick = True
-        elif action == "camera-capture":
-            self._capture_camera()
-        elif action == "entropy-save":
-            self._save_pending_mnemonic()
-        elif action == "open-licenses":
-            self.scroll["licenses"] = 0
-            self.go("licenses")
         elif action.startswith("open-license-"):
             self.license_index = int(action[len("open-license-") :])
             self.scroll["license"] = 0
             self.go("license")
-        elif action == "load-error-ok":
-            home = self.load_error_home if self.load_error_home in ("keys", "wallets") else "keys"
-            self.load_error = ""
-            self.screen = home
-            self.back = []
-            self.menu = False
-            self.add_menu = False
-        elif action == "external-known":
-            self._continue_loaded_multisig()
-        elif action == "external-next":
-            if self.pending_external is None:
-                return
-            self.open_dropdown = None
-            self.scroll["external-details"] = 0
-            self.go("external-details")
-        elif action == "external-continue":
-            if self.wallet_plan is not None:
-                self._advance_wallet_import()
-            else:
-                self._commit_external_key()
-        elif action == "wallet-import-continue":
-            self._finish_wallet_import()
-        elif action == "back":
-            self.back_one()
         elif action.startswith("nav-"):
             if self.screen == "wallet":
                 self._restore_wallet_accounts()
@@ -901,16 +1133,6 @@ class App:
             self.back = []
             self.menu = False
             self.add_menu = False
-        elif action == "add-seed":
-            self.seed_words = []
-            self.word_prefix = ""
-            self.word_cursor = 0
-            self.seed_length = 24
-            self.seed_grid_stick = True
-            self.go("seed")
-        elif action == "add-text":
-            self.draft = ""
-            self.go("editor")
         elif action.startswith("len-"):
             self._set_seed_length(int(action[4:]))
         elif action.startswith("pick-"):
@@ -919,15 +1141,6 @@ class App:
             self._seed_key(action[4:])
         elif action.startswith("cursor-"):
             self.word_cursor = max(0, min(len(self.word_prefix), int(action[7:])))
-        elif action == "seed-undo":
-            if self.word_cursor > 0:
-                self._seed_key("backspace")
-            elif self.seed_words:
-                self.seed_words.pop()
-                self.word_prefix = ""
-                self.word_cursor = 0
-        elif action == "save-text":
-            self._save_text()
         elif action.startswith("open-fp-"):
             rest = action[len("open-fp-") :]
             hex_fp, separator, index_text = rest.partition("-")
@@ -942,54 +1155,6 @@ class App:
             self.scroll["wallet"] = 0
             self._remember_wallet_accounts()
             self.go("wallet")
-        elif action == "derive-menu":
-            self._open_derive_menu()
-        elif action == "derive-bip85":
-            self._open_bip85()
-        elif action == "bip85-dec":
-            self._step_bip85_index(-1)
-        elif action == "bip85-inc":
-            self._step_bip85_index(1)
-        elif action == "bip85-edit":
-            self._edit_bip85_index()
-        elif action == "bip85-derive":
-            self._add_bip85_child()
-        elif action == "derive-native":
-            self._open_derive(SINGLESIG_NATIVE)
-        elif action == "derive-multisig":
-            self._open_derive(MULTISIG_NATIVE)
-        elif action == "derive-taproot":
-            self._open_derive(SINGLESIG_TAPROOT)
-        elif action == "derive-dec":
-            self._step_derive_account(-1)
-        elif action == "derive-inc":
-            self._step_derive_account(1)
-        elif action == "derive-edit":
-            self._edit_derive_account()
-        elif action == "derive-wallet":
-            self._make_derived_wallet()
-        elif action == "derive-details":
-            self._open_derived_details()
-        elif action == "make-xpub-wallet":
-            self._make_xpub_wallet()
-        elif action == "show-seed":
-            self.confirm = "show-seed"
-        elif action == "show-passphrase":
-            self.confirm = "show-passphrase"
-        elif action == "copy-passphrase":
-            self._start_passphrase_copy()
-        elif action == "seed-continue":
-            self.go("passphrase-ask")
-        elif action == "passphrase-no":
-            self._save_entered_seed(None)
-        elif action == "passphrase-yes":
-            self.passphrase_text = ""
-            self.passphrase_cursor = 0
-            self.passphrase_mode = "lower"
-            self.go("passphrase")
-        elif action == "passphrase-save":
-            secret = self.passphrase_text
-            self._save_entered_seed(None if secret == "" else secret)
         elif action.startswith("passkey-"):
             self._passphrase_key(action[len("passkey-") :])
         elif action.startswith("passcur-"):
@@ -1002,109 +1167,16 @@ class App:
                 self.passphrase_cursor = max(0, min(len(self.passphrase_text), index))
         elif action.startswith("passmode-"):
             self.passphrase_mode = action[len("passmode-") :]
-        elif action == "confirm-yes":
-            self._confirm_yes()
-        elif action == "confirm-no":
-            self.confirm = None
-        elif action == "descriptor-both":
-            choice = self.descriptor_choice
-            if choice:
-                self.open_dropdown = None
-                self._start_wallet_import(choice["text"])
-        elif action == "descriptor-key":
-            self._load_chosen_descriptor_key()
-        elif action == "confirm-stay":
-            return
-        elif action == "delete-key":
-            self.confirm = "delete-key"
-        elif action == "delete-wallet":
-            self.confirm = "delete-wallet"
-        elif action == "toggle-slip":
-            self.slip_labels = not self.slip_labels
-        elif action == "show-qr":
-            self._show_qr()
-        elif action == "show-descriptor":
-            self._open_descriptor_qr()
-        elif action == "seed-format-next":
-            self._step_seed_format(1)
-        elif action == "seed-format-prev":
-            self._step_seed_format(-1)
-        elif action == "qr-form-next":
-            self._step_qr_format(1)
-        elif action == "qr-form-prev":
-            self._step_qr_format(-1)
-        elif action == "zoom-close":
-            self.qr_zoom = None
-        elif action == "brightness-down":
-            self.qr_brightness = max(0, self.qr_brightness - 1)
-        elif action == "brightness-up":
-            self.qr_brightness = min(QR_BRIGHTNESS_MAX, self.qr_brightness + 1)
         elif action.startswith("zoom-"):
             self._move_zoom(action[5:])
-        elif action == "review-sample":
-            self.set_notice("Load a PSBT from the editor.")
-            self.draft = ""
-            self.go("editor")
-            self.screen_after_editor = "psbt"
-        elif action == "addresses":
-            self.address_branch = 0
-            self.scroll["addresses"] = 0
-            self.go("addresses")
-        elif action == "address-receive":
-            self.address_branch = 0
-            self.scroll["addresses"] = 0
-        elif action == "address-change":
-            self.address_branch = 1
-            self.scroll["addresses"] = 0
         elif action.startswith("open-address-"):
             self.address_index = int(action[len("open-address-") :])
             self.scroll["address"] = 0
             self.go("address")
-        elif action == "address-tools":
-            self.go("address-tools")
-        elif action == "address-find":
-            self.address_find_branch = 0
-            self.address_find_index = 0
-            self.go("address-find")
-        elif action == "address-find-receive":
-            self.address_find_branch = 0
-        elif action == "address-find-change":
-            self.address_find_branch = 1
-        elif action == "address-find-dec":
-            if self.address_find_index > 0:
-                self.address_find_index -= 1
-        elif action == "address-find-inc":
-            if self.address_find_index < 0x7FFFFFFF:
-                self.address_find_index += 1
-        elif action == "address-find-edit":
-            self._edit_address_index()
-        elif action == "address-find-show":
-            self.address_branch = self.address_find_branch
-            self.address_index = self.address_find_index
-            self.scroll["address"] = 0
-            self.go("address")
-        elif action == "address-verify":
-            self.go("address-verify")
-        elif action == "address-type":
-            self.address_text = ""
-            self.address_cursor = 0
-            self.passphrase_mode = "lower"
-            self.hscroll = 0
-            self.go("address-type")
-        elif action == "address-scan":
-            self.scan_kind = "address"
-            self.qr_sequence.reset()
-            self.go("scan")
-        elif action == "address-sd":
-            self._open_sd("address")
-        elif action == "address-verify-text":
-            self._verify_entered_address(self.address_text)
         elif action.startswith("address-search-"):
             if self.address_search_pending is None:
                 self.address_search_pending = int(action[len("address-search-") :])
                 self.address_search_shown = False
-        elif action == "address-go":
-            self._open_found_address()
         else:
             self.set_notice("")
 
@@ -3239,6 +3311,8 @@ class App:
         frame.hit(box, f"account-key-{key}", label)
 
     def _addresses(self, frame: Frame):
+        if self._paint_address_scroll(frame):
+            return
         frame.header("Addresses", "back")
         if self.wallet_index >= len(self.session.wallets):
             frame.text("This wallet is no longer loaded.", MARGIN, HEADER + 24, size=TITLE_SIZE)
@@ -3255,60 +3329,148 @@ class App:
         list_bottom = tools_y - 8
         stride = ADDRESS_ROW + ADDRESS_GAP
         view = max(stride, list_bottom - list_top)
+        self._address_view_h = view
         limit = max(0, 0x80000000 * stride - view)
         offset = max(0, min(self.scroll.get("addresses", 0), limit))
+        dragging = self._press is not None
+        if dragging:
+            offset = self._address_scroll_to(offset)
+        else:
+            self._ensure_address_pages(offset)
         self.scroll["addresses"] = offset
         self.scroll_max["addresses"] = limit
-        first = offset // stride
-        visible = view // stride + 2
-        self._fill_address_cache(self.address_branch, first, first + visible + ADDRESS_AHEAD)
-        face = font(TITLE_SIZE, mono=True)
-        room = WIDTH - 2 * MARGIN - 32
-        # Rows are drawn in the list and cannot paint over the tabs or the tools button.
-        layer = Image.new("RGB", (WIDTH, list_bottom - list_top), PAPER)
-        layer_draw = ImageDraw.Draw(layer)
-        for index in range(first, first + visible):
-            if index > 0x7FFFFFFF:
-                break
-            row_top = list_top + index * stride - offset
-            local_top = row_top - list_top
-            if local_top >= layer.height or local_top + ADDRESS_ROW <= 0:
-                continue
-            address = self._address_cache.get((self.address_branch, index), "")
-            label = _ellipsize(frame.draw, f"{index}. {address}", face, room)
-            box = (MARGIN, local_top, WIDTH - MARGIN, local_top + ADDRESS_ROW)
-            layer_draw.rounded_rectangle(box, radius=12, fill=WHITE, outline=LINE)
-            _left, text_top, _right, text_bottom = layer_draw.textbbox((0, 0), label, font=face)
-            text_y = local_top + (ADDRESS_ROW - (text_bottom - text_top)) / 2 - text_top
-            layer_draw.text((MARGIN + 16, text_y), label, font=face, fill=INK)
-            hit_top = max(list_top, row_top)
-            hit_bottom = min(list_bottom, row_top + ADDRESS_ROW)
-            if hit_bottom - hit_top >= 8:
-                frame.hit((MARGIN, hit_top, WIDTH - MARGIN, hit_bottom), f"open-address-{index}", label)
-        frame.image.paste(layer, (0, list_top))
+        self._paste_address_page(frame, list_top, list_bottom, offset)
+        visible = max(1, (view + stride - 1) // stride) + 1
+        self._address_row_hits(frame, list_top, list_bottom, offset, stride, offset // stride, visible)
         frame.button(tools_y, "Addresses Tools", "address-tools")
         self._still_boxes.append((0, HEADER, WIDTH, list_top))
         self._still_boxes.append((0, tools_y, WIDTH, HEIGHT))
         frame.header("Addresses", "back")
+        chrome = (self.address_branch, self.wallet_index, bool(self.notice), bool(self.menu))
+        if dragging and chrome == self._address_chrome and self._address_pages:
+            self.dirty = (list_top, list_bottom)
+        self._address_chrome = chrome
+        self._address_frame = frame.image.copy()
+        self._address_fixed_hits = [
+            hit for hit in frame.hits if not str(hit["action"]).startswith("open-address-")
+        ]
+        self._address_still = list(self._still_boxes)
+        self._address_list_band = (list_top, list_bottom)
+
+    def _paint_address_scroll(self, frame: Frame) -> bool:
+        """A drag slices one cached block. It does not derive addresses."""
+        if self._press is None or self._address_frame is None or not self._address_pages_current():
+            return False
+        chrome = (self.address_branch, self.wallet_index, bool(self.notice), bool(self.menu))
+        if chrome != self._address_chrome or self.wallet_index >= len(self.session.wallets):
+            return False
+        stride = ADDRESS_ROW + ADDRESS_GAP
+        offset = self.scroll.get("addresses", 0)
+        list_top, list_bottom = self._address_list_band
+        if self._address_page_for(offset) is None:
+            return False
+        view = max(1, list_bottom - list_top)
+        frame.image = self._address_frame.copy()
+        frame.draw = ImageDraw.Draw(frame.image)
+        frame.hits = list(self._address_fixed_hits)
+        self._paste_address_page(frame, list_top, list_bottom, offset)
+        visible = max(1, (view + stride - 1) // stride) + 1
+        self._address_row_hits(frame, list_top, list_bottom, offset, stride, offset // stride, visible)
+        self._still_boxes.extend(self._address_still)
+        self._address_frame = frame.image
+        self.dirty = (list_top, list_bottom)
+        return True
+
+    def _address_row_hits(self, frame: Frame, list_top: int, list_bottom: int, offset: int, stride: int, first: int, visible: int) -> None:
+        face = font(TITLE_SIZE, mono=True)
+        room = WIDTH - 2 * MARGIN - 32
+        for index in range(first, first + visible):
+            if index > 0x7FFFFFFF:
+                break
+            row_top = list_top + index * stride - offset
+            if row_top >= list_bottom or row_top + ADDRESS_ROW <= list_top:
+                continue
+            address = self._address_cache.get((self.address_branch, index), "")
+            label = _ellipsize(frame.draw, f"{index}. {address}", face, room)
+            hit_top = max(list_top, row_top)
+            hit_bottom = min(list_bottom, row_top + ADDRESS_ROW)
+            if hit_bottom - hit_top >= 8:
+                frame.hit((MARGIN, hit_top, WIDTH - MARGIN, hit_bottom), f"open-address-{index}", label)
 
     def _address_identity(self):
         wallet = self.session.wallets[self.wallet_index]
         accounts = tuple((fingerprint, wallet.accounts[fingerprint]) for fingerprint in wallet.fingerprints)
         return (self.wallet_index, wallet.role, accounts, self.session.network)
 
+    def _address_pages_current(self) -> bool:
+        if not self._address_pages or self.wallet_index >= len(self.session.wallets):
+            return False
+        return self._address_page_key == (self._address_identity(), self.address_branch)
+
+    def _address_page_starts(self, offset: int) -> list[int]:
+        """Three blocks of 3*K cards, each starting on a multiple of K, around this scroll."""
+        stride = ADDRESS_ROW + ADDRESS_GAP
+        anchor = (max(0, offset) // stride // ADDRESS_WINDOW) * ADDRESS_WINDOW
+        starts = []
+        start = anchor - ADDRESS_WINDOW
+        while len(starts) < 3:
+            if start >= 0:
+                starts.append(start)
+            start += ADDRESS_WINDOW
+        return starts
+
+    def _address_page_covers(self, start: int, offset: int) -> bool:
+        stride = ADDRESS_ROW + ADDRESS_GAP
+        top = start * stride
+        bottom = (start + 3 * ADDRESS_WINDOW) * stride
+        return offset >= top and offset + self._address_view_h <= bottom
+
+    def _address_page_for(self, offset: int):
+        if not self._address_pages_current():
+            return None
+        for start, image in self._address_pages:
+            if self._address_page_covers(start, offset):
+                return start, image
+        return None
+
+    def _address_scroll_to(self, offset: int) -> int:
+        """Add the finger delta to Y. Build the nearby blocks before Y moves past them."""
+        stride = ADDRESS_ROW + ADDRESS_GAP
+        view = self._address_view_h
+        if view <= 0:
+            return offset
+        limit = max(0, 0x80000000 * stride - view)
+        offset = max(0, min(offset, limit))
+        if self._address_page_for(offset) is None:
+            self._ensure_address_pages(offset)
+        return offset
+
+    def _ensure_address_pages(self, offset: int) -> None:
+        starts = self._address_page_starts(offset)
+        key = (self._address_identity(), self.address_branch)
+        have = [start for start, _image in self._address_pages]
+        if key == self._address_page_key and have == starts:
+            return
+        branch = self.address_branch
+        self._fill_address_cache(branch, starts[0], starts[-1] + 3 * ADDRESS_WINDOW)
+        self._address_pages = [
+            (start, self._draw_address_rows(branch, start, 3 * ADDRESS_WINDOW))
+            for start in starts
+        ]
+        self._address_page_key = key
+
     def _fill_address_cache(self, branch: int, start: int, end: int):
-        """Derive the rows on screen and one page ahead. Drop rows farther away."""
+        """Derive the rows in the bitmap. Drop rows outside that range."""
         key = self._address_identity()
         if key != self._address_cache_key:
             self._address_cache = {}
             self._address_cache_key = key
         start = max(0, start)
         end = min(0x80000000, max(start, end))
-        keep_from = max(0, start - ADDRESS_AHEAD)
         self._address_cache = {
             item: value
             for item, value in self._address_cache.items()
-            if item[0] == branch and keep_from <= item[1] < end
+            if item[0] == branch and start <= item[1] < end
         }
         missing = [index for index in range(start, end) if (branch, index) not in self._address_cache]
         if not missing:
@@ -3318,6 +3480,36 @@ class App:
         derived = self.session.addresses(self.wallet_index, branch, span_start, span_end - span_start)
         for index, address in enumerate(derived, start=span_start):
             self._address_cache[(branch, index)] = address
+
+    def _draw_address_rows(self, branch: int, start: int, count: int, image: Image.Image | None = None, top: int = 0):
+        stride = ADDRESS_ROW + ADDRESS_GAP
+        if image is None:
+            image = Image.new("RGB", (WIDTH, max(stride, count * stride)), PAPER)
+        draw = ImageDraw.Draw(image)
+        face = font(TITLE_SIZE, mono=True)
+        room = WIDTH - 2 * MARGIN - 32
+        for step, index in enumerate(range(start, start + count)):
+            address = self._address_cache.get((branch, index), "")
+            y = top + step * stride
+            label = _ellipsize(draw, f"{index}. {address}", face, room)
+            draw.rounded_rectangle((MARGIN, y, WIDTH - MARGIN, y + ADDRESS_ROW), radius=12, fill=WHITE, outline=LINE)
+            _left, text_top, _right, text_bottom = draw.textbbox((0, 0), label, font=face)
+            text_y = y + (ADDRESS_ROW - (text_bottom - text_top)) / 2 - text_top
+            draw.text((MARGIN + 16, text_y), label, font=face, fill=INK)
+        return image
+
+    def _paste_address_page(self, frame: Frame, list_top: int, list_bottom: int, offset: int) -> None:
+        found = self._address_page_for(offset)
+        if found is None:
+            return
+        start, image = found
+        stride = ADDRESS_ROW + ADDRESS_GAP
+        src = offset - start * stride
+        view = list_bottom - list_top
+        bottom = min(image.height, src + view)
+        if src < 0 or bottom <= src:
+            return
+        frame.image.paste(image.crop((0, src, WIDTH, bottom)), (0, list_top))
 
     def _pair_buttons(self, frame: Frame, y: int, left, right) -> int:
         gap = 12

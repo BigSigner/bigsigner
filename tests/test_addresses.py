@@ -42,6 +42,111 @@ def test_receive_is_selected_and_rows_do_not_wrap():
     assert all(branch == 0 for branch, _index in app._address_cache)
 
 
+def _top_index(app):
+    indexes = [
+        int(hit["action"].rsplit("-", 1)[1])
+        for hit in app.hits
+        if hit["action"].startswith("open-address-")
+    ]
+    return min(indexes)
+
+
+def _drag(app, distance):
+    app.pointer_down(240, 640)
+    app.pointer_move(240, 640 - distance)
+    app.render()
+    app.pointer_up(240, 640 - distance)
+    app.render()
+
+
+def test_a_drag_follows_the_finger_across_cached_blocks():
+    app = _wallet()
+    app.screen = "addresses"
+    app.address_branch = 0
+    stride = ADDRESS_ROW + ADDRESS_GAP
+    app.render()
+    assert [start for start, _image in app._address_pages] == [0, 8, 16]
+    assert all(image.height == 24 * stride for _start, image in app._address_pages)
+    app.pointer_down(240, 620)
+    y = 620
+    previous = 0
+    while y > 260:
+        y -= 40
+        app.pointer_move(240, y)
+        app.render()
+        assert app.scroll["addresses"] == previous + 40
+        previous = app.scroll["addresses"]
+    assert app.scroll["addresses"] == previous
+    place = app.scroll["addresses"]
+    app.pointer_up(240, 0)
+    app._act("address-receive")
+    assert app.address_branch == 0
+    assert app.scroll["addresses"] == place
+    app._act("address-change")
+    assert app.scroll["addresses"] == 0
+
+
+def test_a_new_touch_does_not_jump_backward():
+    app = _wallet()
+    app.screen = "addresses"
+    app.address_branch = 0
+    stride = ADDRESS_ROW + ADDRESS_GAP
+    app.render()
+    _drag(app, 600)
+    place = app.scroll["addresses"]
+    parked = _top_index(app)
+    assert place > 0
+    app.pointer_down(240, 500)
+    app.pointer_move(240, 470)
+    app.render()
+    assert app.scroll["addresses"] >= place
+    assert _top_index(app) >= parked
+    app.pointer_up(240, 470)
+    app.render()
+    _drag(app, 600)
+    _drag(app, 600)
+    _drag(app, 600)
+    _drag(app, 600)
+    assert app.scroll["addresses"] > 30 * stride
+    assert _top_index(app) > 30
+
+
+def test_the_lift_after_a_scroll_does_not_open_an_address():
+    app = _wallet()
+    app.screen = "addresses"
+    app.render()
+    app.pointer_down(240, 500)
+    app.pointer_move(240, 300)
+    assert app.scroll["addresses"] > 0
+    app.pointer_up(240, 300)
+    assert app.screen == "addresses"
+
+
+def test_lifting_rebuilds_around_the_new_place_without_moving_it():
+    app = _wallet()
+    app.screen = "addresses"
+    app.address_branch = 0
+    stride = ADDRESS_ROW + ADDRESS_GAP
+    app.render()
+    _drag(app, 600)
+    place = app.scroll["addresses"]
+    parked = _top_index(app)
+    assert any(
+        start * stride <= place and place + app._address_view_h <= (start + 24) * stride
+        for start, _image in app._address_pages
+    )
+    assert parked == place // stride
+    app.pointer_down(240, 640)
+    app.pointer_move(240, 120)
+    app.render()
+    assert app.scroll["addresses"] >= place
+    app.pointer_up(240, 120)
+    app.render()
+    assert app.scroll["addresses"] >= place
+    assert _top_index(app) >= parked
+    assert _top_index(app) * stride <= app.scroll["addresses"] < (_top_index(app) + 1) * stride
+
+
 def test_scrolling_drops_rows_that_are_far_away():
     app = _wallet()
     app.screen = "addresses"
