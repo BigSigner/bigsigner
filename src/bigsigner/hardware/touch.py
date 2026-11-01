@@ -18,8 +18,10 @@ EVENT_SIZE = struct.calcsize(EVENT_FORMAT)
 EVIOCGABS = lambda axis: 0x80184540 + axis
 # Half of a seed-keyboard key. Drift inside this stays on the key that was pressed.
 _HOLD = 21
+_MIN_MOVEMENT = 5
 # A gap longer than this between reports drops a gesture that never lifted.
-_STALE = 0.4
+_LONG_STALE = 2
+_SHORT_STALE = 0.6
 LIFTED = 0
 DETECTING = 1
 DETECTED = 2
@@ -74,9 +76,11 @@ class _Contact:
         for offset in range(0, len(packet) - EVENT_SIZE + 1, EVENT_SIZE):
             sec, usec, ev_type, code, value = struct.unpack_from(EVENT_FORMAT, packet, offset)
             lift = ev_type == EV_KEY and code == BTN_TOUCH and not value
-            # A still finger sends nothing until the lift. That lift still belongs
-            # to the gesture, even when more than 400ms has passed.
-            if self._gap(sec, usec) and not lift:
+            # Reset the gesture if no event has arrived for a while.
+            # A still finger sends nothing until the lift, so if no event has arrived for a short while,
+            # but then a lift event arrives, the gesture is still valid.
+            gap = self._gap(sec, usec)
+            if gap > _LONG_STALE or (gap > _SHORT_STALE and not lift):
                 self._reset()
             self._stamp = (sec, usec)
             if ev_type == EV_KEY and code == BTN_TOUCH:
@@ -114,23 +118,25 @@ class _Contact:
             self.anchor = self.last
             self.touching = DETECTED
             return
-        if self.touching == DETECTED and self._far(self.last):
+        if self.touching == DETECTED and self._far(self.last, _HOLD):
             self.touching = MOVING
+            self.anchor = self.last
             actions.append(("move", self.last[0], self.last[1]))
             return
-        if self.touching == MOVING:
+        if self.touching == MOVING and self._far(self.last, _MIN_MOVEMENT):
+            self.anchor = self.last
             actions.append(("move", self.last[0], self.last[1]))
 
-    def _far(self, point: tuple[int, int]) -> bool:
-        return abs(point[0] - self.anchor[0]) > _HOLD or abs(point[1] - self.anchor[1]) > _HOLD
+    def _far(self, point: tuple[int, int], dist: int) -> bool:
+        return abs(point[0] - self.anchor[0]) > dist or abs(point[1] - self.anchor[1]) > dist
 
-    def _gap(self, sec: int, usec: int) -> bool:
+    def _gap(self, sec: int, usec: int) -> float:
         """Seconds and microseconds are one clock. The microseconds field wraps each second."""
         if self._stamp is None:
             return False
         prev_sec, prev_usec = self._stamp
         elapsed = (sec - prev_sec) + (usec - prev_usec) / 1_000_000
-        return elapsed > _STALE
+        return elapsed
 
 
 def coalesce(actions: list[tuple]) -> list[tuple]:
