@@ -25,7 +25,7 @@ PYTHONPATH=src python -m bigsigner.bundle
 python3 -m http.server 8780 --directory web
 ```
 
-Open http://127.0.0.1:8780/ . Run the bundle command again after changing Python, then reload the page. `web/bundle.json` and `web/external-assets/` are gitignored. That folder holds `pyodide/`, `pillow/`, `embit/`, and `qrcode/`, pinned by the bundle command. Do not type a real seed into the emulator. The hash supplies `seed` and `descriptor`. The SD card is the files stored in the browser. `BIGSIGNER_INITIAL_SEED` is for tests and the panel, not this page.
+Open http://127.0.0.1:8780/ . Run the bundle command again after changing Python, then reload the page. `web/bundle.json` and `web/external-assets/` are gitignored. That folder holds `pyodide/`, `pillow/`, `embit/`, and `qrcode/`, pinned by the bundle command. Do not type a real seed into the emulator. The hash supplies `seed`, `descriptor`, and `network`. The SD card is the files stored in the browser. `BIGSIGNER_INITIAL_SEED` is for tests and the panel, not this page.
 
 ## Tests
 

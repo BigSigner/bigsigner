@@ -2,8 +2,9 @@
 <meta charset="utf-8">
 <!--
   Hash query, so the seed is not sent to the server:
-  #seed=word1,word2,...&descriptor=wpkh(...)
+  #seed=word1,word2,...&descriptor=wpkh(...)&network=testnet
   Commas in the seed are spaces. Percent-encode the descriptor.
+  network is mainnet, testnet, or regtest. It is applied before the seed and the descriptor.
   A reload applies the hash again.
 -->
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -94,7 +95,11 @@ function hashParams() {
   let raw = location.hash.startsWith("#") ? location.hash.slice(1) : "";
   if (raw.startsWith("?")) raw = raw.slice(1);
   const params = new URLSearchParams(raw);
-  return {seed: params.get("seed") || "", descriptor: params.get("descriptor") || ""};
+  return {
+    seed: params.get("seed") || "",
+    descriptor: params.get("descriptor") || "",
+    network: params.get("network") || "",
+  };
 }
 
 function panelScale() {
@@ -602,6 +607,7 @@ async function sendTick(body) {
     body.kind = "start";
     body.seed = initial.seed;
     body.descriptor = initial.descriptor;
+    body.network = initial.network;
   } else if (!body.kind) body.kind = "tap";
   let msg;
   try {

@@ -349,6 +349,7 @@ class App:
         self.verify_address = ""
         self.verify_start = 0
         self.verify_found = None
+        self.initial_network = ""
         self.initial_wallet_descriptor = ""
         self.address_search_pending = None
         self.address_search_shown = False
@@ -1969,8 +1970,28 @@ class App:
         if self.screen != "boot":
             return
         self.screen = "warning"
+        self._apply_initial_network()
         self._load_initial_seed()
         self._load_initial_wallet_descriptor()
+
+    def _apply_initial_network(self):
+        """The emulator hash can name mainnet, testnet, or regtest before the seed loads."""
+        raw = (self.initial_network or "").strip().lower()
+        if not raw:
+            return
+        names = {
+            "main": "main",
+            "mainnet": "main",
+            "test": "test",
+            "testnet": "test",
+            "regtest": "regtest",
+        }
+        network = names.get(raw)
+        if network is None:
+            self._initial_notice("The network must be mainnet, testnet, or regtest.")
+            return
+        if network != self.session.network:
+            self.session.set_network(network)
 
     def _load_initial_seed(self):
         raw = os.environ.get("BIGSIGNER_INITIAL_SEED", "").strip()

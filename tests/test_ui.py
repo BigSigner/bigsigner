@@ -977,6 +977,35 @@ def test_settings_picks_a_network_from_the_dropdown():
     assert app.session.network == "main"
 
 
+def test_the_emulator_network_is_applied_when_boot_ends():
+    app = App()
+    app.screen = "boot"
+    app.initial_network = "TESTNET"
+    app._leave_boot()
+    assert app.screen == "warning"
+    assert app.session.network == "test"
+    assert app.notice == ""
+
+    mainnet = App()
+    mainnet.screen = "boot"
+    mainnet.initial_network = "mainnet"
+    mainnet._leave_boot()
+    assert mainnet.session.network == "main"
+
+    regtest = App()
+    regtest.screen = "boot"
+    regtest.initial_network = "regtest"
+    regtest._leave_boot()
+    assert regtest.session.network == "regtest"
+
+    refused = App()
+    refused.screen = "boot"
+    refused.initial_network = "signet"
+    refused._leave_boot()
+    assert refused.session.network == "main"
+    assert "mainnet, testnet, or regtest" in refused.notice
+
+
 def test_seeds_are_listed_above_external_keys():
     from test_domain import expression
 

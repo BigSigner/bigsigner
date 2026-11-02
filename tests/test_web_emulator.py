@@ -17,6 +17,8 @@ def test_the_static_page_reads_the_bundle_and_checks_downloads():
     assert "function downloadFile" in page
     assert 'params.get("seed")' in page
     assert 'params.get("descriptor")' in page
+    assert 'params.get("network")' in page
+    assert "initial_network" in worker
     assert "BIGSIGNER_SDCARD_PATH" not in page
     assert "BIGSIGNER_SDCARD_PATH" not in worker
     assert "BIGSIGNER_INITIAL_WALLET_DESCRIPTOR" not in page

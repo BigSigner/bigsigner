@@ -172,6 +172,7 @@ def tick(raw):
         sys.modules["embit.util.ctypes_secp256k1"] = None
         from bigsigner.ui.app import App
         app = App()
+        app.initial_network = str(payload.get("network") or "").strip()
         app.initial_wallet_descriptor = str(payload.get("descriptor") or "").strip()
     elif kind == "tap":
         if app is None:
