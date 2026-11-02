@@ -354,6 +354,24 @@ def test_selected_seeds_become_a_native_segwit_multisig():
     assert box[3] - box[1] == app._wallet_card_height(wallet)
 
 
+def test_two_testnet_seeds_make_a_native_segwit_multisig():
+    app = App()
+    app.session.set_network("test")
+    added = [app.session.add_mnemonic(ABANDON, passphrase=str(number)) for number in range(2)]
+    app.multisig_m = 2
+    app.multisig_selected = {item["fingerprint"] for item in added}
+    app._create_selected_multisig()
+    assert app.screen == "wallet"
+    assert app.notice == "The multisig wallet was added successfully."
+    wallet = app.session.wallets[0]
+    assert wallet.threshold == 2
+    assert wallet.multisig
+    text = app.session.descriptor_text(0)
+    assert "tpub" in text
+    assert "xpub" not in text
+    assert "/48h/1h/0h/2h" in text
+
+
 def test_a_new_multisig_wallet_opens_at_the_top():
     app = App()
     added = [app.session.add_mnemonic(ABANDON, passphrase=str(number)) for number in range(3)]

@@ -391,7 +391,7 @@ class Session:
         seed = self._seed_for(key.fingerprint)
         if seed is None:
             return
-        derived = _derive_public(seed, key.path)
+        derived = _derive_public(seed, key.path, self.network)
         nickname = self.fingerprints[key.fingerprint].nickname
         if not _same_extended(derived, key.xpub):
             raise SessionError(
@@ -591,7 +591,7 @@ class Session:
         """Return "known" or "new". A contradictory extended key raises."""
         seed = self._seed_for(key.fingerprint)
         if seed is not None:
-            derived = _derive_public(seed, key.path)
+            derived = _derive_public(seed, key.path, self.network)
             if not _same_extended(derived, key.xpub):
                 nickname = self.fingerprints[key.fingerprint].nickname
                 raise SessionError(
@@ -614,7 +614,7 @@ class Session:
     def _check_watch_key(self, key, allow_existing_same=False):
         seed = self._seed_for(key.fingerprint)
         if seed is not None:
-            derived = _derive_public(seed, key.path)
+            derived = _derive_public(seed, key.path, self.network)
             if not _same_extended(derived, key.xpub):
                 raise SessionError(
                     "A seed with this fingerprint is loaded, and it does not derive this extended key."
@@ -856,8 +856,10 @@ def _seed_root(seed_key):
     return root
 
 
-def _derive_public(seed_key, path):
-    return _seed_root(seed_key).derive(format_path(list(path))).to_public()
+def _derive_public(seed_key, path, network):
+    """The account xpub. Testnet and regtest use tpub version bytes, not xpub."""
+    version = NETWORKS[_network_name(network)]["xpub"]
+    return _seed_root(seed_key).derive(format_path(list(path))).to_public(version)
 
 
 def _same_extended(left, right) -> bool:
@@ -920,7 +922,7 @@ def _public_for(session: Session, fingerprint: bytes, role: str, account: int):
     seed = session._seed_for(fingerprint)
     if seed is not None:
         path = _account_path(session.network, role, account)
-        public = _derive_public(seed, path)
+        public = _derive_public(seed, path, session.network)
         public.role = role
         stored = StoredKey("derived", fingerprint, path=tuple(path), xpub=public, account=account)
         stored.role = role

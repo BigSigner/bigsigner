@@ -72,7 +72,7 @@ def test_psbt_review_blocks_a_nonzero_op_return_and_warns_on_final_sequence():
     public = session._seed_for(fingerprint)
     from bigsigner.session import _derive_public, _account_path
 
-    derived = _derive_public(public, _account_path("main", wallet.role, 0))
+    derived = _derive_public(public, _account_path("main", wallet.role, 0), "main")
     child = derived.derive("m/0/0")
     path = _account_path("main", wallet.role, 0) + [0, 0]
     psbt.inputs[0].bip32_derivations[child.key] = DerivationPath(fingerprint, path)

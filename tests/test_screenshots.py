@@ -250,7 +250,7 @@ def _psbt(app, sequence: int, send_sats: int, op_return: bool) -> bytes:
     wallet = app.session.wallets[app.wallet_index]
     fingerprint = wallet.fingerprints[0]
     public = app.session._seed_for(fingerprint)
-    derived = _derive_public(public, _account_path("main", wallet.role, 0))
+    derived = _derive_public(public, _account_path("main", wallet.role, 0), "main")
     child = derived.derive("m/0/0")
     path = _account_path("main", wallet.role, 0) + [0, 0]
     psbt.inputs[0].witness_utxo = TransactionOutput(100_000, script)
