@@ -259,15 +259,15 @@ class Frame:
         self.glyph(icon, x + drawn / 2, y + (top + bottom) / 2, drawn, fill, awesome=awesome)
         return x + drawn + 12
 
-    def fingerprint_line(self, y: int, fingerprint_hex: str, text_size: int = 22, icon_size: int = 28):
+    def fingerprint_line(self, y: int, fingerprint_hex: str, text_size: int = 22, icon_size: int = 28, left: int = MARGIN):
         size = icon_size
-        self.fingerprint_icon(MARGIN, y, size)
+        self.fingerprint_icon(left, y, size)
         label = "Fingerprint: "
         label_face = font(text_size)
         hex_face = font(text_size, mono=True)
         _left, top, _right, bottom = self.draw.textbbox((0, 0), label, font=label_face)
         text_y = y + (size - (bottom - top)) / 2 - top
-        x = MARGIN + size + 10
+        x = left + size + 10
         self.draw.text((x, text_y), label, font=label_face, fill=MUTED)
         x += self.draw.textlength(label, font=label_face)
         self.draw.text((x, text_y), fingerprint_hex, font=hex_face, fill=MUTED)

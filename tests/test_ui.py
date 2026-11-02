@@ -810,6 +810,21 @@ def test_seed_account_is_typed_and_xpub_account_is_a_dropdown():
     app._act(f"account-dec-{fingerprint.hex()}")
     assert app.session.wallets[0].accounts[fingerprint] == 0x7FFFFFFF - 1
 
+    image = app.render()
+    white_beside_paper = False
+    for y in range(HEADER + 20, HEIGHT - 20):
+        if image.getpixel((8, y))[:3] != PAPER:
+            continue
+        if image.getpixel((MARGIN + 8, y))[:3] != WHITE:
+            continue
+        if image.getpixel((WIDTH - 8, y))[:3] != PAPER:
+            continue
+        if image.getpixel((WIDTH - MARGIN - 8, y))[:3] != WHITE:
+            continue
+        white_beside_paper = True
+        break
+    assert white_beside_paper
+
     watch = App()
     first = expression(ABANDON, "m/84h/0h/0h")
     second = expression(ABANDON, "m/84h/0h/4h")
@@ -826,6 +841,95 @@ def test_seed_account_is_typed_and_xpub_account_is_a_dropdown():
     watch._act(f"dropdown-pick-acct-{fingerprint.hex()}-0")
     assert watch.session.wallets[0].accounts[fingerprint] == 0
     assert "/0h" in watch.session.descriptor_text(0)
+
+
+def test_a_wallet_card_opens_the_key_and_back_returns_to_the_wallet():
+    app = App()
+    added = app.session.add_mnemonic(ABANDON.split())
+    fingerprint = added["fingerprint"]
+    app.selected_fp = fingerprint
+    app.screen = "key"
+    app._act("derive-native")
+    app._act("derive-wallet")
+    assert app.back == ["wallets"]
+    app.render()
+    hit = next(item for item in app.hits if item["action"] == f"wallet-key-{fingerprint.hex()}")
+    assert hit["label"] == "Go to Seed Key"
+    account = next(item for item in app.hits if item["action"] == f"account-edit-{fingerprint.hex()}")
+    assert account["box"][1] >= hit["box"][3]
+    app.tap((account["box"][0] + account["box"][2]) // 2, (account["box"][1] + account["box"][3]) // 2)
+    assert app.confirm is None
+    assert app.screen == "account"
+    app.back_one()
+    app.render()
+    hit = next(item for item in app.hits if item["action"] == f"wallet-key-{fingerprint.hex()}")
+    app.tap((hit["box"][0] + hit["box"][2]) // 2, (hit["box"][1] + hit["box"][3]) // 2)
+    assert app.confirm == "open-wallet-key"
+    assert app._confirm_message() == "Go to Seed Key?"
+    app._act("confirm-no")
+    assert app.confirm is None
+    assert app.screen == "wallet"
+    app.render()
+    hit = next(item for item in app.hits if item["action"] == f"wallet-key-{fingerprint.hex()}")
+    app.tap((hit["box"][0] + hit["box"][2]) // 2, (hit["box"][1] + hit["box"][3]) // 2)
+    app._act("confirm-yes")
+    assert app.screen == "key"
+    assert app.back == ["wallets", "wallet"]
+    assert app.selected_fp == fingerprint
+    app.back_one()
+    assert app.screen == "wallet"
+    app.render()
+    hit = next(item for item in app.hits if item["action"] == f"wallet-key-{fingerprint.hex()}")
+    app.tap((hit["box"][0] + hit["box"][2]) // 2, (hit["box"][1] + hit["box"][3]) // 2)
+    app._act("confirm-yes")
+    app.confirm = "delete-key"
+    app._confirm_yes()
+    assert app.screen == "keys"
+    assert app.back == []
+    assert app.session.wallets == []
+
+
+def test_a_fixed_account_line_is_not_part_of_the_key_tap():
+    from test_domain import expression
+
+    app = App()
+    added = app.session.add_text(f"wpkh({expression(ABANDON, 'm/84h/0h/0h')})")
+    fingerprint = added["fingerprint"]
+    app.wallet_index = 0
+    app.screen = "wallet"
+    app.render()
+    hit = next(item for item in app.hits if item["action"] == f"wallet-key-{fingerprint.hex()}")
+    assert hit["label"] == "Go to External Key"
+    app.tap((hit["box"][0] + hit["box"][2]) // 2, hit["box"][3] + 8)
+    assert app.confirm is None
+    app.tap((hit["box"][0] + hit["box"][2]) // 2, (hit["box"][1] + hit["box"][3]) // 2)
+    assert app._confirm_message() == "Go to External Key?"
+    app._act("confirm-yes")
+    assert app.screen == "key"
+    assert app.selected_key_index == 0
+
+
+def test_deleting_the_wallet_key_returns_to_the_wallet_when_it_remains():
+    from test_domain import expression
+
+    app = App()
+    added = app.session.add_text(f"wpkh({expression(ABANDON, 'm/84h/0h/0h')})")
+    app.session.add_text(f"wpkh({expression(ABANDON, 'm/84h/0h/1h')})")
+    fingerprint = added["fingerprint"]
+    app.wallet_index = 0
+    app.back = ["wallets"]
+    app.screen = "wallet"
+    app.render()
+    hit = next(item for item in app.hits if item["action"] == f"wallet-key-{fingerprint.hex()}")
+    app.tap((hit["box"][0] + hit["box"][2]) // 2, (hit["box"][1] + hit["box"][3]) // 2)
+    app._act("confirm-yes")
+    assert app.screen == "key"
+    assert app.selected_key_index == 1
+    app.confirm = "delete-key"
+    app._confirm_yes()
+    assert app.screen == "wallet"
+    assert app.back == ["wallets"]
+    assert app.session.wallets[0].accounts[fingerprint] == 0
 
 
 def test_leaving_a_singlesig_wallet_forgets_the_account_change():

@@ -70,8 +70,11 @@ NAME_ON_WALLET_CARD = TITLE_SIZE
 # 32px leaves the widest fingerprint-name line inside the card. 36px does not.
 _WALLET_CARD_ICON = NAME_ON_WALLET_CARD
 _WALLET_CARD_GAP = 10
-# Space above a later key's name. The first key stays under the title.
+# Space above a later key's name on a Bitcoin Wallets card.
 _WALLET_KEY_GAP = 20
+# 12px keeps the widest name, Condemned Chocolate, inside the card beside the icon.
+# The Keys card's 16px pad would leave that line 2px past the inner edge.
+_WALLET_KEY_PAD = 12
 NAME_ON_WALLET = TITLE_SIZE
 NAME_ON_MULTISIG = TITLE_SIZE
 # The fingerprint line shares the row with the checkbox. 28 is the largest size that stays on one line.
@@ -179,16 +182,16 @@ def _name_icon(has_seed: bool):
     return Icons.EYE, True
 
 
-def _draw_name_block(frame: Frame, y: int, lines: list[str], size: int, icon: str, awesome: bool, icon_size: int, paint: bool, offset: int = 0) -> int:
+def _draw_name_block(frame: Frame, y: int, lines: list[str], size: int, icon: str, awesome: bool, icon_size: int, paint: bool, offset: int = 0, left: int = MARGIN) -> int:
     """Two name lines after a leading icon, sharing the fingerprint line's left edge."""
     face = font(size)
     _left, top, _right, bottom = frame.draw.textbbox((0, 0), "Ag", font=face)
     step = size + 8
     text_mid = (top + bottom) / 2 + step * (len(lines) - 1) / 2
     if paint and y - offset + text_mid >= HEADER:
-        frame.glyph(icon, MARGIN + icon_size / 2, y - offset + text_mid, icon_size, INK, awesome=awesome)
+        frame.glyph(icon, left + icon_size / 2, y - offset + text_mid, icon_size, INK, awesome=awesome)
     if paint:
-        text_x = MARGIN + icon_size + 10
+        text_x = left + icon_size + 10
         for index, line in enumerate(lines):
             line_y = y - offset + index * step
             if line_y >= HEADER:
@@ -252,6 +255,7 @@ class App:
         self.selected_key_index = 0
         self.wallet_index = 0
         self._wallet_account_visit = None
+        self._wallet_key_target = None
         self.draft = ""
         self.menu = False
         self.add_menu = False
@@ -1228,6 +1232,8 @@ class App:
             self._seed_key(action[4:])
         elif action.startswith("cursor-"):
             self.word_cursor = max(0, min(len(self.word_prefix), int(action[7:])))
+        elif action.startswith("wallet-key-"):
+            self._ask_wallet_key(bytes.fromhex(action[len("wallet-key-") :]))
         elif action.startswith("open-fp-"):
             rest = action[len("open-fp-") :]
             hex_fp, separator, index_text = rest.partition("-")
@@ -1296,9 +1302,9 @@ class App:
             return
         frame.hit((left, strip_top, right, top), action, label)
 
-    def _dropdown_field(self, frame: Frame, y: int, name: str, label: str, enabled: bool = True):
+    def _dropdown_field(self, frame: Frame, y: int, name: str, label: str, enabled: bool = True, left: int = MARGIN, right: int | None = None):
         height = 64
-        box = (MARGIN, y, WIDTH - MARGIN, y + height)
+        box = (left, y, WIDTH - MARGIN if right is None else right, y + height)
         open_now = enabled and self.open_dropdown == name
         if enabled:
             fill, ink, outline = WHITE, INK, BLUE if open_now else LINE
@@ -3216,68 +3222,12 @@ class App:
         open_fp = None
         for index, fingerprint in enumerate(wallet.fingerprints):
             if index:
-                y += 16
-            record = self.session.fingerprints[fingerprint]
-            has_seed = any(item.has_seed for item in record.keys)
-            glyph, awesome = _name_icon(has_seed)
-            y = _draw_name_block(
-                frame, y, _fingerprint_name_lines(record.nickname), NAME_ON_WALLET, glyph, awesome, _DETAIL_ICON, paint, offset,
-            )
-            if paint and y - offset >= HEADER:
-                frame.fingerprint_line(
-                    y - offset, fingerprint.hex(), text_size=TITLE_SIZE, icon_size=_DETAIL_ICON,
-                )
-            y += _DETAIL_ICON + 8
-            options = self.session.account_options(fingerprint, wallet.role)
-            if options is not None and len(options) <= 1:
-                account = wallet.accounts[fingerprint]
-                label = f"Account: {_account_label(account)}"
-                if paint:
-                    frame.text(label, MARGIN, y - offset, size=TITLE_SIZE)
-                y += self._text_height(frame, label, TITLE_SIZE) + 8
-                continue
-            if paint:
-                frame.text("Account", MARGIN, y - offset, size=TITLE_SIZE, fill=MUTED)
-            y += self._text_height(frame, "Account", TITLE_SIZE)
-            if options is None:
-                account = wallet.accounts[fingerprint]
-                side = 64
-                gap = 12
-                top = y - offset
-                if paint:
-                    minus = (MARGIN, top, MARGIN + side, top + 64)
-                    plus = (WIDTH - MARGIN - side, top, WIDTH - MARGIN, top + 64)
-                    self._brightness_button(
-                        frame, minus, "-", account > 0, f"account-dec-{fingerprint.hex()}"
-                    )
-                    self._brightness_button(
-                        frame,
-                        plus,
-                        "+",
-                        account < 0x7FFFFFFF,
-                        f"account-inc-{fingerprint.hex()}",
-                    )
-                    box = self._account_textbox(
-                        frame,
-                        top,
-                        str(account),
-                        left=MARGIN + side + gap,
-                        right=WIDTH - MARGIN - side - gap,
-                    )
-                    frame.hit(box, f"account-edit-{fingerprint.hex()}", "Account")
-                y += 64 + 16
-            else:
-                name = f"acct-{fingerprint.hex()}"
-                if paint:
-                    field = self._dropdown_field(
-                        frame, y - offset, name, _account_label(wallet.accounts[fingerprint])
-                    )
-                    if self.open_dropdown == name:
-                        open_field = field
-                        open_fp = fingerprint
-                    y += field[3] - (y - offset) + 16
-                else:
-                    y += 64 + 16
+                y += 12
+            y = self._wallet_key_card(frame, wallet, fingerprint, y, paint, offset)
+            if paint and self.open_dropdown == f"acct-{fingerprint.hex()}":
+                open_fp = fingerprint
+                open_field = self._wallet_account_field
+        y += 16
         if self._addresses_loading:
             y = self._flow_button(frame, y, "Loading\u2026", "addresses", paint, offset, enabled=False)
         else:
@@ -3287,6 +3237,148 @@ class App:
             frame, y, "Export Descriptor\nto SD Card", "export-wallet", paint, offset, "Export Descriptor to SD Card",
         )
         return y, open_field, open_fp
+
+    def _wallet_key_card(self, frame: Frame, wallet, fingerprint: bytes, y: int, paint: bool, offset: int) -> int:
+        """One key, its fingerprint, and its account, in a white card."""
+        bottom = self._wallet_key_rows(frame, wallet, fingerprint, y, False, offset)
+        if paint and bottom - offset > HEADER and y - offset < HEIGHT:
+            frame.draw.rounded_rectangle(
+                (MARGIN, y - offset, WIDTH - MARGIN, bottom - offset), radius=16, fill=WHITE, outline=LINE
+            )
+            self._wallet_key_rows(frame, wallet, fingerprint, y, True, offset)
+        return bottom
+
+    def _wallet_key_rows(self, frame: Frame, wallet, fingerprint: bytes, y: int, paint: bool, offset: int) -> int:
+        pad = _WALLET_KEY_PAD
+        left = MARGIN + pad
+        right = WIDTH - MARGIN - pad
+        record = self.session.fingerprints[fingerprint]
+        has_seed = any(item.has_seed for item in record.keys)
+        glyph, awesome = _name_icon(has_seed)
+        card_top = y
+        y += pad
+        y = _draw_name_block(
+            frame,
+            y,
+            _fingerprint_name_lines(record.nickname),
+            NAME_ON_WALLET,
+            glyph,
+            awesome,
+            _DETAIL_ICON,
+            paint,
+            offset,
+            left,
+        )
+        if paint and y - offset >= HEADER:
+            frame.fingerprint_line(
+                y - offset, fingerprint.hex(), text_size=TITLE_SIZE, icon_size=_DETAIL_ICON, left=left,
+            )
+        y += _DETAIL_ICON + 8
+        if paint:
+            hit_top = max(HEADER, card_top - offset)
+            hit_bottom = y - offset
+            if hit_bottom - hit_top >= 8:
+                kind = "Seed Key" if has_seed else "External Key"
+                frame.hit(
+                    (MARGIN, hit_top, WIDTH - MARGIN, hit_bottom),
+                    f"wallet-key-{fingerprint.hex()}",
+                    f"Go to {kind}",
+                )
+        options = self.session.account_options(fingerprint, wallet.role)
+        if options is not None and len(options) <= 1:
+            account = wallet.accounts[fingerprint]
+            label = f"Account: {_account_label(account)}"
+            if paint:
+                frame.text(label, left, y - offset, size=TITLE_SIZE, width=right - left)
+            y += self._text_height(frame, label, TITLE_SIZE) + 8
+        else:
+            if paint:
+                frame.text("Account", left, y - offset, size=TITLE_SIZE, fill=MUTED)
+            y += self._text_height(frame, "Account", TITLE_SIZE)
+            if options is None:
+                account = wallet.accounts[fingerprint]
+                side = 64
+                gap = 12
+                row = y - offset
+                if paint:
+                    self._brightness_button(
+                        frame, (left, row, left + side, row + 64), "-", account > 0, f"account-dec-{fingerprint.hex()}"
+                    )
+                    self._brightness_button(
+                        frame,
+                        (right - side, row, right, row + 64),
+                        "+",
+                        account < 0x7FFFFFFF,
+                        f"account-inc-{fingerprint.hex()}",
+                    )
+                    box = self._account_textbox(
+                        frame,
+                        row,
+                        str(account),
+                        left=left + side + gap,
+                        right=right - side - gap,
+                    )
+                    frame.hit(box, f"account-edit-{fingerprint.hex()}", "Account")
+                y += 64 + 16
+            else:
+                name = f"acct-{fingerprint.hex()}"
+                if paint:
+                    field = self._dropdown_field(
+                        frame,
+                        y - offset,
+                        name,
+                        _account_label(wallet.accounts[fingerprint]),
+                        left=left,
+                        right=right,
+                    )
+                    self._wallet_account_field = field
+                    y += field[3] - (y - offset) + 16
+                else:
+                    y += 64 + 16
+        return y + pad
+
+    def _ask_wallet_key(self, fingerprint: bytes):
+        if self.wallet_index >= len(self.session.wallets):
+            return
+        wallet = self.session.wallets[self.wallet_index]
+        if fingerprint not in wallet.fingerprints:
+            return
+        record = self.session.fingerprints.get(fingerprint)
+        if record is None or not record.keys:
+            self.set_error("This key is no longer loaded.")
+            return
+        index, seed = self._wallet_key_choice(wallet, fingerprint)
+        self._wallet_key_target = (fingerprint, index, seed)
+        self.confirm = "open-wallet-key"
+
+    def _wallet_key_choice(self, wallet, fingerprint: bytes) -> tuple[int, bool]:
+        """The key this wallet uses, and whether that key is a seed."""
+        record = self.session.fingerprints[fingerprint]
+        for index, key in enumerate(record.keys):
+            if key.has_seed:
+                return index, True
+        account = wallet.accounts[fingerprint]
+        for index, key in enumerate(record.keys):
+            if getattr(key, "role", None) == wallet.role and key.account == account:
+                return index, False
+        return 0, False
+
+    def _open_wallet_key(self):
+        target = self._wallet_key_target
+        self._wallet_key_target = None
+        if target is None:
+            return
+        fingerprint, index, _seed = target
+        record = self.session.fingerprints.get(fingerprint)
+        if record is None or index < 0 or index >= len(record.keys):
+            self.set_error("This key is no longer loaded.")
+            return
+        self.selected_fp = fingerprint
+        self.selected_key_index = index
+        self.slip_labels = False
+        self.show_secret = False
+        self.show_passphrase = False
+        self.go("key")
 
     def _step_account(self, fingerprint: bytes, delta: int):
         if self.wallet_index >= len(self.session.wallets):
@@ -5224,13 +5316,15 @@ class App:
             return "Do you want to create a SingleSig wallet for this seed?"
         if self.confirm == "delete-key" and self.selected_fp is not None:
             try:
-                return self.session.deletion_message(self.selected_fp, 0)
+                return self.session.deletion_message(self.selected_fp, self.selected_key_index)
             except SessionError:
                 return "Delete this key?"
         if self.confirm == "delete-wallet":
             return "Delete this wallet? Its keys stay loaded."
         if self.confirm == "replace-file":
             return f'Replace "{Path(self.export_path).name}"?'
+        if self.confirm == "open-wallet-key" and self._wallet_key_target is not None:
+            return "Go to Seed Key?" if self._wallet_key_target[2] else "Go to External Key?"
         return "Delete this key?"
 
     def _confirm(self, frame: Frame):
@@ -5303,6 +5397,8 @@ class App:
             self._delete_selected_key()
         elif kind == "delete-wallet":
             self._delete_selected_wallet()
+        elif kind == "open-wallet-key":
+            self._open_wallet_key()
         elif kind == "replace-file":
             self._write_export()
 
@@ -5952,6 +6048,10 @@ class App:
     def _delete_selected_key(self):
         if self.selected_fp is None:
             return
+        came_from_wallet = bool(self.back) and self.back[-1] == "wallet"
+        wallet = None
+        if came_from_wallet and self.wallet_index < len(self.session.wallets):
+            wallet = self.session.wallets[self.wallet_index]
         try:
             self.set_notice(self.session.delete_key(self.selected_fp, self.selected_key_index))
         except SessionError as exc:
@@ -5959,6 +6059,12 @@ class App:
             return
         _forget_qr_codes()
         self.selected_fp = None
+        if wallet is not None and wallet in self.session.wallets:
+            self.wallet_index = self.session.wallets.index(wallet)
+            self.back_one()
+            return
+        if came_from_wallet:
+            self.back = []
         self.screen = "keys"
 
     def _current_export(self) -> str:

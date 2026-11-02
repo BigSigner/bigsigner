@@ -33,6 +33,7 @@ def test_the_longest_fingerprint_name_fits():
         _DETAIL_ICON,
         _WALLET_CARD_GAP,
         _WALLET_CARD_ICON,
+        _WALLET_KEY_PAD,
     )
     from bigsigner.ui.canvas import MARGIN, WIDTH, font, wrap
 
@@ -60,8 +61,8 @@ def test_the_longest_fingerprint_name_fits():
     key_room = WIDTH - MARGIN - (MARGIN + _DETAIL_ICON + 10)
     fits_line(NAME_ON_KEY, _widest_name_line(draw, NAME_ON_KEY, 0), key_room)
     fits_line(NAME_ON_KEY, _widest_name_line(draw, NAME_ON_KEY, 1), key_room)
-    # Wallet screen: the same two lines sit to the right of the fingerprint icon.
-    wallet_room = WIDTH - MARGIN - (MARGIN + _DETAIL_ICON + 10)
+    # Wallet screen: the same two lines sit to the right of the icon, inside the key card.
+    wallet_room = WIDTH - 2 * (MARGIN + _WALLET_KEY_PAD) - _DETAIL_ICON - 10
     fits_line(NAME_ON_WALLET, _widest_name_line(draw, NAME_ON_WALLET, 0), wallet_room)
     fits_line(NAME_ON_WALLET, _widest_name_line(draw, NAME_ON_WALLET, 1), wallet_room)
     # Wallet card: two lines to the right of the key or eye icon. Multisig row: two lines beside the checkbox.
