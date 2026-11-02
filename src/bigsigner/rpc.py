@@ -4,8 +4,10 @@ The panel reads the pipe named by ``BIGSIGNER_RPC``. Each line starts with a
 command word. This command writes that line as it was typed. The panel checks
 it. ``addseed`` is one command: it is followed by the mnemonic. Twelve, 18, or
 24 words are the seed. Thirteen, 19, or 25 words mean the last word is the
-passphrase, and that word does not have to be in the word list. The pipe is in
-RAM. Nothing is written to the SD card.
+passphrase, and that word does not have to be in the word list. ``tap x y``
+is a finger down and a finger up. ``tapdown``, ``tapmove``, and ``tapup`` are
+those three phases, each followed by ``x y``. The pipe is in RAM. Nothing is
+written to the SD card.
 
 On the device, after the panel has been started with that variable:
 
@@ -63,7 +65,34 @@ def apply_line(app, line: str) -> str:
     command, rest = command_of(line)
     if command == "addseed":
         return app.inject_mnemonic(rest)
+    point = _tap_point(rest)
+    if point is not None:
+        x, y = point
+        if command == "tap":
+            app.pointer_down(x, y)
+            app.pointer_up(x, y)
+            return f"tap {x} {y}"
+        if command == "tapdown":
+            app.pointer_down(x, y)
+            return f"tapdown {x} {y}"
+        if command == "tapmove":
+            app.pointer_move(x, y)
+            return f"tapmove {x} {y}"
+        if command == "tapup":
+            app.pointer_up(x, y)
+            return f"tapup {x} {y}"
     return command_refusal(command)
+
+
+def _tap_point(rest: str) -> tuple[int, int] | None:
+    """Two integer coordinates, or None when the line is not a tap."""
+    parts = rest.split()
+    if len(parts) != 2:
+        return None
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
 
 
 def feed_lines(pending: bytearray, chunk: bytes) -> tuple[list[str], bool]:

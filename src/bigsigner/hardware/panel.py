@@ -31,8 +31,6 @@ def run_panel():
     touch_path = find_touch()
     touch = os.open(touch_path, os.O_RDONLY | os.O_NONBLOCK) if touch_path else None
     ranges = (axis_range(touch, ABS_X), axis_range(touch, ABS_Y)) if touch else None
-    tap_path = os.environ.get("BIGSIGNER_TAP", "").strip()
-    inject = os.open(tap_path, os.O_RDWR | os.O_NONBLOCK) if tap_path and os.path.exists(tap_path) else None
     rpc = open_rpc_pipe()
     rpc_fd = None if rpc is None else rpc[0]
     ui_path = os.environ.get("BIGSIGNER_UI", "").strip()
@@ -120,7 +118,7 @@ def run_panel():
         x_range = ranges[0] if ranges else (0, width - 1)
         y_range = ranges[1] if ranges else (0, height - 1)
         logged_touch = False
-        for point in read_points(touch, width, height, x_range, y_range, wait=wait, inject=inject, rpc=rpc_fd):
+        for point in read_points(touch, width, height, x_range, y_range, wait=wait, rpc=rpc_fd):
             if point is None:
                 app.pointer_idle()
                 blit()
@@ -149,9 +147,7 @@ def run_panel():
                         pending = True
             elif phase == "up":
                 app.pointer_up(x, y)
-                elapsed = blit()
-                if inject is not None:
-                    _kmsg(f"tap {x},{y} {elapsed} ms")
+                blit()
     finally:
         camera.close()
 

@@ -69,17 +69,10 @@ These variables are for the panel and the tests. Do not set them on a device tha
 | --- | --- |
 | `BIGSIGNER_INITIAL_SEED` | A 12, 18, or 24 word mnemonic loaded when the boot screen is left. Commas are treated as spaces. An invalid value is printed and shown on screen. |
 | `BIGSIGNER_CPU_SERIAL` | A string mixed into camera entropy. The default is `bigsigner-emulator`. |
-| `BIGSIGNER_TAP` | Path of a pipe the panel reads in addition to the touchscreen. Leave it unset on a device that holds real funds; a missing file does nothing. Create the pipe before the process starts. A line `x y` is a tap. `down x y`, `move x y`, and `up x y` are those phases, and they go through the same press handling as a finger. Each release is logged as `bigsigner: tap x,y N ms`. |
 | `BIGSIGNER_UI` | Path of a file the panel appends after each paint, one JSON line with the screen, the frame time, and a box for every control and text line. Leave it unset on a device that holds real funds. |
-| `BIGSIGNER_RPC` | Path of a pipe the panel reads along with the touchscreen. The default is `/tmp/bigsigner-rpc`, which the panel creates. `off` disables it. Do not enable it on a device that holds real funds. Each line starts with a command word. For example, `addseed` is followed by a 12, 18, or 24 word mnemonic. A 13th, 19th, or 25th word is the passphrase, and that word does not have to be in the word list. A seed that is already loaded is left as it is. On the boot screen a new seed waits until Continue. After that, the seed key opens. |
+| `BIGSIGNER_RPC` | Path of a pipe the panel reads along with the touchscreen. The default is `/tmp/bigsigner-rpc`, which the panel creates. `off` disables it. Do not enable it on a device that holds real funds. Each line starts with a command word. `addseed` is followed by a 12, 18, or 24 word mnemonic. A 13th, 19th, or 25th word is the passphrase, and that word does not have to be in the word list. A seed that is already loaded is left as it is. On the boot screen a new seed waits until Continue. After that, the seed key opens. `tap x y` is a finger down and a finger up. `tapdown x y`, `tapmove x y`, and `tapup x y` are those phases. |
 
-```bash
-mkfifo /tmp/bigsigner-tap
-BIGSIGNER_TAP=/tmp/bigsigner-tap python -m bigsigner
-printf '240 726\n' > /tmp/bigsigner-tap
-```
-
-`python -m bigsigner.rpc` writes one command to that pipe as it was typed. The panel checks `addseed`. A bad mnemonic is refused there. The words are not printed. From a computer, `docs/scripts/rpc.sh` in bigsigner-os sends the line over SSH to the panel that is already running. The pipe is in RAM. The script does not restart the panel.
+`python -m bigsigner.rpc` writes one command to that pipe as it was typed. The panel checks `addseed`. A bad mnemonic is refused there. The words are not printed. `tap`, `tapdown`, `tapmove`, and `tapup` press the screen. From a computer, `docs/scripts/rpc.sh` in bigsigner-os sends the line over SSH to the panel that is already running. The pipe is in RAM. The script does not restart the panel.
 
 ```bash
 mkfifo /tmp/bigsigner-rpc

@@ -147,6 +147,27 @@ def test_a_missing_reader_is_an_error(tmp_path):
         write_pipe(str(path), ABANDON)
 
 
+def test_tap_commands_press_and_release():
+    app = App()
+    app.screen = "keys"
+    app.render()
+    plus = next(hit["box"] for hit in app.hits if hit["action"] == "toggle-add")
+    x = (plus[0] + plus[2]) // 2
+    y = (plus[1] + plus[3]) // 2
+    assert apply_line(app, f"tap {x} {y}") == f"tap {x} {y}"
+    assert app.add_menu is True
+    assert app._press is None
+
+    assert apply_line(app, "tapdown 10 20") == "tapdown 10 20"
+    assert app._press[:2] == (10, 20)
+    assert apply_line(app, "tapmove 10 80") == "tapmove 10 80"
+    assert apply_line(app, "tapup 10 80") == "tapup 10 80"
+    assert app._press is None
+
+    assert apply_line(app, "tap 1").startswith("command refused")
+    assert apply_line(app, "tapdown no").startswith("command refused")
+
+
 def test_an_injected_seed_waits_on_the_boot_screen():
     app = App()
     assert app.screen == "boot"

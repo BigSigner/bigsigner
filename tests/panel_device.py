@@ -88,7 +88,7 @@ class Panel:
             raise RuntimeError(f"rsync failed ({proc.returncode})")
 
     def start(self):
-        """Stop the normal app and start this tree with the tap pipe."""
+        """Stop the normal app and start this tree."""
         self.started = True
         self.folder.mkdir(parents=True, exist_ok=True)
         for old in self.folder.glob("*.png"):
@@ -103,10 +103,8 @@ if [ -f /tmp/bigsigner-panel.pid ]; then
     rm -f /tmp/bigsigner-panel.pid
 fi
 sleep 1
-rm -f /tmp/bigsigner-tap /tmp/bigsigner-ui.jsonl
-mkfifo /tmp/bigsigner-tap
+rm -f /tmp/bigsigner-ui.jsonl
 cd /mnt/data/seedsigner/src
-export BIGSIGNER_TAP=/tmp/bigsigner-tap
 export BIGSIGNER_UI=/tmp/bigsigner-ui.jsonl
 export BIGSIGNER_INITIAL_SEED='{ABANDON}'
 nohup python3 main.py >/tmp/bigsigner-panel.log 2>&1 &
@@ -134,7 +132,6 @@ if [ -f /tmp/bigsigner-panel.pid ]; then
     rm -f /tmp/bigsigner-panel.pid
 fi
 sleep 1
-rm -f /tmp/bigsigner-tap
 seedsigner start || true
 """,
             timeout=40,
@@ -190,13 +187,13 @@ seedsigner start || true
         before = self.latest["frame"]
         x, y = point
         print(f"Tap {name} at {x},{y}", flush=True)
-        self.ssh(f"printf '%s\\n' '{x} {y}' > /tmp/bigsigner-tap", timeout=20)
+        self.ssh(f"printf '%s\\n' 'tap {x} {y}' > /tmp/bigsigner-rpc", timeout=20)
         return self.wait(lambda snap: snap["frame"] > before, timeout, f"a frame after tapping {name}")
 
     def burst(self, lines: list[str]):
         """One write. A pause longer than the touch gap would end the drag."""
         payload = "\n".join(lines) + "\n"
-        self.ssh("printf '%s' " + shlex.quote(payload) + " > /tmp/bigsigner-tap", timeout=20)
+        self.ssh("printf '%s' " + shlex.quote(payload) + " > /tmp/bigsigner-rpc", timeout=20)
 
     def shot(self, name: str) -> Image.Image:
         stride = int(self.ssh("cat /sys/class/graphics/fb0/stride", timeout=20).strip())
@@ -430,7 +427,7 @@ def _drag_qr(panel: Panel, box) -> list[dict]:
     y1 = y0 - 80
     before = panel.latest["frame"]
     before_scroll = panel.latest["qr_scroll"]
-    panel.burst([f"down {x} {y0}", f"move {x} {y1}", f"up {x} {y1}"])
+    panel.burst([f"tapdown {x} {y0}", f"tapmove {x} {y1}", f"tapup {x} {y1}"])
     after = panel.wait(
         lambda snap: snap["frame"] > before and snap["qr_scroll"] > before_scroll,
         20,

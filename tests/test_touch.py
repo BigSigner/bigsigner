@@ -161,7 +161,12 @@ def test_two_taps_in_one_burst_stay_two_taps():
         ("down", 20, 20),
         ("up", 22, 20),
     ]
-    assert coalesce(actions) == [("up", 10, 10), ("up", 22, 20)]
+    assert coalesce(actions) == [
+        ("down", 10, 10),
+        ("up", 10, 10),
+        ("down", 20, 20),
+        ("up", 22, 20),
+    ]
 
 
 def test_a_seed_line_wakes_the_reader_without_a_touch():
@@ -180,24 +185,6 @@ def test_a_seed_line_wakes_the_reader_without_a_touch():
         os.close(seed_reader)
         os.close(seed_writer)
     assert point == ("rpc", "one two")
-
-
-def test_a_written_line_is_a_tap():
-    touch_reader, touch_writer = os.pipe()
-    inject_reader, inject_writer = os.pipe()
-    os.write(inject_writer, b"12 34\n")
-
-    def wait():
-        return 0.2
-
-    try:
-        point = next(read_points(touch_reader, 480, 800, (0, 479), (0, 799), wait=wait, inject=inject_reader))
-    finally:
-        os.close(touch_reader)
-        os.close(touch_writer)
-        os.close(inject_reader)
-        os.close(inject_writer)
-    assert point == ("up", 12, 34)
 
 
 def test_a_tap_in_one_burst_is_a_single_release():

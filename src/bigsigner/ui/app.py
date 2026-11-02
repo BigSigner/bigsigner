@@ -227,6 +227,12 @@ QR_BRIGHTNESS_STOPS = (
 )
 
 
+def _in_box(box: tuple[int, int, int, int], x: int, y: int) -> bool:
+    """True when the point is inside the box. The right and bottom edges are excluded."""
+    left, top, right, bottom = box
+    return left <= x < right and top <= y < bottom
+
+
 class App:
     def __init__(self):
         self.session = Session()
@@ -389,7 +395,6 @@ class App:
         self._press = None
         self._press_at = 0.0
         self._scroll_at = None
-        self._ignore_lift = False
         self._painters = {
             "boot": self._boot,
             "warning": self._warning,
@@ -527,7 +532,6 @@ class App:
         else:
             panel = ""
         self._press = (x, y, self.scroll.get(self.screen, 0), False, panel)
-        self._ignore_lift = False
         self._press_at = time.monotonic()
         if panel == "qr":
             self._grid_origin = self.qr_scroll
@@ -587,8 +591,8 @@ class App:
         # A press on the keyboard is a key, down to the bottom edge of the panel.
         if self.keyboard_top is not None and origin_y >= self.keyboard_top:
             return False
-        # Plus and minus are clicks even when the finger slides off them.
-        if self._in_still_box(origin_x, origin_y):
+        # Plus and minus stay clicks only when the lift is still on that same control.
+        if self._still_box(origin_x, origin_y) is not None:
             return False
         if panel == "hfield":
             return self._move_hscroll(dx, dy, dragging, origin_x, origin_y, panel)
@@ -643,14 +647,10 @@ class App:
     def pointer_up(self, x: int, y: int, camera: dict | None = None):
         press = self._press
         self._press = None
+        # A lift with no stored press is a missed down. It is not a click.
         if press is None:
-            if self._ignore_lift:
-                self._ignore_lift = False
-                return
-            self.tap(x, y, camera)
             return
-        self._ignore_lift = False
-        if self._press_is_click(press):
+        if self._press_is_click(press, (x, y)):
             self.tap(press[0], press[1], camera)
 
     def pointer_idle(self) -> bool:
@@ -660,33 +660,20 @@ class App:
     def _note_scroll(self) -> None:
         self._scroll_at = time.monotonic()
 
-    def _press_is_click(self, press) -> bool:
+    def _press_is_click(self, press, lift: tuple[int, int]) -> bool:
         if self.keyboard_top is not None and press[1] >= self.keyboard_top:
             return True
-        if self._in_still_box(press[0], press[1]):
-            return True
-        # A scrollable area clicks only when the finger never moved.
-        if press[3] and self._press_scrolls(press):
-            return False
-        return True
+        down = self._still_box(press[0], press[1])
+        if down is not None:
+            return _in_box(down, lift[0], lift[1])
+        return not press[3]
 
-    def _press_scrolls(self, press) -> bool:
-        panel = press[4]
-        if panel == "seed":
-            return self.seed_grid_max > 0
-        if panel == "qr":
-            return self.qr_scroll_max > 0
-        if panel == "entropy":
-            return self.entropy_scroll_max > 0
-        if panel == "hfield":
-            return self.hscroll_max > 0
-        return self.scroll_max.get(self.screen, 0) > 0
-
-    def _in_still_box(self, x: int, y: int) -> bool:
-        for left, top, right, bottom in self._still_boxes:
-            if left <= x < right and top <= y < bottom:
-                return True
-        return False
+    def _still_box(self, x: int, y: int) -> tuple[int, int, int, int] | None:
+        """The still control under this point, or None when the point is in none of them."""
+        for box in self._still_boxes:
+            if _in_box(box, x, y):
+                return box
+        return None
 
     def _scroll_allowed(self) -> bool:
         return not self.menu and not self.add_menu and self.confirm is None and self.open_dropdown is None
@@ -2021,7 +2008,6 @@ class App:
         self.open_dropdown = None
         self._press = None
         self._seed_title_count = 0
-        self._ignore_lift = True
         self._show_imported(added)
         return f"seed {fingerprint}"
 

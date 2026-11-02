@@ -136,7 +136,7 @@ def test_back_from_the_account_editor_repaints_the_derive_page():
     assert any(item["action"] == "derive-inc" for item in app.hits)
 
 
-def test_a_slide_on_plus_changes_the_account_and_does_not_scroll():
+def test_a_slide_inside_plus_changes_the_account_and_a_slide_off_does_not():
     app, _fingerprint = _seed_app()
     app._act("derive-native")
     app.render()
@@ -144,6 +144,11 @@ def test_a_slide_on_plus_changes_the_account_and_does_not_scroll():
     hit = next(item for item in app.hits if item["action"] == "derive-inc")
     x = (hit["box"][0] + hit["box"][2]) // 2
     y = (hit["box"][1] + hit["box"][3]) // 2
+    app.pointer_down(x, y)
+    app.pointer_move(x, y + 10)
+    app.pointer_up(x, y + 10)
+    assert app.derive_account == 1
+    assert app.scroll.get("derive", 0) == 0
     app.pointer_down(x, y)
     app.pointer_move(x, y + 90)
     app.pointer_up(x, y + 90)
@@ -204,6 +209,17 @@ def test_a_long_hold_on_the_account_number_opens_it():
     app._press_at -= 1
     app.pointer_up(x, y)
     assert app.screen == "account"
+
+
+def test_a_lift_without_a_press_does_not_open_the_account():
+    app, _fingerprint = _seed_app()
+    app._act("derive-native")
+    app.render()
+    box = app._derive_account_box
+    x = (box[0] + box[2]) // 2
+    y = (box[1] + box[3]) // 2
+    app.pointer_up(x, y)
+    assert app.screen == "derive"
 
 
 def test_a_lift_on_the_account_number_opens_it():

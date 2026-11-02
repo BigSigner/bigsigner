@@ -201,15 +201,12 @@ def coalesce(actions: list[tuple]) -> list[tuple]:
         nonlocal down, move, started
         if not started:
             return
-        if down is not None and up is not None and move is None:
+        if down is not None:
+            result.append(("down", down[0], down[1]))
+        if move is not None:
+            result.append(("move", move[0], move[1]))
+        if up is not None:
             result.append(("up", up[0], up[1]))
-        else:
-            if down is not None:
-                result.append(("down", down[0], down[1]))
-            if move is not None:
-                result.append(("move", move[0], move[1]))
-            if up is not None:
-                result.append(("up", up[0], up[1]))
         down = move = None
         started = False
 
@@ -230,19 +227,6 @@ def coalesce(actions: list[tuple]) -> list[tuple]:
     return result
 
 
-def tap_line(line: bytes):
-    """One injected point. "x y" is a tap. "down x y" is that phase."""
-    parts = line.decode("ascii", errors="replace").split()
-    try:
-        if len(parts) == 2:
-            return ("up", int(parts[0]), int(parts[1]))
-        if len(parts) == 3 and parts[0] in ("down", "move", "up"):
-            return (parts[0], int(parts[1]), int(parts[2]))
-    except ValueError:
-        return None
-    return None
-
-
 def _nonblocking(handle):
     """A later read returns immediately when this pipe has nothing waiting."""
     if handle is None:
@@ -251,7 +235,7 @@ def _nonblocking(handle):
     fcntl.fcntl(handle, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
 
-def read_points(handle, width, height, x_range, y_range, wait=None, inject=None, rpc=None):
+def read_points(handle, width, height, x_range, y_range, wait=None, rpc=None):
     """Yield ("down", x, y), ("move", x, y), ("up", x, y), ("rpc", line), or None.
 
     A timeout means no touch arrived before wait() elapsed, so the screen can redraw.
@@ -259,7 +243,6 @@ def read_points(handle, width, height, x_range, y_range, wait=None, inject=None,
     device: the Pi Zero has one core, and the touch controller's kernel thread
     needs it. One finger report is one yield, not one yield per input event. The
     device is read without blocking, the same way the touch demo drains it.
-    inject is an optional pipe of tap lines, so a test can press without the panel.
     rpc is an optional pipe of command lines. ("rpc-error", message) means a
     line was longer than the pipe allows and was dropped.
     """
@@ -267,9 +250,7 @@ def read_points(handle, width, height, x_range, y_range, wait=None, inject=None,
     if handle is not None:
         _nonblocking(handle)
         contact = _Contact(width, height, x_range, y_range)
-    _nonblocking(inject)
     _nonblocking(rpc)
-    pending = bytearray()
     rpc_pending = bytearray()
     while True:
         timeout = wait() if callable(wait) else wait
@@ -277,7 +258,7 @@ def read_points(handle, width, height, x_range, y_range, wait=None, inject=None,
             lift_wait = contact.lift_timeout()
             if lift_wait is not None:
                 timeout = lift_wait if timeout is None else min(timeout, lift_wait)
-        watch = [item for item in (handle, inject, rpc) if item is not None]
+        watch = [item for item in (handle, rpc) if item is not None]
         if not watch:
             return
         ready, _, _ = select.select(watch, [], [], timeout)
@@ -307,19 +288,6 @@ def read_points(handle, width, height, x_range, y_range, wait=None, inject=None,
                     yield ("rpc-error", "command line was too long")
                 for line in lines:
                     yield ("rpc", line)
-        if inject is not None and inject in ready:
-            try:
-                chunk = os.read(inject, 256)
-            except BlockingIOError:
-                chunk = b""
-            if chunk:
-                pending.extend(chunk)
-                while b"\n" in pending:
-                    line, _, rest = bytes(pending).partition(b"\n")
-                    pending[:] = rest
-                    point = tap_line(line)
-                    if point is not None:
-                        yield point
         if handle is None or handle not in ready:
             continue
         actions = []
