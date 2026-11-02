@@ -97,14 +97,16 @@ def test_the_word_count_control_accepts_a_press_above_it():
     app.back = ["keys"]
     app.render()
     drawn = next(hit["box"] for hit in app.hits if hit["action"] == "dropdown-seed-length")
-    # The back button stays a back button. The raised target starts to its right.
+    # The back button stays a back button.
     app.tap(40, 70)
     assert app.screen == "keys"
     app.screen = "seed"
     app.back = ["keys"]
     app.render()
-    # The drawn control starts under the title. The press this panel reports is higher.
-    app.tap(240, drawn[1] - 30)
+    # The title text is not the dropdown. The gap under the title still is.
+    app.tap(240, 60)
+    assert app.open_dropdown is None
+    app.tap(240, drawn[1] - 6)
     assert app.open_dropdown == "seed-length"
 
 

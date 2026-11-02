@@ -200,8 +200,8 @@ SCROLL_DELTA_X = 24
 SCROLL_DELTA_Y = 24
 # A tap just after a scroll is the finger arriving, not a button press.
 SCROLL_QUIET = 0.5
-# This panel reports a press above the finger. A dropdown sits against the
-# title bar, so the missed press lands on the title unless the target reaches up.
+# This panel reports a press above the finger. The extra target reaches up,
+# but it stops at the title bar so the title text is not the control.
 DROPDOWN_RAISE = 48
 SEED_FORMATS = ("words", "compact", "text")
 SEED_FORMAT_NAMES = ("Words", "Compact SeedQR", "Text QR")
@@ -1232,17 +1232,10 @@ class App:
             )
 
     def _hit_above(self, frame: Frame, box, action: str, label: str, reach: int) -> None:
-        """A target above the drawn box. The back button in the title bar stays clear."""
+        """A target above the drawn box. It stops at the title bar."""
         left, top, right, _bottom = box
-        strip_top = max(0, top - reach)
+        strip_top = max(HEADER, top - reach)
         if strip_top >= top:
-            return
-        back_right = 84
-        if strip_top < HEADER and left < back_right:
-            if right > back_right:
-                frame.hit((back_right, strip_top, right, min(top, HEADER)), action, label)
-            if top > HEADER:
-                frame.hit((left, HEADER, right, top), action, label)
             return
         frame.hit((left, strip_top, right, top), action, label)
 
