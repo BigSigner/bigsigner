@@ -188,7 +188,7 @@ def tick(raw):
     changed = consume_memory_change()
     return json.dumps({
         "screen": app.screen,
-        "delay": delay or 0,
+        "delay": delay,
         "png": base64.b64encode(buffer.getvalue()).decode("ascii"),
         "card": changed,
     })

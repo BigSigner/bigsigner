@@ -578,8 +578,11 @@ function showFrame(msg) {
   frameUrl = next;
   hideStatus();
   syncCamera(msg.screen || "");
-  const delay = Number(msg.delay) || 0;
-  if (delay > 0) refreshTimer = setTimeout(loadFrame, delay * 1000 + 80);
+  // null waits for a click. 0 asks for the next frame now; that frame does the work.
+  if (typeof msg.delay === "number" && Number.isFinite(msg.delay)) {
+    const slack = msg.delay > 0 ? 80 : 0;
+    refreshTimer = setTimeout(loadFrame, msg.delay * 1000 + slack);
+  }
 }
 function applyRemote(sent, remote) {
   const remoteCard = normalizeCard(remote);

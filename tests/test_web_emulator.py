@@ -38,6 +38,8 @@ def test_the_static_page_reads_the_bundle_and_checks_downloads():
     assert "cdn.jsdelivr.net" not in worker
     assert "files.pythonhosted.org" not in worker
     assert "python -m bigsigner.bundle" in worker
+    assert '"delay": delay,' in worker
+    assert 'typeof msg.delay === "number"' in page
     assert "web/external-assets/" in Path(".gitignore").read_text(encoding="utf-8")
     by_name = {name: digest for name, _url, digest in EXTERNAL_ASSETS}
     assert by_name["embit/embit-0.8.0.tar.gz"] == "8bf4b10073c67400370ce523fb16f035fe759f6fdd987c579bdcc268d75ed770"
