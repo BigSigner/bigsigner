@@ -1,6 +1,7 @@
 """Show the signer on the HDMI framebuffer and read touch events."""
 
 import os
+import select
 import time
 
 from ..rpc import apply_line, open_rpc_pipe
@@ -73,6 +74,11 @@ def run_panel():
             except Exception as exc:
                 dump_error = True
                 _kmsg(f"ui dump {exc}")
+        # A touch already waiting was pressed while Loading was on the glass.
+        if touch is not None and app.take_queued_touch_discard():
+            ready, _, _ = select.select([touch], [], [], 0)
+            if ready:
+                app.arm_queued_touch_discard()
         return elapsed
 
     def _write(image):

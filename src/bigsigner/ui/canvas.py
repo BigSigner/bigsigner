@@ -285,7 +285,7 @@ class Frame:
         lines = wrap(self.draw, value, face, width or WIDTH - x - MARGIN)
         for line in lines:
             # A scrolled line that starts under the title bar would be sliced in half.
-            if y >= HEADER:
+            if HEADER <= y < getattr(self, "clip_bottom", HEIGHT):
                 self.draw.text((x, y), line, font=face, fill=fill)
                 self.mark(line, self.draw.textbbox((x, y), line, font=face))
             y += size + 8

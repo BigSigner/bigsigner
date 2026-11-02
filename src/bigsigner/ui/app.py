@@ -88,11 +88,10 @@ SEED_CARD_FONT = 36
 XPUB_ACCOUNT_PREVIEW = 20
 # External Key screen. Nineteen letters and the ellipsis fit on one centered line.
 XPUB_KEY_PREVIEW = 19
-# One address row. The list keeps three cached blocks of 3*K cards.
+# One address row. Blocks are ADDRESS_WINDOW rows and do not overlap.
 ADDRESS_ROW = 64
 ADDRESS_GAP = 8
-# Cards in one scroll window, rounded up. A cached image holds 3*K cards
-# and starts on a multiple of K, such as 0–24, 8–32, or 16–40.
+# Rows in one block. The screen stitches the two blocks it can see.
 ADDRESS_WINDOW = 8
 ADDRESS_QR = 400
 # 25 monospace characters at this size stay inside the page margins.
@@ -111,6 +110,12 @@ def _address_screen_title(branch: int, index: int) -> str:
     if len(text) > 4:
         text = text[:3] + ELLIPSIS
     return f"{kind} Address {text}"
+
+
+def _address_text_groups(address: str) -> list[str]:
+    """Groups of four. Trailing spaces make the last group four characters too."""
+    padded = address + " " * ((-len(address)) % 4)
+    return [padded[index : index + 4] for index in range(0, len(padded), 4)]
 
 
 def _address_path_lines(path: str, limit: int = ADDRESS_PATH_CHARS) -> list[str]:
@@ -355,6 +360,9 @@ class App:
         self.address_search_shown = False
         self._addresses_loading = False
         self._addresses_loading_shown = False
+        # A gesture that started on Loading is not a click on the next screen.
+        self._discard_gesture = False
+        self._discard_queued_touch = False
         self._address_tops = {}
         self._address_top_key = None
         self._address_cache = {}
@@ -364,6 +372,7 @@ class App:
         self._address_view_h = 0
         self._address_chrome = None
         self._address_frame = None
+        self._address_sheet = None
         self._address_fixed_hits = []
         self._address_still = []
         self._address_list_band = (0, 0)
@@ -488,6 +497,8 @@ class App:
             self._seed_picture = None
         if self.screen != "passphrase":
             self._pass_picture = None
+        if self.screen != "address":
+            self._address_sheet = None
         self._expire_notice()
         self._advance_boot()
         self._advance_address_search()
@@ -508,7 +519,25 @@ class App:
             self._addresses_loading_shown = True
         return frame.image
 
+    def _touch_blocked(self) -> bool:
+        """Loading is on screen, or this gesture began while it was."""
+        if self._discard_gesture:
+            return True
+        return self._addresses_loading and self._addresses_loading_shown
+
+    def take_queued_touch_discard(self) -> bool:
+        """True once, after Addresses has replaced Loading."""
+        pending = self._discard_queued_touch
+        self._discard_queued_touch = False
+        return pending
+
+    def arm_queued_touch_discard(self) -> None:
+        """The panel already had a touch waiting when Loading left the screen."""
+        self._discard_gesture = True
+
     def tap(self, x: int, y: int, camera: dict | None = None):
+        if self._touch_blocked():
+            return
         if self._scroll_at is not None and time.monotonic() - self._scroll_at < SCROLL_QUIET:
             return
         if camera:
@@ -522,6 +551,11 @@ class App:
                 return
 
     def pointer_down(self, x: int, y: int):
+        if self._addresses_loading and self._addresses_loading_shown:
+            self._discard_gesture = True
+            return
+        if self._discard_gesture:
+            return
         if self._in_hscroll_field(x, y):
             panel = "hfield"
         elif self._in_seed_grid(x, y):
@@ -584,6 +618,8 @@ class App:
 
     def pointer_move(self, x: int, y: int) -> bool:
         """Drag the current page, or the seed-word list, vertically."""
+        if self._touch_blocked():
+            return False
         if self._press is None:
             return False
         origin_x, origin_y, origin_scroll, dragging, panel = self._press
@@ -646,6 +682,10 @@ class App:
         return True
 
     def pointer_up(self, x: int, y: int, camera: dict | None = None):
+        if self._touch_blocked():
+            self._discard_gesture = False
+            self._press = None
+            return
         press = self._press
         self._press = None
         # A lift with no stored press is a missed down. It is not a click.
@@ -920,14 +960,18 @@ class App:
         """The loading button is already on screen. Build both address tabs, then open them."""
         if not self._addresses_loading or not self._addresses_loading_shown:
             return
-        self._addresses_loading = False
-        self._addresses_loading_shown = False
         if self.screen != "wallet" or self.wallet_index >= len(self.session.wallets):
+            self._addresses_loading = False
+            self._addresses_loading_shown = False
             return
         self.address_branch = 0
         self.scroll["addresses"] = 0
         self.go("addresses")
         self._warm_address_tops()
+        self._addresses_loading = False
+        self._addresses_loading_shown = False
+        self._press = None
+        self._discard_queued_touch = True
 
     def _act_address_receive(self):
         if self.address_branch != 0:
@@ -3461,10 +3505,11 @@ class App:
         if dragging:
             offset = self._address_scroll_to(offset)
         else:
-            self._ensure_address_pages(offset)
+            # Opening the list derives blocks X and X+1. A return visit also keeps the neighbors.
+            self._ensure_address_blocks(offset, prefetch=offset != 0)
         self.scroll["addresses"] = offset
         self.scroll_max["addresses"] = limit
-        self._paste_address_page(frame, list_top, list_bottom, offset)
+        self._paste_address_blocks(frame, list_top, list_bottom, offset)
         visible = max(1, (view + stride - 1) // stride) + 1
         self._address_row_hits(frame, list_top, list_bottom, offset, stride, offset // stride, visible)
         frame.button(tools_y, "Addresses Tools", "address-tools")
@@ -3483,7 +3528,7 @@ class App:
         self._address_list_band = (list_top, list_bottom)
 
     def _paint_address_scroll(self, frame: Frame) -> bool:
-        """A drag slices one cached block. It does not derive addresses."""
+        """A drag stitches the cached blocks. It does not derive addresses."""
         if self._press is None or self._address_frame is None or not self._address_pages_current():
             return False
         chrome = (self.address_branch, self.wallet_index, bool(self.notice), bool(self.menu))
@@ -3492,13 +3537,13 @@ class App:
         stride = ADDRESS_ROW + ADDRESS_GAP
         offset = self.scroll.get("addresses", 0)
         list_top, list_bottom = self._address_list_band
-        if self._address_page_for(offset) is None:
+        if not self._address_blocks_cover(offset):
             return False
         view = max(1, list_bottom - list_top)
         frame.image = self._address_frame.copy()
         frame.draw = ImageDraw.Draw(frame.image)
         frame.hits = list(self._address_fixed_hits)
-        self._paste_address_page(frame, list_top, list_bottom, offset)
+        self._paste_address_blocks(frame, list_top, list_bottom, offset)
         visible = max(1, (view + stride - 1) // stride) + 1
         self._address_row_hits(frame, list_top, list_bottom, offset, stride, offset // stride, visible)
         self._still_boxes.extend(self._address_still)
@@ -3532,79 +3577,111 @@ class App:
             return False
         return self._address_page_key == (self._address_identity(), self.address_branch)
 
-    def _address_page_starts(self, offset: int) -> list[int]:
-        """Three blocks of 3*K cards, each starting on a multiple of K, around this scroll."""
+    def _address_block_starts(self, offset: int, prefetch: bool) -> list[int]:
+        """Start indexes of the blocks to keep. X is the block under the top pixel.
+
+        The screen can show X and X+1. A scroll also keeps X-1 and X+2.
+        """
         stride = ADDRESS_ROW + ADDRESS_GAP
-        anchor = (max(0, offset) // stride // ADDRESS_WINDOW) * ADDRESS_WINDOW
+        number = max(0, offset) // (ADDRESS_WINDOW * stride)
+        numbers = [number - 1, number, number + 1, number + 2] if prefetch else [number, number + 1]
         starts = []
-        start = anchor - ADDRESS_WINDOW
-        while len(starts) < 3:
-            if start >= 0:
-                starts.append(start)
-            start += ADDRESS_WINDOW
+        for item in numbers:
+            if item < 0:
+                continue
+            start = item * ADDRESS_WINDOW
+            if start >= 0x80000000:
+                continue
+            starts.append(start)
         return starts
 
-    def _address_page_covers(self, start: int, offset: int) -> bool:
+    def _address_blocks_cover(self, offset: int) -> bool:
+        """The cached blocks contain every pixel of the viewport."""
+        if not self._address_pages_current() or self._address_view_h <= 0:
+            return False
         stride = ADDRESS_ROW + ADDRESS_GAP
-        top = start * stride
-        bottom = (start + 3 * ADDRESS_WINDOW) * stride
-        return offset >= top and offset + self._address_view_h <= bottom
-
-    def _address_page_for(self, offset: int):
-        if not self._address_pages_current():
-            return None
+        cursor = offset
+        end = offset + self._address_view_h
         for start, image in self._address_pages:
-            if self._address_page_covers(start, offset):
-                return start, image
-        return None
+            top = start * stride
+            bottom = top + image.height
+            if bottom <= cursor:
+                continue
+            if top > cursor:
+                return False
+            cursor = bottom
+            if cursor >= end:
+                return True
+        return False
 
     def _address_scroll_to(self, offset: int) -> int:
-        """Add the finger delta to Y. Build the nearby blocks before Y moves past them."""
+        """Move Y only after block X-1 and block X+2 are cached."""
         stride = ADDRESS_ROW + ADDRESS_GAP
         view = self._address_view_h
         if view <= 0:
             return offset
         limit = max(0, 0x80000000 * stride - view)
         offset = max(0, min(offset, limit))
-        if self._address_page_for(offset) is None:
-            self._ensure_address_pages(offset)
+        self._ensure_address_blocks(offset, prefetch=True)
         return offset
 
-    def _ensure_address_pages(self, offset: int) -> None:
-        starts = self._address_page_starts(offset)
+    def _ensure_address_blocks(self, offset: int, prefetch: bool) -> None:
+        starts = self._address_block_starts(offset, prefetch)
+        # Blocks 0 and 1 stay cached so Receive and Change can reopen at the top.
+        for pinned in (0, ADDRESS_WINDOW):
+            if pinned not in starts:
+                starts.append(pinned)
+        starts.sort()
         key = (self._address_identity(), self.address_branch)
         have = [start for start, _image in self._address_pages]
         if key == self._address_page_key and have == starts:
             return
         branch = self.address_branch
-        self._fill_address_cache(branch, starts[0], starts[-1] + 3 * ADDRESS_WINDOW)
+        if starts:
+            self._fill_address_cache(branch, starts)
+        stride = ADDRESS_ROW + ADDRESS_GAP
+        old = {}
+        if key == self._address_page_key:
+            old = {
+                start: image
+                for start, image in self._address_pages
+                if image.height == ADDRESS_WINDOW * stride
+            }
         self._address_pages = [
-            (start, self._draw_address_rows(branch, start, 3 * ADDRESS_WINDOW))
+            (start, old.get(start) or self._draw_address_rows(branch, start, ADDRESS_WINDOW))
             for start in starts
         ]
         self._address_page_key = key
 
-    def _fill_address_cache(self, branch: int, start: int, end: int):
-        """Derive the rows in the bitmap. Drop rows outside that range."""
+    def _fill_address_cache(self, branch: int, starts: list[int]):
+        """Derive these blocks. Drop this branch's rows that are in none of them."""
         key = self._address_identity()
         if key != self._address_cache_key:
             self._address_cache = {}
             self._address_cache_key = key
-        start = max(0, start)
-        end = min(0x80000000, max(start, end))
+        keep = set()
+        for start in starts:
+            end = min(0x80000000, max(0, start) + ADDRESS_WINDOW)
+            keep.update(range(max(0, start), end))
         self._address_cache = {
             item: value
             for item, value in self._address_cache.items()
-            if item[0] != branch or start <= item[1] < end
+            if item[0] != branch or item[1] in keep
         }
-        missing = [index for index in range(start, end) if (branch, index) not in self._address_cache]
-        if not missing:
-            return
-        span_start = missing[0]
-        span_end = missing[-1] + 1
-        derived = self.session.addresses(self.wallet_index, branch, span_start, span_end - span_start)
-        for index, address in enumerate(derived, start=span_start):
-            self._address_cache[(branch, index)] = address
+        missing = sorted(index for index in keep if (branch, index) not in self._address_cache)
+        span = None
+        for index in missing + [None]:
+            if span is not None and (index is None or index != span[1] + 1):
+                derived = self.session.addresses(self.wallet_index, branch, span[0], span[1] - span[0] + 1)
+                for offset, address in enumerate(derived):
+                    self._address_cache[(branch, span[0] + offset)] = address
+                span = None
+            if index is None:
+                break
+            if span is None:
+                span = [index, index]
+            else:
+                span[1] = index
 
     def _draw_address_rows(self, branch: int, start: int, count: int, image: Image.Image | None = None, top: int = 0):
         stride = ADDRESS_ROW + ADDRESS_GAP
@@ -3623,18 +3700,21 @@ class App:
             draw.text((MARGIN + 16, text_y), label, font=face, fill=INK)
         return image
 
-    def _paste_address_page(self, frame: Frame, list_top: int, list_bottom: int, offset: int) -> None:
-        found = self._address_page_for(offset)
-        if found is None:
-            return
-        start, image = found
+    def _paste_address_blocks(self, frame: Frame, list_top: int, list_bottom: int, offset: int) -> None:
+        """Draw the blocks that cross this viewport, one after another."""
         stride = ADDRESS_ROW + ADDRESS_GAP
-        src = offset - start * stride
         view = list_bottom - list_top
-        bottom = min(image.height, src + view)
-        if src < 0 or bottom <= src:
+        if view <= 0:
             return
-        frame.image.paste(image.crop((0, src, WIDTH, bottom)), (0, list_top))
+        visible_bottom = offset + view
+        for start, image in self._address_pages:
+            top = start * stride
+            src_top = max(0, offset - top)
+            src_bottom = min(image.height, visible_bottom - top)
+            if src_bottom <= src_top:
+                continue
+            dest_y = list_top + max(0, top - offset)
+            frame.image.paste(image.crop((0, src_top, WIDTH, src_bottom)), (0, dest_y))
 
     def _pair_buttons(self, frame: Frame, y: int, left, right) -> int:
         gap = 12
@@ -3658,43 +3738,88 @@ class App:
             frame.header(title, "back")
             frame.text("This wallet is no longer loaded.", MARGIN, HEADER + 24, size=TITLE_SIZE)
             return
-        try:
-            address = self.session.addresses(self.wallet_index, self.address_branch, self.address_index, 1)[0]
-            paths = self.session.address_paths(self.wallet_index, self.address_branch, self.address_index)
-        except SessionError as exc:
-            frame.header(title, "back")
-            frame.text(str(exc), MARGIN, HEADER + 24, size=TITLE_SIZE)
-            return
-        label = "Derivation Path:" if len(paths) == 1 else "Derivation Paths:"
-        path_lines = [line for path in paths for line in _address_path_lines(path)]
-        button_h = frame.button_height("Export to SD Card")
-        end = HEADER + 12 + ADDRESS_QR + 4 + self._grouped_address_height(frame, address) + 8
-        end += self._text_height(frame, label, TITLE_SIZE)
+        wallet = self.session.wallets[self.wallet_index]
+        key = (
+            self.wallet_index,
+            self.address_branch,
+            self.address_index,
+            self.session.network,
+            wallet.role,
+            tuple((fingerprint, wallet.accounts[fingerprint]) for fingerprint in wallet.fingerprints),
+        )
+        reused = self._address_sheet is not None and self._address_sheet["key"] == key
+        if reused:
+            sheet = self._address_sheet
+        else:
+            try:
+                address = self.session.addresses(self.wallet_index, self.address_branch, self.address_index, 1)[0]
+                paths = self.session.address_paths(self.wallet_index, self.address_branch, self.address_index)
+            except SessionError as exc:
+                frame.header(title, "back")
+                frame.text(str(exc), MARGIN, HEADER + 24, size=TITLE_SIZE)
+                return
+            label = "Derivation Path:" if len(paths) == 1 else "Derivation Paths:"
+            path_lines = [line for path in paths for line in _address_path_lines(path)]
+            sheet = self._build_address_sheet(title, address, label, path_lines, key)
+        offset = self._scroll_offset("address", sheet["end"], clearance=8)
+        self._paste_address_sheet(frame, sheet, offset)
+        frame.header(title, "back")
+        button = sheet["button"]
+        if button is not None:
+            top = button[1] - offset
+            bottom = button[3] - offset
+            if bottom > HEADER and top < HEIGHT:
+                frame.hit((button[0], top, button[2], bottom), "export-address", "Export to SD Card")
+        # The body is already drawn. A drag only copies the visible slice.
+        if reused and self._press is not None:
+            self.dirty = (HEADER, HEIGHT)
+
+    def _build_address_sheet(self, title: str, address: str, label: str, path_lines: list[str], key) -> dict:
+        """Draw the body once, including the parts below the screen, and keep that picture."""
+        del title
+        metrics = Frame()
+        button_h = metrics.button_height("Export to SD Card")
+        end = HEADER + 12 + ADDRESS_QR + 4 + self._grouped_address_height(metrics, address) + 8
+        end += self._text_height(metrics, label, TITLE_SIZE)
         end += len(path_lines) * (ADDRESS_PATH_SIZE + 8)
         end += 4 + button_h
-        offset = self._scroll_offset("address", end, clearance=8)
-        y = HEADER + 12 - offset
+        sheet = Frame()
+        sheet.image = Image.new("RGB", (WIDTH, max(end, 1)), PAPER)
+        sheet.draw = ImageDraw.Draw(sheet.image)
+        sheet.clip_bottom = sheet.image.height
+        y = HEADER + 12
         image = _qr_image(address, ADDRESS_QR)
-        if y + image.height > HEADER and y < HEIGHT:
-            frame.image.paste(image, ((WIDTH - image.width) // 2, y))
+        sheet.image.paste(image, ((WIDTH - image.width) // 2, y))
         y += image.height + 4
-        y = self._grouped_address(frame, address, y)
-        y = frame.text(label, MARGIN, y + 8, size=TITLE_SIZE, fill=MUTED)
+        y = self._grouped_address(sheet, address, y)
+        y = sheet.text(label, MARGIN, y + 8, size=TITLE_SIZE, fill=MUTED)
         for line in path_lines:
-            y = self._centered_mono(frame, line, y, ADDRESS_PATH_SIZE, MUTED)
-        if y + button_h > HEADER and y < HEIGHT:
-            frame.button(y + 4, "Export to SD Card", "export-address")
-        frame.header(title, "back")
+            y = self._centered_mono(sheet, line, y, ADDRESS_PATH_SIZE, MUTED)
+        button = None
+        if y + button_h > HEADER:
+            sheet.button(y + 4, "Export to SD Card", "export-address")
+            for hit in sheet.hits:
+                if hit["action"] == "export-address":
+                    button = hit["box"]
+        self._address_sheet = {"key": key, "image": sheet.image, "end": end, "button": button}
+        return self._address_sheet
+
+    def _paste_address_sheet(self, frame: Frame, sheet: dict, offset: int) -> None:
+        image = sheet["image"]
+        bottom = min(image.height, offset + HEIGHT)
+        if bottom > offset:
+            frame.image.paste(image.crop((0, offset, WIDTH, bottom)), (0, 0))
 
     def _grouped_address_height(self, frame: Frame, address: str) -> int:
         return self._grouped_address(frame, address, 0, paint=False)
 
     def _grouped_address(self, frame: Frame, address: str, y: int, paint: bool = True) -> int:
-        groups = [address[index : index + 4] for index in range(0, len(address), 4)]
+        groups = _address_text_groups(address)
         face = font(TITLE_SIZE, mono=True)
         space = frame.draw.textlength(" ", font=face)
         line_h = TITLE_SIZE + 8
         limit = WIDTH - 2 * MARGIN
+        bottom = getattr(frame, "clip_bottom", HEIGHT)
         lines: list[list[tuple[str, tuple, float]]] = []
         current: list[tuple[str, tuple, float]] = []
         width = 0.0
@@ -3714,7 +3839,7 @@ class App:
         for line in lines:
             total = sum(item[2] for item in line) + space * (len(line) - 1)
             x = (WIDTH - total) / 2
-            if paint and y + line_h > HEADER and y < HEIGHT:
+            if paint and y + line_h > HEADER and y < bottom:
                 for index, (group, color, group_width) in enumerate(line):
                     frame.draw.text((x, y), group, font=face, fill=color)
                     x += group_width
@@ -3726,7 +3851,8 @@ class App:
     def _centered_mono(self, frame: Frame, text: str, y: int, size: int, fill) -> int:
         face = font(size, mono=True)
         width = frame.draw.textlength(text, font=face)
-        if y >= HEADER and y < HEIGHT:
+        bottom = getattr(frame, "clip_bottom", HEIGHT)
+        if y >= HEADER and y < bottom:
             frame.draw.text(((WIDTH - width) / 2, y), text, font=face, fill=fill)
         return y + size + 8
 

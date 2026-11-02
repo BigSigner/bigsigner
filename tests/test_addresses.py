@@ -4,11 +4,13 @@ from bigsigner.ui.app import (
     ADDRESS_PATH_CHARS,
     ADDRESS_QR,
     ADDRESS_ROW,
+    ADDRESS_WINDOW,
     App,
     _address_path_lines,
     _address_screen_title,
+    _address_text_groups,
 )
-from bigsigner.ui.canvas import BLUE, INK, MUTED, NAVY, WIDTH
+from bigsigner.ui.canvas import BLUE, HEADER, INK, MUTED, NAVY, WIDTH
 
 ABANDON = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 
@@ -46,6 +48,57 @@ def test_the_addresses_button_shows_loading_before_the_list():
     assert app.notice_delay() == 0
     app.render()
     assert app.screen == "addresses"
+
+
+def test_opening_addresses_derives_sixteen_rows_on_each_branch():
+    app = _wallet()
+    _open_addresses(app)
+    stride = ADDRESS_ROW + ADDRESS_GAP
+    receive = sorted(index for branch, index in app._address_cache if branch == 0)
+    change = sorted(index for branch, index in app._address_cache if branch == 1)
+    assert receive == list(range(2 * ADDRESS_WINDOW))
+    assert change == list(range(2 * ADDRESS_WINDOW))
+    assert [start for start, _image in app._address_pages] == [0, ADDRESS_WINDOW]
+    assert all(image.height == ADDRESS_WINDOW * stride for _start, image in app._address_pages)
+
+
+def test_clicks_during_loading_do_nothing():
+    app = _wallet()
+    app.render()
+    app._act("addresses")
+    app.render()
+    assert app.screen == "wallet"
+    descriptor = next(hit for hit in app.hits if hit["action"] == "show-descriptor")
+    box = descriptor["box"]
+    app.tap((box[0] + box[2]) // 2, (box[1] + box[3]) // 2)
+    assert app.screen == "wallet"
+    assert app._addresses_loading
+    app.pointer_down(40, 40)
+    app.pointer_up(40, 40)
+    assert app.screen == "wallet"
+    app.render()
+    assert app.screen == "addresses"
+    row = next(hit for hit in app.hits if hit["action"] == "open-address-0")
+    x = (row["box"][0] + row["box"][2]) // 2
+    y = (row["box"][1] + row["box"][3]) // 2
+    app.pointer_down(x, y)
+    app.pointer_up(x, y)
+    assert app.screen == "address"
+
+
+def test_a_touch_queued_during_loading_is_not_a_click():
+    app = _wallet()
+    _open_addresses(app)
+    row = next(hit for hit in app.hits if hit["action"] == "open-address-0")
+    x = (row["box"][0] + row["box"][2]) // 2
+    y = (row["box"][1] + row["box"][3]) // 2
+    app.arm_queued_touch_discard()
+    app.pointer_down(x, y)
+    app.pointer_up(x, y)
+    assert app.screen == "addresses"
+    app.pointer_down(x, y)
+    app.pointer_up(x, y)
+    assert app.screen == "address"
 
 
 def test_receive_is_selected_and_rows_do_not_wrap():
@@ -88,8 +141,8 @@ def test_a_drag_follows_the_finger_across_cached_blocks():
     app.address_branch = 0
     stride = ADDRESS_ROW + ADDRESS_GAP
     app.render()
-    assert [start for start, _image in app._address_pages] == [0, 8, 16]
-    assert all(image.height == 24 * stride for _start, image in app._address_pages)
+    assert [start for start, _image in app._address_pages] == [0, ADDRESS_WINDOW]
+    assert all(image.height == ADDRESS_WINDOW * stride for _start, image in app._address_pages)
     app.pointer_down(240, 620)
     y = 620
     previous = 0
@@ -174,10 +227,17 @@ def test_lifting_rebuilds_around_the_new_place_without_moving_it():
     _drag(app, 600)
     place = app.scroll["addresses"]
     parked = _top_index(app)
-    assert any(
-        start * stride <= place and place + app._address_view_h <= (start + 24) * stride
-        for start, _image in app._address_pages
-    )
+    cursor = place
+    for start, image in app._address_pages:
+        top = start * stride
+        bottom = top + image.height
+        if bottom <= cursor:
+            continue
+        assert top <= cursor
+        cursor = bottom
+        if cursor >= place + app._address_view_h:
+            break
+    assert cursor >= place + app._address_view_h
     assert parked == place // stride
     app.pointer_down(240, 640)
     app.pointer_move(240, 120)
@@ -197,9 +257,40 @@ def test_scrolling_drops_rows_that_are_far_away():
     stride = ADDRESS_ROW + ADDRESS_GAP
     app.scroll["addresses"] = 80 * stride
     app.render()
-    indexes = [index for branch, index in app._address_cache if branch == 0]
-    assert min(indexes) > 60
-    assert 0 not in indexes
+    indexes = sorted(index for branch, index in app._address_cache if branch == 0)
+    assert [start for start, _image in app._address_pages] == [0, 8, 72, 80, 88, 96]
+    assert indexes == list(range(16)) + list(range(72, 104))
+
+
+def test_a_scroll_keeps_the_neighbor_blocks_before_it_moves():
+    app = _wallet()
+    _open_addresses(app)
+    stride = ADDRESS_ROW + ADDRESS_GAP
+    block = ADDRESS_WINDOW * stride
+    app.pointer_down(240, 500)
+    app.pointer_move(240, 500 - (block + 10))
+    assert app.scroll["addresses"] == block + 10
+    assert [start for start, _image in app._address_pages] == [0, 8, 16, 24]
+    indexes = sorted(index for branch, index in app._address_cache if branch == 0)
+    assert indexes == list(range(32))
+
+
+def test_the_list_stitches_two_blocks():
+    app = _wallet()
+    app.screen = "addresses"
+    stride = ADDRESS_ROW + ADDRESS_GAP
+    app.scroll["addresses"] = ADDRESS_WINDOW * stride - 80
+    image = app.render()
+    rows = [hit for hit in app.hits if hit["action"].startswith("open-address-")]
+    indexes = [int(hit["action"].rsplit("-", 1)[1]) for hit in rows]
+    assert any(index < ADDRESS_WINDOW for index in indexes)
+    assert any(index >= ADDRESS_WINDOW for index in indexes)
+    later = next(hit for hit in rows if int(hit["action"].rsplit("-", 1)[1]) >= ADDRESS_WINDOW)
+    y = (later["box"][1] + later["box"][3]) // 2
+    assert any(
+        image.getpixel((x, y))[:3] == INK
+        for x in range(later["box"][0] + 16, later["box"][2] - 16)
+    )
 
 
 def test_export_address_writes_the_address_to_the_card():
@@ -251,6 +342,72 @@ def test_switching_tabs_reuses_the_cached_screens():
     back = app.render()
     assert calls == []
     assert back.tobytes() == receive.tobytes()
+    stride = ADDRESS_ROW + ADDRESS_GAP
+    app.scroll["addresses"] = 80 * stride
+    app.render()
+    app._act("address-change")
+    app.scroll["addresses"] = 80 * stride
+    app.render()
+    calls.clear()
+    app._act("address-receive")
+    app.render()
+    app._act("address-change")
+    app.render()
+    assert calls == []
+    for branch in (0, 1):
+        kept = {index for item_branch, index in app._address_cache if item_branch == branch}
+        assert set(range(2 * ADDRESS_WINDOW)) <= kept
+
+
+def test_address_groups_are_four_characters():
+    assert _address_text_groups("abc") == ["abc "]
+    assert _address_text_groups("abcd") == ["abcd"]
+    assert _address_text_groups("abcde") == ["abcd", "e   "]
+    assert all(len(group) == 4 for group in _address_text_groups("tb1q" * 9))
+
+
+def test_the_address_page_scrolls_a_cached_picture():
+    from bigsigner.ui.app import _qr_image
+
+    app = _wallet()
+    second = app.session.add_mnemonic(ABANDON.split(), passphrase="2")
+    app.multisig_m = 2
+    app.multisig_selected = {app.selected_fp, second["fingerprint"]}
+    app._create_selected_multisig()
+    app.address_branch = 0
+    app.address_index = 1000
+    app.screen = "address"
+    first = app.render()
+    address = app.session.addresses(app.wallet_index, 0, 1000, 1)[0]
+    code = _qr_image(address, ADDRESS_QR)
+    left = (WIDTH - ADDRESS_QR) // 2
+    top = HEADER + 12
+    assert first.crop((left, top, left + ADDRESS_QR, top + ADDRESS_QR)).tobytes() == code.tobytes()
+    assert app.scroll_max["address"] > 40
+    sheet = app._address_sheet
+    calls = []
+    real = app.session.addresses
+
+    def wrapped(*args, **kwargs):
+        calls.append(args)
+        return real(*args, **kwargs)
+
+    app.session.addresses = wrapped
+    app.pointer_down(240, 640)
+    app.pointer_move(240, 640 - 80)
+    second_image = app.render()
+    moved = app.scroll["address"]
+    assert calls == []
+    assert app._address_sheet is sheet
+    assert moved == 80
+    probe = None
+    for y in range(top + ADDRESS_QR - 1, top, -1):
+        if first.getpixel((WIDTH // 2, y))[:3] == (0, 0, 0) and y - moved >= HEADER:
+            probe = y
+            break
+    assert probe is not None
+    assert second_image.getpixel((WIDTH // 2, probe - moved))[:3] == (0, 0, 0)
+    assert second_image.getpixel((16, 40))[:3] == NAVY
 
 
 def test_an_address_row_opens_its_qr_and_its_path():

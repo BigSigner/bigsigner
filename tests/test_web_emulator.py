@@ -18,6 +18,21 @@ def test_the_static_page_reads_the_bundle_and_checks_downloads():
     assert 'params.get("seed")' in page
     assert 'params.get("descriptor")' in page
     assert 'params.get("network")' in page
+    assert 'id="hash-panel"' in page
+    assert 'method="dialog"' in page
+    assert 'id="hash-seed"' in page
+    assert 'id="hash-descriptor"' in page
+    assert 'id="hash-network"' in page
+    assert '<option value="mainnet">mainnet</option>' in page
+    assert '<option value="testnet">testnet</option>' in page
+    assert '<option value="regtest">regtest</option>' in page
+    assert ">Reload<" in page
+    assert 'id="hash-example"' in page
+    assert ">example<" in page
+    assert ">wallet descriptor<" in page
+    assert 'id="hash-descriptor-example"' in page
+    assert "wpkh([42c649e1/84h/0h/0h]xpub6BsXXeh3fxRHtmfpnbXcAWjfnXz92n3BKYT7tf9Xcay6weGXt44g3iVaZHdivvwdzVnf9exeVLVBwVTzgxxScv53dQuXvT6FyrVJy9v4TaD/<0;1>/*)" in page
+    assert "example,example,example,example,example,example,example,example,example,example,example,sample" in page
     assert "initial_network" in worker
     assert "BIGSIGNER_SDCARD_PATH" not in page
     assert "BIGSIGNER_SDCARD_PATH" not in worker
@@ -39,7 +54,8 @@ def test_the_static_page_reads_the_bundle_and_checks_downloads():
     assert "files.pythonhosted.org" not in worker
     assert "python -m bigsigner.bundle" in worker
     assert '"delay": delay,' in worker
-    assert 'typeof msg.delay === "number"' in page
+    assert 'typeof delay === "number"' in page
+    assert "holdInput" in page
     assert "web/external-assets/" in Path(".gitignore").read_text(encoding="utf-8")
     by_name = {name: digest for name, _url, digest in EXTERNAL_ASSETS}
     assert by_name["embit/embit-0.8.0.tar.gz"] == "8bf4b10073c67400370ce523fb16f035fe759f6fdd987c579bdcc268d75ed770"

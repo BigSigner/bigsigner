@@ -6,6 +6,7 @@
   Commas in the seed are spaces. Percent-encode the descriptor.
   network is mainnet, testnet, or regtest. It is applied before the seed and the descriptor.
   A reload applies the hash again.
+  The form under the SD Card card writes this hash and reloads.
 -->
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BigSigner</title>
@@ -23,9 +24,10 @@
   #panel-wrap.ready img { display: block; }
   #panel-wrap.ready #panel-loading { display: none; }
   #size { display: flex; gap: 8px; align-items: center; }
-  #size button, #sd-new button, #sd-drop label { background: transparent; color: #ddd; border: 1px solid #555; border-radius: 8px; font: 14px/1 sans-serif; padding: 8px 12px; cursor: pointer; }
-  #size-note, #sd-note { margin: 0; max-width: 52mm; color: #9a9a9a; font: 13px/1.4 sans-serif; text-align: center; }
-  #sd-column { width: min(22rem, 100%); display: grid; gap: 12px; align-content: start; position: sticky; top: 16px; }
+  #size button, #sd-new button, #sd-drop label, #hash-panel button[type="submit"] { background: transparent; color: #ddd; border: 1px solid #555; border-radius: 8px; font: 14px/1 sans-serif; padding: 8px 12px; cursor: pointer; }
+  #size-note, #sd-note { margin: 0; color: #9a9a9a; font: 13px/1.4 sans-serif; text-align: center; }
+  #size-note { max-width: 52mm; }
+  #sd-column { width: min(22rem, 100%); display: grid; gap: 12px; align-content: start; position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; }
   #sd-panel { display: grid; gap: 12px; padding: 12px; border: 1px solid #333; border-radius: 12px; background: #1b1b1b; }
   #sd-path { display: flex; flex-wrap: wrap; gap: 4px; }
   #sd-path button { background: transparent; color: #9ec1ff; border: 0; padding: 0; cursor: pointer; font: inherit; }
@@ -44,6 +46,17 @@
   #sd-list .enter, #sd-list .file { overflow-wrap: anywhere; text-align: left; background: transparent; color: #eee; border: 0; padding: 0; cursor: pointer; font: inherit; }
   #sd-list .delete { background: transparent; color: #f0b4b4; border: 0; padding: 4px; cursor: pointer; font: inherit; }
   #sd-list .empty { display: block; color: #9a9a9a; }
+  #hash-panel { display: grid; gap: 12px; padding: 12px; border: 1px solid #333; border-radius: 12px; background: #1b1b1b; }
+  #hash-panel label { display: grid; gap: 4px; color: #9a9a9a; font: 13px/1.4 sans-serif; }
+  #hash-panel label span { color: #9a9a9a; font: 13px/1.4 sans-serif; }
+  .hash-field { display: grid; gap: 4px; }
+  .hash-label-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  #hash-panel .hash-label-row label { display: inline; }
+  .hash-example { margin: 0; padding: 0; background: transparent; border: 0; color: #9ec1ff; cursor: pointer; font: 13px/1.4 sans-serif; text-decoration: underline; }
+  #hash-panel textarea, #hash-panel input, #hash-panel select { width: 100%; box-sizing: border-box; background: #111; color: #eee; border: 1px solid #444; border-radius: 8px; padding: 8px; font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #hash-panel select { font-family: sans-serif; }
+  #hash-panel textarea { resize: vertical; max-height: 9em; }
+  #hash-panel button[type="submit"] { justify-self: start; }
 </style>
 <p id="warning">This is an emulator. Do not use it for real Bitcoin.</p>
 <div id="layout">
@@ -71,8 +84,33 @@
       </div>
       <p id="sd-error" role="status"></p>
       <ul id="sd-list"></ul>
-      <p id="sd-note">These files stay in this browser.</p>
+      <p id="sd-note">These files stay in this browser cache and are not uploaded anywhere.</p>
     </div>
+    <form id="hash-panel" method="dialog" autocomplete="off">
+      <div class="hash-field">
+        <span class="hash-label-row">
+          <label for="hash-seed">seed</label>
+          <button type="button" class="hash-example" id="hash-example">example</button>
+        </span>
+        <input id="hash-seed" placeholder="12/18/24 words separated by commas" autocomplete="off" spellcheck="false" autocapitalize="off" autocorrect="off">
+      </div>
+      <div class="hash-field">
+        <span class="hash-label-row">
+          <label for="hash-descriptor">wallet descriptor</label>
+          <button type="button" class="hash-example" id="hash-descriptor-example">example</button>
+        </span>
+        <textarea id="hash-descriptor" rows="4" autocomplete="off" spellcheck="false" autocapitalize="off" autocorrect="off"></textarea>
+      </div>
+      <label>
+        <span>network</span>
+        <select id="hash-network">
+          <option value="mainnet">mainnet</option>
+          <option value="testnet">testnet</option>
+          <option value="regtest">regtest</option>
+        </select>
+      </label>
+      <button type="submit">Reload</button>
+    </form>
   </aside>
 </div>
 <script>
@@ -90,6 +128,31 @@ const MAX_BYTES = 256000;
 const PANEL_WIDTH_MM = 51.84;
 const SIZE_KEY = "bigsigner-panel-scale";
 const initial = hashParams();
+const hashSeed = document.getElementById("hash-seed");
+const hashDescriptor = document.getElementById("hash-descriptor");
+const hashNetwork = document.getElementById("hash-network");
+hashSeed.value = initial.seed;
+hashDescriptor.value = initial.descriptor;
+hashNetwork.value = {main: "mainnet", mainnet: "mainnet", test: "testnet", testnet: "testnet", regtest: "regtest"}[initial.network.trim().toLowerCase()] || "mainnet";
+document.getElementById("hash-example").addEventListener("click", () => {
+  hashSeed.value = "example,example,example,example,example,example,example,example,example,example,example,sample";
+});
+document.getElementById("hash-descriptor-example").addEventListener("click", () => {
+  hashDescriptor.value = "wpkh([42c649e1/84h/0h/0h]xpub6BsXXeh3fxRHtmfpnbXcAWjfnXz92n3BKYT7tf9Xcay6weGXt44g3iVaZHdivvwdzVnf9exeVLVBwVTzgxxScv53dQuXvT6FyrVJy9v4TaD/<0;1>/*)";
+});
+document.getElementById("hash-panel").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const parts = [];
+  const seed = hashSeed.value.trim();
+  const descriptor = hashDescriptor.value.trim();
+  const network = hashNetwork.value.trim();
+  if (seed) parts.push("seed=" + encodeURIComponent(seed));
+  if (descriptor) parts.push("descriptor=" + encodeURIComponent(descriptor));
+  if (network) parts.push("network=" + encodeURIComponent(network));
+  if (parts.length) location.hash = "#" + parts.join("&");
+  else history.replaceState(null, "", location.pathname + location.search);
+  location.reload();
+});
 
 function hashParams() {
   let raw = location.hash.startsWith("#") ? location.hash.slice(1) : "";
@@ -128,6 +191,7 @@ let sdHere = "";
 let dirty = false;
 let started = false;
 let refreshTimer = 0;
+let holdInput = false;
 let frameUrl = "";
 let screenName = "";
 let cameraFrames = [];
@@ -579,9 +643,13 @@ function showFrame(msg) {
   hideStatus();
   syncCamera(msg.screen || "");
   // null waits for a click. 0 asks for the next frame now; that frame does the work.
-  if (typeof msg.delay === "number" && Number.isFinite(msg.delay)) {
-    const slack = msg.delay > 0 ? 80 : 0;
-    refreshTimer = setTimeout(loadFrame, msg.delay * 1000 + slack);
+  // While that frame is outstanding, Loading is on screen and taps are ignored.
+  const delay = msg.delay;
+  const numeric = typeof delay === "number" && Number.isFinite(delay);
+  holdInput = numeric && delay === 0;
+  if (numeric) {
+    const slack = delay > 0 ? 80 : 0;
+    refreshTimer = setTimeout(loadFrame, delay * 1000 + slack);
   }
 }
 function applyRemote(sent, remote) {
@@ -638,19 +706,24 @@ function post(body) {
 let press = null;
 panel.addEventListener("pointerdown", (event) => {
   event.preventDefault();
+  if (holdInput) return;
   if (panel.setPointerCapture) panel.setPointerCapture(event.pointerId);
   const p = point(event);
   press = {x: p.x, y: p.y, moved: false};
   post({kind: "tap", phase: "down", x: p.x, y: p.y});
 });
 panel.addEventListener("pointermove", (event) => {
-  if (!press) return;
+  if (holdInput || !press) return;
   const p = point(event);
   if (Math.abs(p.x - press.x) < 8 && Math.abs(p.y - press.y) < 8) return;
   press = {x: p.x, y: p.y, moved: true};
   post({kind: "tap", phase: "move", x: p.x, y: p.y});
 });
 panel.addEventListener("pointerup", (event) => {
+  if (holdInput) {
+    press = null;
+    return;
+  }
   if (!press) return;
   const moved = press.moved;
   press = null;
