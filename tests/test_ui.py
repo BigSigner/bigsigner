@@ -445,6 +445,30 @@ def test_notices_stay_for_four_seconds():
     app.set_notice("Saved.")
     assert app.notice_until is not None
     assert 3.5 < app.notice_until - before < 4.5
+    assert not app.notice_error
+
+
+def test_an_error_stays_until_dismiss_is_clicked():
+    app = App()
+    app.screen = "warning"
+    app.set_error("This wallet descriptor is not supported.")
+    assert app.notice_error
+    assert app.notice_until is None
+    image = app.render()
+    assert app.notice == "This wallet descriptor is not supported."
+    again = app.render()
+    assert again.tobytes() == image.tobytes()
+    dismiss = next(hit for hit in app.hits if hit["action"] == "dismiss-notice")
+    box = dismiss["box"]
+    assert image.getpixel(((box[0] + box[2]) // 2, (box[1] + box[3]) // 2))[:3] == (24, 92, 184)
+    assert image.getpixel((MARGIN + 6, box[1] - 16))[:3] == (255, 255, 255)
+    assert any(image.getpixel((x, box[1] - 36))[:3] == (168, 36, 42) for x in range(MARGIN + 16, WIDTH - MARGIN - 16))
+    app.tap(240, 180)
+    assert app.notice == "This wallet descriptor is not supported."
+    app.render()
+    tap(app, "Dismiss")
+    assert app.notice == ""
+    assert not app.notice_error
 
 
 def test_xpub_key_screen_shows_the_account_and_the_path():

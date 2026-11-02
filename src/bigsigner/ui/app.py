@@ -246,6 +246,7 @@ class App:
         self.back = []
         self.notice = ""
         self.notice_until = None
+        self.notice_error = False
         self.warnings = []
         self.selected_fp = None
         self.selected_key_index = 0
@@ -455,9 +456,18 @@ class App:
             "entropy": self._entropy,
         }
 
-    def set_notice(self, message: str):
+    def set_notice(self, message: str, *, error: bool = False):
         self.notice = message or ""
-        self.notice_until = time.monotonic() + NOTICE_HOLD if self.notice else None
+        if not self.notice:
+            self.notice_error = False
+            self.notice_until = None
+            return
+        self.notice_error = error
+        self.notice_until = None if error else time.monotonic() + NOTICE_HOLD
+
+    def set_error(self, message: str):
+        """An error stays until Dismiss is clicked."""
+        self.set_notice(message, error=True)
 
     def notice_delay(self):
         """Seconds until the screen should redraw itself, or None if nothing is pending."""
@@ -483,6 +493,7 @@ class App:
         if self.notice and self.notice_until is not None and time.monotonic() >= self.notice_until:
             self.notice = ""
             self.notice_until = None
+            self.notice_error = False
 
     def render(self) -> Image.Image:
         self.dirty = None
@@ -543,7 +554,8 @@ class App:
         if camera:
             self.camera_frames = list(camera.get("frames") or [])
             self.camera_final = camera.get("final") or b""
-        self.set_notice("")
+        if not self.notice_error:
+            self.set_notice("")
         for hit in reversed(self.hits):
             left, top, right, bottom = hit["box"]
             if left <= x < right and top <= y < bottom:
@@ -942,7 +954,7 @@ class App:
         self.qr_brightness = min(QR_BRIGHTNESS_MAX, self.qr_brightness + 1)
 
     def _act_review_sample(self):
-        self.set_notice("Load a PSBT from the editor.")
+        self.set_error("Load a PSBT from the editor.")
         self.draft = ""
         self.go("editor")
         self.screen_after_editor = "psbt"
@@ -1056,6 +1068,7 @@ class App:
         "entropy-save": lambda self: self._save_pending_mnemonic(),
         "open-licenses": _act_open_licenses,
         "load-error-ok": _act_load_error_ok,
+        "dismiss-notice": lambda self: self.set_notice(""),
         "external-known": lambda self: self._continue_loaded_multisig(),
         "external-next": _act_external_next,
         "external-continue": _act_external_continue,
@@ -1462,7 +1475,7 @@ class App:
             text = read_text(relative)
         except SdError as exc:
             if self.sd_expect == "address":
-                self.set_notice(str(exc))
+                self.set_error(str(exc))
                 return
             self._show_load_error(str(exc), self.sd_expect)
             return
@@ -1474,7 +1487,7 @@ class App:
     def _open_export(self, source: str):
         self.qr_source = source
         if not self._key_qr_formats():
-            self.set_notice("This key is no longer loaded.")
+            self.set_error("This key is no longer loaded.")
             return
         self.export_return = self.screen
         self.export_back = list(self.back)
@@ -1483,7 +1496,7 @@ class App:
     def _open_seed_export(self):
         _record, key = self._stored_key()
         if key is None or not key.has_seed:
-            self.set_notice("This seed is no longer loaded.")
+            self.set_error("This seed is no longer loaded.")
             return
         self.export_label = "Seed"
         self.export_text = " ".join(key.mnemonic)
@@ -1526,13 +1539,13 @@ class App:
 
     def _open_wallet_export(self):
         if self.wallet_index >= len(self.session.wallets):
-            self.set_notice("This wallet is no longer loaded.")
+            self.set_error("This wallet is no longer loaded.")
             return
         try:
             descriptor = self.session.descriptor_text(self.wallet_index)
             text = bsms_text(descriptor, self.session.network)
         except (SessionError, ParseError) as exc:
-            self.set_notice(str(exc))
+            self.set_error(str(exc))
             return
         self.export_label = "BSMS"
         self.export_text = text
@@ -1545,12 +1558,12 @@ class App:
 
     def _open_address_export(self):
         if self.wallet_index >= len(self.session.wallets):
-            self.set_notice("This wallet is no longer loaded.")
+            self.set_error("This wallet is no longer loaded.")
             return
         try:
             address = self.session.addresses(self.wallet_index, self.address_branch, self.address_index, 1)[0]
         except SessionError as exc:
-            self.set_notice(str(exc))
+            self.set_error(str(exc))
             return
         self.export_label = "Address"
         self.export_text = address
@@ -1604,13 +1617,13 @@ class App:
     def _save_new_export_file(self):
         name = self.filename.strip()
         if not name or name in {".", ".."} or "/" in name or "\\" in name or "\x00" in name:
-            self.set_notice("Choose a different file name.")
+            self.set_error("Choose a different file name.")
             return
         relative = child_path(self.sd_dir, name)
         try:
             exists = file_exists(relative)
         except SdError as exc:
-            self.set_notice(str(exc))
+            self.set_error(str(exc))
             return
         self.export_path = relative
         if exists:
@@ -1622,7 +1635,7 @@ class App:
         try:
             write_text(self.export_path, self.export_text)
         except SdError as exc:
-            self.set_notice(str(exc))
+            self.set_error(str(exc))
             return
         name = Path(self.export_path).name
         self.sd_mode = "load"
@@ -1768,6 +1781,7 @@ class App:
         self.load_error_home = "wallets" if expect == "descriptor" else "keys"
         self.notice = ""
         self.notice_until = None
+        self.notice_error = False
         self.confirm = None
         self.menu = False
         self.add_menu = False
@@ -1790,7 +1804,7 @@ class App:
                 payload = self.qr_sequence.take(text, self.session.network, "QR code", "address")
             except SessionError as exc:
                 self.qr_sequence.reset()
-                self.set_notice(str(exc))
+                self.set_error(str(exc))
                 self._return_to_verify()
                 return
             if payload is None:
@@ -1837,7 +1851,7 @@ class App:
 
     def note_qr_unsupported(self):
         if self.screen == "scan":
-            self.set_notice("This browser cannot read QR codes.")
+            self.set_error("This browser cannot read QR codes.")
 
     def _show_imported(self, added: dict, prefer_key: bool = False):
         message = added["message"]
@@ -1941,13 +1955,13 @@ class App:
             else:
                 mnemonic = mnemonic_from_coins(self.entropy_digits)
         except ValueError as exc:
-            self.set_notice(str(exc))
+            self.set_error(str(exc))
             return
         self._offer_mnemonic(mnemonic)
 
     def _capture_camera(self):
         if not self.camera_final:
-            self.set_notice("The camera has not captured a picture yet.")
+            self.set_error("The camera has not captured a picture yet.")
             return
         serial = os.environ.get("BIGSIGNER_CPU_SERIAL", "bigsigner-emulator").encode()
         mnemonic = mnemonic_from_camera(
@@ -1968,7 +1982,7 @@ class App:
 
     def _save_pending_mnemonic(self):
         if not self.pending_mnemonic:
-            self.set_notice("There is no seed to save.")
+            self.set_error("There is no seed to save.")
             return
         self.seed_words = self.pending_mnemonic.split()
         self.seed_length = len(self.seed_words)
@@ -2025,7 +2039,7 @@ class App:
         }
         network = names.get(raw)
         if network is None:
-            self._initial_notice("The network must be mainnet, testnet, or regtest.")
+            self._initial_notice("The network must be mainnet, testnet, or regtest.", error=True)
             return
         if network != self.session.network:
             self.session.set_network(network)
@@ -2037,7 +2051,7 @@ class App:
         try:
             added = self.session.add_mnemonic(raw)
         except SessionError as exc:
-            self._initial_notice(f"BIGSIGNER_INITIAL_SEED: {exc}")
+            self._initial_notice(f"BIGSIGNER_INITIAL_SEED: {exc}", error=True)
             return
         self.selected_fp = added["fingerprint"]
 
@@ -2047,7 +2061,7 @@ class App:
             words, passphrase = split_line(line)
             added = self.session.add_mnemonic(words, passphrase)
         except SessionError as exc:
-            self._initial_notice(str(exc))
+            self._initial_notice(str(exc), error=True)
             if str(exc) == "This seed is already loaded.":
                 return "seed already loaded"
             return f"seed refused: {exc}"
@@ -2076,7 +2090,7 @@ class App:
         try:
             added = self.session.load_descriptor_now(raw)
         except SessionError as exc:
-            self._initial_notice(str(exc))
+            self._initial_notice(str(exc), error=True)
             return
         message = added["message"]
         if added.get("warnings"):
@@ -2089,12 +2103,12 @@ class App:
         if fingerprint is not None and self.selected_fp is None:
             self.selected_fp = fingerprint
 
-    def _initial_notice(self, message: str):
+    def _initial_notice(self, message: str, *, error: bool = False):
         print(message, file=sys.stderr, flush=True)
         if self.notice:
-            self.set_notice(f"{self.notice} {message}")
+            self.set_notice(f"{self.notice} {message}", error=self.notice_error or error)
         else:
-            self.set_notice(message)
+            self.set_notice(message, error=error)
 
     def _warning(self, frame: Frame):
         frame.header("Remove SD Card")
@@ -2401,7 +2415,7 @@ class App:
     def _open_derive_menu(self):
         record = None if self.selected_fp is None else self.session.fingerprints.get(self.selected_fp)
         if record is None or not record.keys or not record.keys[0].has_seed:
-            self.set_notice("Load a seed before deriving a key.")
+            self.set_error("Load a seed before deriving a key.")
             return
         self.go("derive-type")
 
@@ -2419,7 +2433,7 @@ class App:
     def _open_bip85(self):
         _record, key = self._stored_key()
         if key is None or not key.has_seed:
-            self.set_notice("Load a seed before deriving a child seed.")
+            self.set_error("Load a seed before deriving a child seed.")
             return
         self.bip85_words = 24
         self.bip85_index = 0
@@ -2475,7 +2489,7 @@ class App:
     def _edit_bip85_index(self):
         _record, key = self._stored_key()
         if key is None or not key.has_seed:
-            self.set_notice("This seed is no longer loaded.")
+            self.set_error("This seed is no longer loaded.")
             return
         self.account_fp = self.selected_fp
         self.account_text = str(self.bip85_index)
@@ -2484,13 +2498,13 @@ class App:
 
     def _add_bip85_child(self):
         if self.selected_fp is None:
-            self.set_notice("This seed is no longer loaded.")
+            self.set_error("This seed is no longer loaded.")
             return
         try:
             words = self.session.bip85_child(self.selected_fp, self.bip85_words, self.bip85_index)
             added = self.session.add_mnemonic(words.split())
         except SessionError as exc:
-            self.set_notice(str(exc))
+            self.set_error(str(exc))
             return
         self.selected_fp = added["fingerprint"]
         self.selected_key_index = 0
@@ -2509,7 +2523,7 @@ class App:
     def _open_derive(self, role: str):
         record = None if self.selected_fp is None else self.session.fingerprints.get(self.selected_fp)
         if record is None or not record.keys or not record.keys[0].has_seed:
-            self.set_notice("Load a seed before deriving a key.")
+            self.set_error("Load a seed before deriving a key.")
             return
         self.derive_role = role
         self.derive_account = 0
@@ -2532,7 +2546,7 @@ class App:
 
     def _edit_derive_account(self):
         if self._derived_key() is None:
-            self.set_notice("This seed is no longer loaded.")
+            self.set_error("This seed is no longer loaded.")
             return
         self.account_fp = self.selected_fp
         self.account_text = str(self.derive_account)
@@ -2682,7 +2696,7 @@ class App:
 
     def _open_derived_details(self):
         if self._derived_key() is None:
-            self.set_notice("This seed is no longer loaded.")
+            self.set_error("This seed is no longer loaded.")
             return
         self.qr_source = "derive"
         self._open_key_qr()
@@ -3029,7 +3043,7 @@ class App:
     def _create_selected_singlesig(self):
         selected = self.singlesig_selected
         if selected not in self._singlesig_candidates():
-            self.set_notice("Select a key.")
+            self.set_error("Select a key.")
             return
         role = self.singlesig_role
         existing = self._existing_singlesig_index()
@@ -3045,7 +3059,7 @@ class App:
         try:
             added = self.session.add_text(text)
         except SessionError as exc:
-            self.set_notice(str(exc))
+            self.set_error(str(exc))
             return
         self.set_notice(added["message"])
         wallet = added.get("wallet")
@@ -3117,10 +3131,10 @@ class App:
         candidates = self._multisig_candidates()
         selected = [fingerprint for fingerprint in candidates if fingerprint in self.multisig_selected]
         if len(selected) < 2:
-            self.set_notice("A multisig needs at least two keys.")
+            self.set_error("A multisig needs at least two keys.")
             return
         if len(selected) < self.multisig_m:
-            self.set_notice(f"Select at least {self.multisig_m} keys.")
+            self.set_error(f"Select at least {self.multisig_m} keys.")
             return
         existing = self._existing_multisig_index()
         if existing is not None:
@@ -3138,7 +3152,7 @@ class App:
         try:
             added = self.session.add_text(body)
         except SessionError as exc:
-            self.set_notice(str(exc))
+            self.set_error(str(exc))
             return
         self.set_notice(added["message"])
         wallet = added.get("wallet")
@@ -3286,7 +3300,7 @@ class App:
         try:
             self.session.set_account(self.wallet_index, fingerprint, account)
         except SessionError as exc:
-            self.set_notice(str(exc))
+            self.set_error(str(exc))
 
     def _account_textbox(self, frame: Frame, y: int, value: str, outline=LINE, left: int = MARGIN, right: int | None = None):
         height = 64
@@ -3323,14 +3337,14 @@ class App:
         if self.account_fp is None:
             return
         if not self.account_text.isdigit():
-            self.set_notice(
+            self.set_error(
                 "Enter an index." if self.account_for in ("bip85", "address-find") else "Enter an account index."
             )
             return
         account = int(self.account_text)
         if self.account_for in ("derive", "bip85", "address-find"):
             if account >= 0x80000000:
-                self.set_notice(
+                self.set_error(
                     "The index is too large."
                     if self.account_for in ("bip85", "address-find")
                     else "The account index is too large."
@@ -3347,7 +3361,7 @@ class App:
         try:
             self.session.set_account(self.wallet_index, self.account_fp, account)
         except SessionError as exc:
-            self.set_notice(str(exc))
+            self.set_error(str(exc))
             return
         self.back_one()
 
@@ -3355,7 +3369,7 @@ class App:
         try:
             self.session.set_account(self.wallet_index, fingerprint, account)
         except SessionError as exc:
-            self.set_notice(str(exc))
+            self.set_error(str(exc))
 
     def _account(self, frame: Frame):
         choosing_index = self.account_for in ("bip85", "address-find")
@@ -3884,7 +3898,7 @@ class App:
 
     def _edit_address_index(self):
         if self.wallet_index >= len(self.session.wallets):
-            self.set_notice("This wallet is no longer loaded.")
+            self.set_error("This wallet is no longer loaded.")
             return
         wallet = self.session.wallets[self.wallet_index]
         self.account_fp = wallet.fingerprints[0]
@@ -3970,12 +3984,12 @@ class App:
 
     def _verify_entered_address(self, text: str):
         if self.wallet_index >= len(self.session.wallets):
-            self.set_notice("This wallet is no longer loaded.")
+            self.set_error("This wallet is no longer loaded.")
             return
         try:
             address = normalize_address_text(text, self.session.network)
         except SessionError as exc:
-            self.set_notice(str(exc))
+            self.set_error(str(exc))
             if self.screen == "address-type":
                 return
             self._return_to_verify()
@@ -3984,12 +3998,12 @@ class App:
 
     def _verify_loaded_address(self, text: str, source: str):
         if self.wallet_index >= len(self.session.wallets):
-            self.set_notice("This wallet is no longer loaded.")
+            self.set_error("This wallet is no longer loaded.")
             return
         try:
             address = read_address(text, self.session.network, source)
         except SessionError as exc:
-            self.set_notice(str(exc))
+            self.set_error(str(exc))
             self._return_to_verify()
             return
         self._search_address(address, 0)
@@ -4019,7 +4033,7 @@ class App:
 
     def _search_address(self, address: str, start: int):
         if self.wallet_index >= len(self.session.wallets):
-            self.set_notice("This wallet is no longer loaded.")
+            self.set_error("This wallet is no longer loaded.")
             return
         start = max(0, min(start, 0x7FFFFFFF))
         count = min(ADDRESS_RANGE, 0x80000000 - start)
@@ -4854,7 +4868,7 @@ class App:
     def _start_passphrase_copy(self):
         record = self.session.fingerprints.get(self.selected_fp)
         if record is None or not record.keys or not record.keys[0].has_seed:
-            self.set_notice("That key does not have a seed.")
+            self.set_error("That key does not have a seed.")
             return
         self.seed_words = list(record.keys[0].mnemonic)
         self.seed_length = len(self.seed_words)
@@ -4865,12 +4879,12 @@ class App:
 
     def _save_entered_seed(self, passphrase: str | None):
         if len(self.seed_words) not in (12, 18, 24):
-            self.set_notice("A seed must be 12, 18, or 24 words.")
+            self.set_error("A seed must be 12, 18, or 24 words.")
             return
         try:
             added = self.session.add_mnemonic(self.seed_words, passphrase)
         except SessionError as exc:
-            self.set_notice(str(exc))
+            self.set_error(str(exc))
             return
         self.pending_mnemonic = ""
         self.entropy_digits = ""
@@ -5058,7 +5072,7 @@ class App:
     def _open_seed_show(self):
         record = self.session.fingerprints.get(self.selected_fp)
         if record is None or not record.keys or not record.keys[0].has_seed:
-            self.set_notice("That key does not have a seed.")
+            self.set_error("That key does not have a seed.")
             return
         self.qr_text = " ".join(record.keys[0].mnemonic)
         self.seed_format = 0
@@ -5344,12 +5358,12 @@ class App:
     def _commit_external_key(self):
         key = self.pending_external
         if key is None:
-            self.set_notice("There is no external key to load.")
+            self.set_error("There is no external key to load.")
             return
         try:
             added = self.session.commit_external_key(key)
         except SessionError as exc:
-            self.set_notice(str(exc))
+            self.set_error(str(exc))
             return
         self.pending_external = None
         self.open_dropdown = None
@@ -5711,16 +5725,38 @@ class App:
         line_h = TITLE_SIZE + 8
         pad = 16
         height = pad * 2 + line_h * len(lines) - 8
+        if self.notice_error:
+            height += 12 + frame.button_height("Dismiss")
         top = HEIGHT - 24 - height
         return face, lines, line_h, pad, top, height
 
     def _toast(self, frame: Frame):
         face, lines, line_h, pad, top, height = self._notice_layout(frame)
-        frame.draw.rounded_rectangle((MARGIN, top, WIDTH - MARGIN, top + height), radius=16, fill=NAVY)
+        if not self.notice_error:
+            frame.draw.rounded_rectangle((MARGIN, top, WIDTH - MARGIN, top + height), radius=16, fill=NAVY)
+            y = top + pad
+            for line in lines:
+                frame.draw.text((MARGIN + 16, y), line, font=face, fill=WHITE)
+                y += line_h
+            return
+        frame.draw.rounded_rectangle(
+            (MARGIN, top, WIDTH - MARGIN, top + height), radius=16, fill=WHITE, outline=LINE, width=2
+        )
         y = top + pad
         for line in lines:
-            frame.draw.text((MARGIN + 16, y), line, font=face, fill=WHITE)
+            frame.draw.text((MARGIN + 16, y), line, font=face, fill=RED)
             y += line_h
+        button_h = frame.button_height("Dismiss")
+        button_top = y + 4
+        box = (MARGIN + 16, button_top, WIDTH - MARGIN - 16, button_top + button_h)
+        frame.draw.rounded_rectangle(box, radius=14, fill=BLUE)
+        label = "Dismiss"
+        button_face = font(BODY_SIZE)
+        text_width = frame.draw.textlength(label, font=button_face)
+        _left, text_top, _right, text_bottom = frame.draw.textbbox((0, 0), label, font=button_face)
+        text_y = button_top + (button_h - (text_bottom - text_top)) / 2 - text_top
+        frame.draw.text(((box[0] + box[2] - text_width) / 2, text_y), label, font=button_face, fill=WHITE)
+        frame.hit(box, "dismiss-notice", label)
 
     def _speed_dial(self, frame: Frame, items):
         overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 80))
@@ -5779,7 +5815,7 @@ class App:
 
     def _pick_word(self, word: str):
         if word not in self._seed_matches(""):
-            self.set_notice("That is not a valid word for this seed.")
+            self.set_error("That is not a valid word for this seed.")
             return
         self.seed_words.append(word)
         self.word_prefix = ""
@@ -5790,12 +5826,12 @@ class App:
 
     def _save_text(self):
         if not self.draft.strip():
-            self.set_notice("Enter a descriptor, key expression, or seed words.")
+            self.set_error("Enter a descriptor, key expression, or seed words.")
             return
         try:
             added = self.session.add_text(self.draft)
         except SessionError as exc:
-            self.set_notice(str(exc))
+            self.set_error(str(exc))
             return
         self.set_notice(added["message"])
         self.screen = "wallets" if self.session.wallets else "keys"
@@ -5821,10 +5857,10 @@ class App:
             return
         record = self.session.fingerprints.get(self.selected_fp)
         if record is None or not record.keys[0].has_seed:
-            self.set_notice("Load a seed before creating this wallet.")
+            self.set_error("Load a seed before creating this wallet.")
             return
         if account < 0 or account >= 0x80000000:
-            self.set_notice("The account index is too large.")
+            self.set_error("The account index is too large.")
             return
         derived = _public_for(self.session, self.selected_fp, role, account)
         origin = format_path(list(derived.path))[2:]
@@ -5832,7 +5868,7 @@ class App:
         try:
             added = self.session.add_text(text)
         except SessionError as exc:
-            self.set_notice(str(exc))
+            self.set_error(str(exc))
             return
         self.set_notice(added["message"])
         self._show_wallet(len(self.session.wallets) - 1)
@@ -5875,7 +5911,7 @@ class App:
     def _make_xpub_wallet(self):
         record, key = self._stored_key()
         if record is None or key is None or key.xpub is None:
-            self.set_notice("This key is no longer loaded.")
+            self.set_error("This key is no longer loaded.")
             return
         if key.role not in (SINGLESIG_NATIVE, SINGLESIG_TAPROOT):
             return
@@ -5889,7 +5925,7 @@ class App:
         try:
             added = self.session.add_text(text)
         except SessionError as exc:
-            self.set_notice(str(exc))
+            self.set_error(str(exc))
             return
         self.set_notice(added["message"])
         wallet = added.get("wallet")
@@ -5903,7 +5939,7 @@ class App:
         try:
             self.session.delete_wallet(self.wallet_index)
         except SessionError as exc:
-            self.set_notice(str(exc))
+            self.set_error(str(exc))
             return
         if self.wallet_index >= len(self.session.wallets):
             self.wallet_index = max(0, len(self.session.wallets) - 1)
@@ -5919,7 +5955,7 @@ class App:
         try:
             self.set_notice(self.session.delete_key(self.selected_fp, self.selected_key_index))
         except SessionError as exc:
-            self.set_notice(str(exc))
+            self.set_error(str(exc))
             return
         _forget_qr_codes()
         self.selected_fp = None
@@ -5949,7 +5985,7 @@ class App:
 
     def _open_descriptor_qr(self):
         if self.wallet_index >= len(self.session.wallets):
-            self.set_notice("This wallet is no longer loaded.")
+            self.set_error("This wallet is no longer loaded.")
             return
         self.qr_text = self.session.descriptor_text(self.wallet_index)
         self.qr_kind = "descriptor"
