@@ -8,7 +8,7 @@ from bigsigner.ui.canvas import RED
 from test_domain import ABANDON, LEGAL, expression, root_of
 from test_ui import ScreenRecord
 
-PATH_ERROR = "The derivation path is not a supported single-sig or multisig path for this network."
+PATH_ERROR = "The derivation path is not a supported singlesig or multisig path for this network."
 
 
 def _folder(name):
@@ -55,7 +55,7 @@ def test_external_key_review_saves_screenshots():
     text = expression(ABANDON, "m/84h/0h/0h")
     app = _open_review(text)
     record = ScreenRecord(_folder("test_external_key_review_saves_screenshots"))
-    record.note("Scanned a native-SegWit single-sig key expression. It is not stored yet.")
+    record.note("Scanned a native-SegWit singlesig key expression. It is not stored yet.")
     assert app.screen == "external-review"
     assert "singlesig wallet" in app._lone_key_warning()
     assert "wallet owner must verify" in app._lone_key_warning()

@@ -78,5 +78,5 @@ def classify_path(steps: list[int], network: str) -> tuple[str, int]:
     ):
         return MULTISIG_NATIVE, steps[2] & ~HARDENED
     raise PathError(
-        "The derivation path is not a supported single-sig or multisig path for this network."
+        "The derivation path is not a supported singlesig or multisig path for this network."
     )

@@ -2176,7 +2176,7 @@ class App:
         self._plus(frame, "toggle-add", Icons.CLOSE if self.add_menu else Icons.PLUS)
 
     def _key_sections(self):
-        """Seeds, then single-sig external keys, then multisig external keys."""
+        """Seeds, then singlesig external keys, then multisig external keys."""
         seeds = []
         singles = []
         multis = []
@@ -2208,7 +2208,7 @@ class App:
         return self._key_card_body(frame, 0, record, None, paint=False, only=key) - 0
 
     def _external_script(self, key) -> str:
-        """Native-Segwit or Taproot. The section title already says single-sig or multisig."""
+        """Native-Segwit or Taproot. The section title already says singlesig or multisig."""
         if getattr(key, "role", None) == SINGLESIG_TAPROOT:
             return "Taproot"
         return "Native-Segwit"

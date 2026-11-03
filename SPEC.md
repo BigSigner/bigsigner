@@ -23,11 +23,11 @@ Add SECURITY.md file to the project. Security contact email should be orenz0@pro
 
 Where this section disagrees with the rest of the document, this section wins.
 
-The screen is portrait 480×800. Supported wallets are single-sig native segwit (`m/84h/<coin>h/<account>h`), single-sig taproot key-path (`m/86h/<coin>h/<account>h`), and native-segwit multisig (`m/48h/<coin>h/<account>h/2h`). The coin type is `0h` on mainnet and `1h` on testnet and regtest.
+The screen is portrait 480×800. Supported wallets are singlesig native segwit (`m/84h/<coin>h/<account>h`), singlesig taproot key-path (`m/86h/<coin>h/<account>h`), and native-segwit multisig (`m/48h/<coin>h/<account>h/2h`). The coin type is `0h` on mainnet and `1h` on testnet and regtest.
 
 A multisig address uses the same `/<branch>/<index>` suffix on every key. Accounts may differ, for example `.../0h/2h/0/5`, `.../7h/2h/0/5`, and `.../30h/2h/0/5`. Every input in one transaction must use the same account tuple. Inside one input, the branch and address index must match across keys. A mismatch of the extended key's stored depth or last child number with its origin path rejects the whole key expression, descriptor, or transaction.
 
-`zpub` and `vpub` are accepted only for single-sig native segwit, and only when the network setting matches. `Zpub` and `Vpub` are accepted only for multisig native segwit, with the same network check. They are converted to `xpub` or `tpub` before they are compared with stored keys. Exports stay `xpub` or `tpub`. Regtest has no extended-key prefix of its own: it uses the testnet prefixes (`tpub`, and `vpub` / `Vpub` for the SLIP-132 forms). The key screen can display the SLIP-132 form for comparison with a Trezor.
+`zpub` and `vpub` are accepted only for singlesig native segwit, and only when the network setting matches. `Zpub` and `Vpub` are accepted only for multisig native segwit, with the same network check. They are converted to `xpub` or `tpub` before they are compared with stored keys. Exports stay `xpub` or `tpub`. Regtest has no extended-key prefix of its own: it uses the testnet prefixes (`tpub`, and `vpub` / `Vpub` for the SLIP-132 forms). The key screen can display the SLIP-132 form for comparison with a Trezor.
 
 Dice and coin entropy follow SeedSigner: SHA-256 of the ASCII string, first 16 bytes for 12 words. That matches Ian Coleman's Base 10 or Hex mode with the mnemonic length set to 12 or 24 words, and it does not match his Dice [1-6] mode. Generation is 12 or 24 words. An 18-word mnemonic can be imported when its checksum is valid. Camera entropy follows SeedSigner's chain, including the CPU serial and the time, so the same scene does not repeat.
 
@@ -101,7 +101,7 @@ There are 4 types of keys:
 
 - Seed + passphrase: Similar to a seed, this will also have a passphrase (a.k.a the 25th word of the seed).
 
-- SingleSig Xpub key expression: A key expression containing a fingerprint, a derivation path and an xpub. e.g. `[d34db33f/84h/0h/0h]xpub.../<0;1>/*`. Derivation path will be one of single-sig paths, e.g. m/84h/0h/<account>h (kind: Native-Segwit) or m/86h/0h/<account>h (kind: Taproot). For now we will only support Native-Segwit and Taproot in SingleSig Xpubs. No need to support Legacy or Nested Segwit, nor custom derivation paths.
+- SingleSig Xpub key expression: A key expression containing a fingerprint, a derivation path and an xpub. e.g. `[d34db33f/84h/0h/0h]xpub.../<0;1>/*`. Derivation path will be one of singlesig paths, e.g. m/84h/0h/<account>h (kind: Native-Segwit) or m/86h/0h/<account>h (kind: Taproot). For now we will only support Native-Segwit and Taproot in SingleSig Xpubs. No need to support Legacy or Nested Segwit, nor custom derivation paths.
 
 - MultiSig Xpub key expression: A key expression containing a fingerprint, a derivation path and an xpub. e.g. `[d34db33f/48h/0h/0h/2h]xpub.../<0;1>/*`. The derivation path is m/48h/0h/<account>h/2h (Native SegWit). Single-sig xpubs are Native SegWit (`m/84h/0h/<account>h`) or Taproot (`m/86h/0h/<account>h`). Legacy, nested SegWit, and custom derivation paths are not supported.
 
@@ -122,7 +122,7 @@ Statistically it is possible to have a fingerprint collision, i.e. two different
 
 ## Wallets
 
-For the first version, we will support single-sig Native SegWit, single-sig Taproot, and native-segwit sorted multisig.
+For the first version, we will support singlesig Native SegWit, singlesig Taproot, and native-segwit sorted multisig.
 Legacy and nested SegWit will not be supported.
 
 Wallets will be created from wallet descriptors that match one of the following formats (for now):
@@ -191,7 +191,7 @@ Condemned Chocolate
 Chimpanzee DD
 ```
 
-Below the name is a fingerprint icon followed by the fingerprint hex. A seed card adds one more line under the fingerprint: a seedling icon, then the seed's first word followed by "…". If that seed has a passphrase, the line continues with " + Passphrase" and the passphrase's number, for example "Abandon… + Passphrase1". An external-key card adds two lines under the fingerprint hex: Native-Segwit or Taproot, then the account, for example "Native-Segwit" and "Account #0". The section title already says whether the key is single-sig or multisig.
+Below the name is a fingerprint icon followed by the fingerprint hex. A seed card adds one more line under the fingerprint: a seedling icon, then the seed's first word followed by "…". If that seed has a passphrase, the line continues with " + Passphrase" and the passphrase's number, for example "Abandon… + Passphrase1". An external-key card adds two lines under the fingerprint hex: Native-Segwit or Taproot, then the account, for example "Native-Segwit" and "Account #0". The section title already says whether the key is singlesig or multisig.
 
 If the fingerprint has a seed or seed + passphrase in its list of keys (in this case the list in this case will only contain one key), we should show in a new row a symbol of a key followed by a small title "Generated from a 12/18/24 words seed".
 In the case of a seed + passphrase, it should say "Generated from a 12/18/24 words seed + passphrase" and that passphrase's number, for example "Generated from a 12 words seed + passphrase1".
@@ -316,12 +316,12 @@ Scan QR Code and Load from SD Card should both expect a descriptor that belongs 
 - Multisig wallet descriptor: `wsh(sortedmulti({m},[{fingerprint1}/48h/0h/{account1}h/2h]{xpub1}/<0;1>/*,[{fingerprint2}/48h/0h/{account2}h/2h]{xpub2}/<0;1>/*, ...))#{checksum}`
 
 Like mentioned before, small common variations of the format should be allowed, like using "'" instead of "h" for the derivation path, "0" instead of "<0;1>".
-A BSMS 1.0 file is accepted when it has the version line, one descriptor, a path line for the same receive and change branches, and a first address. The descriptor must be single-sig native SegWit, single-sig Taproot, or native-segwit multisig, and its derivation paths must match that script type and the path line. The first address must be the address the descriptor derives. Any other version, script type, path, or address is refused.
+A BSMS 1.0 file is accepted when it has the version line, one descriptor, a path line for the same receive and change branches, and a first address. The descriptor must be singlesig native SegWit, singlesig Taproot, or native-segwit multisig, and its derivation paths must match that script type and the path line. The first address must be the address the descriptor derives. Any other version, script type, path, or address is refused.
 Unexpected derivation paths, or unexpected script-types for known derivation paths, should not be allowed.
 The checksum should be verified whenever we scan a wallet descriptor. Also support formats where the checksum is not present.
 A `wsh(sortedmulti(...))` descriptor must only contain native-segwit multisig key expressions (`m/48h/0h/{account}h/2h`). Custom derivation paths are not supported.
 
-A bare key expression is not a wallet descriptor on this screen. It is reported as a key expression, not a wallet descriptor. On the Bitcoin Keys screen, a single-sig key expression can still be wrapped as a wallet when the user creates one from that key.
+A bare key expression is not a wallet descriptor on this screen. It is reported as a key expression, not a wallet descriptor. On the Bitcoin Keys screen, a singlesig key expression can still be wrapped as a wallet when the user creates one from that key.
 
 A wallet's identity ignores descriptor key order, checksums, account indexes, extended-key spelling, and `h` versus `'`. It is the network, the script, the threshold, and the fingerprints sorted as bytes. `sortedmulti` already sorts pubkeys at address time, so two writings of the same cosigners are one wallet. The identity is that value, not a descriptor string split on commas.
 

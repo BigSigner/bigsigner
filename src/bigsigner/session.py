@@ -201,7 +201,7 @@ class Session:
         if wallet.multisig:
             return self._add_wallet(wallet)
         if len(wallet.keys) != 1:
-            raise SessionError("A single-sig wallet must contain one key.")
+            raise SessionError("A singlesig wallet must contain one key.")
         return self._add_watch_or_wallet(wallet)
 
     def passphrase_index(self, passphrase: str) -> int:

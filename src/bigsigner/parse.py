@@ -147,9 +147,9 @@ def _parse_singlesig(body: str, network: str, wrapper: str, warnings: list[str])
     inner = inner[:-1]
     key, note = _key_from_expression(inner, network)
     if wrapper == "wpkh" and key.role != SINGLESIG_NATIVE:
-        raise ParseError("A wpkh descriptor requires a native-segwit single-sig path.")
+        raise ParseError("A wpkh descriptor requires a native-segwit singlesig path.")
     if wrapper == "tr" and key.role != SINGLESIG_TAPROOT:
-        raise ParseError("A tr descriptor requires a taproot single-sig path.")
+        raise ParseError("A tr descriptor requires a taproot singlesig path.")
     warnings.extend(_branch_warnings(note))
     return ParsedWallet(key.role, 1, [key], warnings)
 

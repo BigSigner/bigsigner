@@ -17,7 +17,7 @@ BigSigner is one Python package in `src/bigsigner`. The browser emulator and the
 `session.py` is the in-memory model.
 
 - A fingerprint maps to one `FingerprintRecord`. The record holds the keys that share it.
-- A key is a BIP39 seed, a seed plus passphrase, or a watch-only key expression (single-sig native SegWit, single-sig Taproot, or native-SegWit multisig).
+- A key is a BIP39 seed, a seed plus passphrase, or a watch-only key expression (singlesig native SegWit, singlesig Taproot, or native-SegWit multisig).
 - `key_counter` increases each time a key is added. Seed cards on Bitcoin Keys follow that number. External keys are one card each, grouped into SingleSig External Keys and MultiSig External Keys, and sorted by fingerprint nickname, then Native-Segwit before Taproot, then account.
 - Passphrases are remembered as text mapped to a number, so two seeds that share a passphrase show the same number.
 - Adding a seed compares it with keys already stored for that fingerprint. A different seed with the same fingerprint is refused. A watch-only key that the new seed can derive is dropped as redundant. A watch-only key whose extended key does not match the seed is refused.
