@@ -200,6 +200,7 @@ def _draw_name_block(frame: Frame, y: int, lines: list[str], size: int, icon: st
 BOOT_HOLD = 1.0
 NOTICE_HOLD = 4.0
 QR_HINT_HOLD = 2.0
+PASSPHRASE_MAX = 128
 # A click is a press that never becomes a move. Either edge is enough
 # to make it a scroll, as LVGL's scroll limit does, so there is no radius.
 # Once the finger has left the box it stays a scroll, including a fast flick
@@ -4940,6 +4941,8 @@ class App:
                     + self.passphrase_text[self.passphrase_cursor :]
                 )
                 self.passphrase_cursor -= 1
+            return
+        if len(self.passphrase_text) >= PASSPHRASE_MAX:
             return
         self.passphrase_text = (
             self.passphrase_text[: self.passphrase_cursor] + key + self.passphrase_text[self.passphrase_cursor :]

@@ -1,6 +1,6 @@
 from PIL import Image, ImageDraw
 
-from bigsigner.ui.app import App, _grid_font_size
+from bigsigner.ui.app import PASSPHRASE_MAX, App, _grid_font_size
 from bigsigner.ui.canvas import HEADER, HEIGHT, MARGIN, MUTED, PAPER, TITLE_SIZE, WHITE, WIDTH, font as ui_font, wrap
 
 WORDS = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".split()
@@ -17,6 +17,19 @@ def test_a_press_left_of_q_a_and_z_still_types_them():
         y = (hit["box"][1] + hit["box"][3]) // 2
         app.tap(10, y)
     assert app.passphrase_text == "qaz"
+
+
+def test_a_passphrase_stops_at_128_characters():
+    app = App()
+    app.screen = "passphrase"
+    app.passphrase_text = "a" * PASSPHRASE_MAX
+    app.passphrase_cursor = PASSPHRASE_MAX
+    app._passphrase_key("b")
+    assert app.passphrase_text == "a" * PASSPHRASE_MAX
+    assert app.passphrase_cursor == PASSPHRASE_MAX
+    app._passphrase_key("backspace")
+    app._passphrase_key("b")
+    assert app.passphrase_text == "a" * (PASSPHRASE_MAX - 1) + "b"
 
 
 def test_a_passphrase_letter_repaints_only_the_field():
