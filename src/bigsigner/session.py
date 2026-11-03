@@ -113,6 +113,8 @@ class WalletRecord:
         # and account-index tuples follow this sequence.
         self.fingerprints = tuple(fingerprints)
         self.accounts = dict(accounts)
+        # Multisig only. The wallet screen warns once before an account index changes.
+        self.account_index_warned = False
 
     @property
     def multisig(self):

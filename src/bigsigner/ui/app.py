@@ -201,6 +201,10 @@ BOOT_HOLD = 1.0
 NOTICE_HOLD = 4.0
 QR_HINT_HOLD = 2.0
 PASSPHRASE_MAX = 128
+ACCOUNT_INDEX_WARNING = (
+    "Changing the account index of a multisig wallet is an advanced feature. "
+    "Losing the exact sequence of account indexes you used might make it impossible to recover the funds."
+)
 # A click is a press that never becomes a move. Either edge is enough
 # to make it a scroll, as LVGL's scroll limit does, so there is no radius.
 # Once the finger has left the box it stays a scroll, including a fast flick
@@ -257,6 +261,7 @@ class App:
         self.wallet_index = 0
         self._wallet_account_visit = None
         self._wallet_key_target = None
+        self._account_warning_action = None
         self.draft = ""
         self.menu = False
         self.add_menu = False
@@ -939,6 +944,7 @@ class App:
 
     def _act_confirm_no(self):
         self.confirm = None
+        self._account_warning_action = None
 
     def _act_delete_key(self):
         self.confirm = "delete-key"
@@ -1170,10 +1176,16 @@ class App:
         elif action.startswith("export-format-"):
             self._choose_export_format(int(action[len("export-format-") :]))
         elif action.startswith("account-dec-"):
+            if self._warn_before_account_change(action):
+                return
             self._step_account(bytes.fromhex(action[len("account-dec-") :]), -1)
         elif action.startswith("account-inc-"):
+            if self._warn_before_account_change(action):
+                return
             self._step_account(bytes.fromhex(action[len("account-inc-") :]), 1)
         elif action.startswith("account-edit-"):
+            if self._warn_before_account_change(action):
+                return
             self._edit_account(bytes.fromhex(action[len("account-edit-") :]))
         elif action.startswith("account-key-"):
             self._type_account(action[len("account-key-") :])
@@ -1202,6 +1214,8 @@ class App:
             self.open_dropdown = None
         elif action.startswith("dropdown-"):
             name = action[len("dropdown-") :]
+            if name.startswith("acct-") and self._warn_before_account_change(action):
+                return
             if name == "seed-length":
                 self._seed_title_count = 0
             self.open_dropdown = None if self.open_dropdown == name else name
@@ -3381,6 +3395,27 @@ class App:
         self.show_passphrase = False
         self.go("key")
 
+    def _warn_before_account_change(self, action: str) -> bool:
+        """Hold a multisig account-index click until the one-time warning is confirmed."""
+        if self.wallet_index >= len(self.session.wallets):
+            return False
+        wallet = self.session.wallets[self.wallet_index]
+        if not wallet.multisig or wallet.account_index_warned:
+            return False
+        self._account_warning_action = action
+        self.confirm = "account-warning"
+        return True
+
+    def _accept_account_warning(self):
+        if self.wallet_index < len(self.session.wallets):
+            wallet = self.session.wallets[self.wallet_index]
+            if wallet.multisig:
+                wallet.account_index_warned = True
+        action = self._account_warning_action
+        self._account_warning_action = None
+        if action:
+            self._act(action)
+
     def _step_account(self, fingerprint: bytes, delta: int):
         if self.wallet_index >= len(self.session.wallets):
             return
@@ -5328,6 +5363,8 @@ class App:
             return f'Replace "{Path(self.export_path).name}"?'
         if self.confirm == "open-wallet-key" and self._wallet_key_target is not None:
             return "Go to Seed Key?" if self._wallet_key_target[2] else "Go to External Key?"
+        if self.confirm == "account-warning":
+            return ACCOUNT_INDEX_WARNING
         return "Delete this key?"
 
     def _confirm(self, frame: Frame):
@@ -5402,6 +5439,8 @@ class App:
             self._delete_selected_wallet()
         elif kind == "open-wallet-key":
             self._open_wallet_key()
+        elif kind == "account-warning":
+            self._accept_account_warning()
         elif kind == "replace-file":
             self._write_export()
 

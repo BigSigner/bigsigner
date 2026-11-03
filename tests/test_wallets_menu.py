@@ -655,3 +655,91 @@ def test_multisig_threshold_follows_the_selected_keys():
     assert not any(hit["action"] == "dropdown-multisig-m" for hit in app.hits)
     assert not any(hit["action"] == "ms-create" for hit in app.hits)
     assert app.screen == "multisig"
+
+
+def _two_seed_multisig():
+    app = App()
+    added = [app.session.add_mnemonic(ABANDON, passphrase=str(number)) for number in range(2)]
+    app.multisig_m = 2
+    app.multisig_selected = {item["fingerprint"] for item in added}
+    app._create_selected_multisig()
+    return app
+
+
+def test_a_multisig_account_change_warns_once():
+    from bigsigner.ui.app import ACCOUNT_INDEX_WARNING
+
+    app = _two_seed_multisig()
+    wallet = app.session.wallets[0]
+    fingerprint = wallet.fingerprints[0]
+    assert wallet.multisig
+    assert wallet.account_index_warned is False
+    singlesig = App()
+    added = singlesig.session.add_mnemonic(ABANDON.split())
+    singlesig.selected_fp = added["fingerprint"]
+    singlesig.screen = "key"
+    singlesig._act("derive-native")
+    singlesig._act("derive-wallet")
+    singlesig.render()
+    _tap(singlesig, f"account-inc-{added['fingerprint'].hex()}")
+    assert singlesig.confirm is None
+    assert singlesig.session.wallets[0].accounts[added["fingerprint"]] == 1
+    assert singlesig.session.wallets[0].account_index_warned is False
+
+    app.render()
+    _tap(app, f"account-inc-{fingerprint.hex()}")
+    assert app.confirm == "account-warning"
+    assert app._confirm_message() == ACCOUNT_INDEX_WARNING
+    assert wallet.accounts[fingerprint] == 0
+    assert wallet.account_index_warned is False
+    app._act("confirm-no")
+    assert app.confirm is None
+    assert wallet.account_index_warned is False
+    _tap(app, f"account-edit-{fingerprint.hex()}")
+    assert app.screen == "wallet"
+    assert app.confirm == "account-warning"
+    app._act("confirm-yes")
+    assert wallet.account_index_warned is True
+    assert app.screen == "account"
+    app.back_one()
+    _tap(app, f"account-inc-{fingerprint.hex()}")
+    assert app.confirm is None
+    assert wallet.accounts[fingerprint] == 1
+    _tap(app, f"account-dec-{fingerprint.hex()}")
+    assert app.confirm is None
+    assert wallet.accounts[fingerprint] == 0
+
+
+def test_a_multisig_account_dropdown_warns_once():
+    from embit.descriptor.checksum import checksum
+
+    from test_domain import LEGAL, expression
+
+    app = App()
+    first = expression(ABANDON, "m/48h/0h/0h/2h")
+    second = expression(LEGAL, "m/48h/0h/0h/2h")
+    body = f"wsh(sortedmulti(2,{first},{second}))"
+    app.session.add_text(f"{body}#{checksum(body)}")
+    extra = expression(ABANDON, "m/48h/0h/1h/2h")
+    again = f"wsh(sortedmulti(2,{extra},{second}))"
+    app.session.add_text(f"{again}#{checksum(again)}")
+    wallet = app.session.wallets[0]
+    fingerprint = next(
+        item
+        for item in wallet.fingerprints
+        if len(app.session.account_options(item, wallet.role) or []) > 1
+    )
+    app.wallet_index = 0
+    app.screen = "wallet"
+    app.render()
+    _tap(app, f"dropdown-acct-{fingerprint.hex()}")
+    assert app.confirm == "account-warning"
+    assert app.open_dropdown is None
+    assert wallet.account_index_warned is False
+    app._act("confirm-yes")
+    assert wallet.account_index_warned is True
+    assert app.open_dropdown == f"acct-{fingerprint.hex()}"
+    app.open_dropdown = None
+    _tap(app, f"dropdown-acct-{fingerprint.hex()}")
+    assert app.confirm is None
+    assert app.open_dropdown == f"acct-{fingerprint.hex()}"
