@@ -91,6 +91,8 @@ def wrong_type_message(kind: str, expect: str, source: str, network: str = "main
             return f"That {source} is not a seed, key expression or wallet descriptor."
         if expect == "descriptor":
             return f"That {source} is not a wallet descriptor."
+        if expect == "message":
+            return f"That {source} is not a message signing command."
         return f"That {source} is not an address."
     if kind == "transaction" and expect == "key":
         return f"That {source} is a transaction, not a key."
@@ -104,6 +106,7 @@ def wrong_type_message(kind: str, expect: str, source: str, network: str = "main
         "address": "an address",
         "descriptor": "a wallet descriptor",
         "key": "a seed, a key expression, or a wallet descriptor",
+        "message": "a message signing command",
     }[expect]
     return f"This is {_KIND_NAME.get(kind, 'something else')}, not {expected}."
 

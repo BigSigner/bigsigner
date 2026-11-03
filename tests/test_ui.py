@@ -465,10 +465,21 @@ def test_an_error_stays_until_dismiss_is_clicked():
     assert any(image.getpixel((x, box[1] - 36))[:3] == (168, 36, 42) for x in range(MARGIN + 16, WIDTH - MARGIN - 16))
     app.tap(240, 180)
     assert app.notice == "This wallet descriptor is not supported."
+    assert app.screen == "warning"
+    app.render()
+    cont = next(hit for hit in app.hits if hit["action"] == "warning-ok")
+    dismiss = next(hit for hit in app.hits if hit["action"] == "dismiss-notice")
+    left, top, _right, bottom = cont["box"]
+    app.tap(left + 4, (top + bottom) // 2)
+    assert dismiss["box"][0] > left + 4
+    assert app.screen == "warning"
+    assert app.notice == "This wallet descriptor is not supported."
     app.render()
     tap(app, "Dismiss")
     assert app.notice == ""
     assert not app.notice_error
+    tap(app, "Continue")
+    assert app.screen == "keys"
 
 
 def test_xpub_key_screen_shows_the_account_and_the_path():

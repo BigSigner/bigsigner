@@ -360,10 +360,15 @@ def test_switching_tabs_reuses_the_cached_screens():
 
 
 def test_address_groups_are_four_characters():
-    assert _address_text_groups("abc") == ["abc "]
-    assert _address_text_groups("abcd") == ["abcd"]
-    assert _address_text_groups("abcde") == ["abcd", "e   "]
-    assert all(len(group) == 4 for group in _address_text_groups("tb1q" * 9))
+    from bigsigner.ui.app import _address_rows
+
+    assert _address_text_groups("abc") == ["abc ", "    ", "    ", "    "]
+    assert _address_text_groups("abcd") == ["abcd", "    ", "    ", "    "]
+    assert _address_rows("abcde") == [["abcd", "e   ", "    ", "    "]]
+    rows = _address_rows("tb1q" * 9)
+    assert rows
+    assert all(len(row) == 4 and all(len(group) == 4 for group in row) for row in rows)
+    assert "".join("".join(row) for row in rows).rstrip() == "tb1q" * 9
 
 
 def test_the_address_page_scrolls_a_cached_picture():

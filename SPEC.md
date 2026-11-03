@@ -363,7 +363,7 @@ Addresses opens the wallet addresses screen. Show Descriptor follows it. That sc
 
 Then there should be a Sign Transaction button that will open the Sign transaction screen.
 
-Then there should be a Sign Message button that will open the Sign message screen.
+Sign Message (BIP137) sits under Export Descriptor to SD Card. It is enabled for a Native-Segwit SingleSig wallet whose seed is loaded, and it opens the Sign message screen. A watch-only wallet shows the button grey, with a note that it is unavailable in watch-only wallets. Any other wallet shows it grey, with a note that signing messages is supported only in Native-Segwit SingleSig wallets.
 
 Finally there should be a red Delete Wallet button. Verifying an address is on Addresses Tools, reached from the Addresses screen.
 
@@ -373,7 +373,7 @@ Receive and Change sit at the top. Receive is selected when the screen opens. Th
 
 The list between those buttons and Addresses Tools scrolls. Each row is one line: the index starting at 0, a period, a space, and the address. A line that does not fit ends with `…` and does not wrap. Only the rows near the scroll position are derived. Rows farther away are dropped. Clicking a row opens the address. Its title is Receive Address or Change Address and the index. An index of more than four digits shows the first three digits and ….
 
-Address shows a QR code of the address, then the address in groups of four characters separated by spaces. The first group is black and every second group is grey. Below that is Derivation Path:, or Derivation Paths: when the wallet has more than one key. Each path starts with the fingerprint hex, then the origin, the branch, and the index, such as `73c5da0a/84h/0h/0h/0/0`. The address and the path are centered. The path is large enough to read, and 25 characters still fit on one line. A longer path continues on the next line. The break is before a slash, and that slash starts the next line. Export to SD Card writes the address alone. The suggested file name is the first fingerprint, receive or change, and the index.
+Address shows a QR code of the address, then the address in groups of four characters separated by spaces. The first group is black and every second group is grey. Below that is Derivation Path:, or Derivation Paths: when the wallet has more than one key. Each path starts with the fingerprint hex, then the origin, the branch, and the index, such as `73c5da0a/84h/0h/0h/0/0`. The address and the path are centered. The path is large enough to read, and 25 characters still fit on one line. A longer path continues on the next line. The break is before a slash, and that slash starts the next line. Export to SD Card writes the address alone. The suggested file name is the first fingerprint, receive or change, and the index. Sign Message sits under Export to SD Card. The page scrolls so the button is on screen. On a Native-Segwit SingleSig wallet it opens Manual Entry, Load from SD Card, or Scan QR Code. The message is signed with this address and its derivation path. Manual Entry starts empty. A message that is not ASCII is refused. Text that begins with `signmessage ` after leading spaces and newlines is a sign-message command and is refused, because that command is loaded from the Sign Message button on the wallet screen. On any other wallet the button is grey, and text below it says signing messages is supported only in Native-Segwit SingleSig wallets.
 
 Addresses Tools is fixed under the list. It opens Find Address by Index and Verify Address.
 

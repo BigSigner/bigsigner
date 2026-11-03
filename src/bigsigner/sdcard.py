@@ -59,10 +59,10 @@ def list_folder(relative: str) -> list[dict]:
     return _list_memory(relative)
 
 
-def read_text(relative: str) -> str:
-    """The file's text, with surrounding space and newlines removed."""
+def read_text(relative: str, *, raw: bool = False) -> str:
+    """The file's text. Surrounding space and newlines are removed unless raw is set."""
     _require_card()
-    return _read_memory(relative)
+    return _read_memory(relative, raw=raw)
 
 
 def file_exists(relative: str) -> bool:
@@ -182,7 +182,7 @@ def _child_name(path: str, prefix: str) -> str:
     return rest
 
 
-def _read_memory(relative: str) -> str:
+def _read_memory(relative: str, raw: bool = False) -> str:
     path = _memory_path(relative)
     if not path or path in _memory["dirs"] or path not in _memory["files"]:
         raise SdError("That is not a file.")
@@ -191,7 +191,8 @@ def _read_memory(relative: str) -> str:
         raise SdError("That file is too large.")
     if b"\x00" in data:
         raise SdError("That file is not text.")
-    return data.decode("utf-8").strip()
+    text = data.decode("utf-8")
+    return text if raw else text.strip()
 
 
 def _write_memory(relative: str, text: str) -> None:
@@ -202,6 +203,5 @@ def _write_memory(relative: str, text: str) -> None:
     parent = parent_path(path)
     if parent and parent not in _memory["dirs"]:
         raise SdError("That folder is not on the SD card.")
-    body = text if text.endswith("\n") else text + "\n"
-    _memory["files"][path] = body
+    _memory["files"][path] = text
     _memory_dirty = True

@@ -15,6 +15,14 @@ def test_the_static_page_reads_the_bundle_and_checks_downloads():
     worker = Path("web/worker.js").read_text(encoding="utf-8")
     assert 'rel="icon" href="icon.png"' in page
     assert "function downloadFile" in page
+    assert 'id="sd-text"' in page
+    assert 'placeholder="Folder/File name"' in page
+    assert ">New Folder<" in page
+    assert ">New File<" in page
+    assert 'id="sd-folder"' not in page
+    assert 'id="sd-filename"' not in page
+    assert 'rename.textContent = "Rename"' in page
+    assert "Downloading a binary file." in page
     assert 'params.get("seed")' in page
     assert 'params.get("descriptor")' in page
     assert 'params.get("network")' in page

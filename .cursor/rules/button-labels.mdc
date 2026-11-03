@@ -8,6 +8,8 @@ alwaysApply: false
 
 Button labels use Title Case. Capitalize each word.
 
+A label that is not a full sentence uses the same Title Case. Address Type, Address Index, and Derivation Path are labels. A sentence such as a warning or an explanation stays a sentence.
+
 These words stay lowercase unless they are the first or last word: a, an, the, and, or, to, of, for, with, from, in.
 
 A word that is written in capitals in ordinary English stays in capitals. OK, QR, and SD stay as they are, including inside a longer label.

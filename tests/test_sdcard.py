@@ -10,7 +10,7 @@ from bigsigner.sdcard import (
     write_text,
 )
 from test_domain import LEGAL, expression
-from bigsigner.ui.app import App
+from bigsigner.ui.app import App, _unused_filename
 
 
 @pytest.fixture(autouse=True)
@@ -176,6 +176,7 @@ def test_write_text_stays_on_the_card():
     mount_memory({"files": {}})
     write_text("note.txt", "hello")
     assert read_text("note.txt") == "hello"
+    assert read_text("note.txt", raw=True) == "hello"
     with pytest.raises(SdError):
         write_text("../note.txt", "nope")
 
@@ -383,6 +384,49 @@ def test_export_seed_writes_words_that_load_from_the_card():
     _tap(again, "Load from SD Card")
     _tap(again, "spaced.txt")
     assert again.notice == "The seed was added successfully."
+
+
+def test_a_new_export_name_skips_names_that_already_exist():
+    assert _unused_filename("key.txt", set()) == "key.txt"
+    assert _unused_filename("key.txt", {"key.txt"}) == "key (1).txt"
+    assert _unused_filename("key.txt", {"key.txt", "key (1).txt"}) == "key (2).txt"
+    assert _unused_filename("key.txt", {"key.txt", "key (2).txt"}) == "key (1).txt"
+    assert _unused_filename("wallet.bsms", {"wallet.bsms"}) == "wallet (1).bsms"
+    assert _unused_filename("a.b.txt", {"a.b.txt"}) == "a.b (1).txt"
+    assert _unused_filename("notes", {"notes"}) == "notes (1)"
+
+    app = App()
+    added = app.session.add_mnemonic(ABANDON.split())
+    fingerprint = added["fingerprint"].hex()
+    name = f"{fingerprint}-key-expression.txt"
+    first = f"{fingerprint}-key-expression (1).txt"
+    second = f"{fingerprint}-key-expression (2).txt"
+    mount_memory({"files": {name: "old", first: "old", f"keep/{name}": "old"}})
+    app.selected_fp = added["fingerprint"]
+    app.screen = "key"
+    app._act("derive-native")
+    app._act("export-derived")
+    app._act("export-format-0")
+    app._act("export-new")
+    assert app.filename == second
+    assert app.filename_cursor == len(second)
+    app.back_one()
+    app._act("sd-into:keep")
+    app._act("export-new")
+    assert app.filename == first
+    app.back_one()
+    app._act("sd-up")
+    app._act("export-new")
+    assert app.filename == second
+    app._act("export-save-new")
+    assert app.confirm is None
+    assert read_text(second).startswith(f"[{fingerprint}/84h/0h/0h]xpub")
+
+    mount_memory({"dirs": [name], "files": {}})
+    app._act("export-derived")
+    app._act("export-format-0")
+    app._act("export-new")
+    assert app.filename == first
 
 
 def test_a_long_filename_scrolls_sideways():

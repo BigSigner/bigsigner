@@ -20,6 +20,7 @@ NAVY = (18, 36, 58)
 BLUE = (24, 92, 184)
 LIGHT_BLUE = (58, 146, 216)
 RED = (168, 36, 42)
+WARNING = (138, 96, 0)
 GREEN = (20, 110, 78)
 LINE = (214, 218, 224)
 # Text cut off because it does not fit ends with this one character.

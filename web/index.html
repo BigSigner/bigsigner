@@ -27,24 +27,33 @@
   #size button, #sd-new button, #sd-drop label, #hash-panel button[type="submit"] { background: transparent; color: #ddd; border: 1px solid #555; border-radius: 8px; font: 14px/1 sans-serif; padding: 8px 12px; cursor: pointer; }
   #size-note, #sd-note { margin: 0; color: #9a9a9a; font: 13px/1.4 sans-serif; text-align: center; }
   #size-note { max-width: 52mm; }
-  #sd-column { width: min(22rem, 100%); display: grid; gap: 12px; align-content: start; position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; }
+  #sd-column { width: min(40rem, 100%); display: grid; gap: 12px; align-content: start; position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; }
   #sd-panel { display: grid; gap: 12px; padding: 12px; border: 1px solid #333; border-radius: 12px; background: #1b1b1b; }
   #sd-path { display: flex; flex-wrap: wrap; gap: 4px; }
   #sd-path button { background: transparent; color: #9ec1ff; border: 0; padding: 0; cursor: pointer; font: inherit; }
   #sd-path button + button::before { content: "/"; color: #777; margin-right: 4px; }
   #sd-new { display: flex; gap: 8px; }
-  #sd-folder { flex: 1; min-width: 0; background: #111; color: #eee; border: 1px solid #444; border-radius: 8px; padding: 8px; font: inherit; }
+  #sd-name { flex: 1; min-width: 0; background: #111; color: #eee; border: 1px solid #444; border-radius: 8px; padding: 8px; font: inherit; }
   #sd-drop { display: grid; justify-items: center; gap: 8px; padding: 16px; border: 1px dashed #555; border-radius: 12px; text-align: center; }
   #sd-drop.over { border-color: #7eb6ff; background: #162033; }
   #sd-drop p { margin: 0; }
   #sd-drop label { position: relative; }
   #sd-drop input { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; opacity: 0; }
   #sd-error { margin: 0; color: #f0b4b4; }
+  #sd-error.notice { color: #ddd; }
   #sd-error:empty { display: none; }
   #sd-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; max-height: 50vh; overflow: auto; }
   #sd-list li { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
   #sd-list .enter, #sd-list .file { overflow-wrap: anywhere; text-align: left; background: transparent; color: #eee; border: 0; padding: 0; cursor: pointer; font: inherit; }
   #sd-list .delete { background: transparent; color: #f0b4b4; border: 0; padding: 4px; cursor: pointer; font: inherit; }
+  #sd-list .rename { background: transparent; color: #9ec1ff; border: 0; padding: 4px; cursor: pointer; font: inherit; }
+  #sd-list .file.open { color: #9ec1ff; }
+  .row-actions { display: flex; gap: 2px; }
+  .rename-input { width: 100%; min-width: 0; box-sizing: border-box; background: #111; color: #eee; border: 1px solid #444; border-radius: 8px; padding: 4px 6px; font: inherit; }
+  #sd-editor { display: grid; gap: 6px; }
+  #sd-editor[hidden] { display: none; }
+  #sd-editor-name { color: #9a9a9a; font: 13px/1.4 sans-serif; overflow-wrap: anywhere; }
+  #sd-text { width: 100%; box-sizing: border-box; min-height: 8em; max-height: 16em; resize: vertical; overflow: auto; white-space: pre; background: #111; color: #eee; border: 1px solid #444; border-radius: 8px; padding: 8px; font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
   #sd-list .empty { display: block; color: #9a9a9a; }
   #hash-panel { display: grid; gap: 12px; padding: 12px; border: 1px solid #333; border-radius: 12px; background: #1b1b1b; }
   #hash-panel label { display: grid; gap: 4px; color: #9a9a9a; font: 13px/1.4 sans-serif; }
@@ -55,7 +64,7 @@
   .hash-example { margin: 0; padding: 0; background: transparent; border: 0; color: #9ec1ff; cursor: pointer; font: 13px/1.4 sans-serif; text-decoration: underline; }
   #hash-panel textarea, #hash-panel input, #hash-panel select { width: 100%; box-sizing: border-box; background: #111; color: #eee; border: 1px solid #444; border-radius: 8px; padding: 8px; font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
   #hash-panel select { font-family: sans-serif; }
-  #hash-panel textarea { resize: vertical; max-height: 9em; }
+  #hash-panel textarea { resize: vertical; max-height: 9em; overflow-x: hidden; overflow-y: auto; }
   #hash-panel button[type="submit"] { justify-self: start; }
 </style>
 <p id="warning">This is an emulator. Do not use it for real Bitcoin.</p>
@@ -75,8 +84,9 @@
     <div id="sd-panel">
       <div id="sd-path"></div>
       <form id="sd-new">
-        <input id="sd-folder" placeholder="Folder name" autocomplete="off">
-        <button type="submit">New Folder</button>
+        <input id="sd-name" placeholder="Folder/File name" autocomplete="off">
+        <button type="button" id="sd-new-folder">New Folder</button>
+        <button type="button" id="sd-new-file">New File</button>
       </form>
       <div id="sd-drop">
         <p>Drop files here</p>
@@ -84,6 +94,10 @@
       </div>
       <p id="sd-error" role="status"></p>
       <ul id="sd-list"></ul>
+      <div id="sd-editor" hidden>
+        <div id="sd-editor-name"></div>
+        <textarea id="sd-text" wrap="off" spellcheck="false" autocapitalize="off" autocorrect="off"></textarea>
+      </div>
       <p id="sd-note">These files stay in this browser cache and are not uploaded anywhere.</p>
     </div>
     <form id="hash-panel" method="dialog" autocomplete="off">
@@ -122,7 +136,10 @@ const sdPath = document.getElementById("sd-path");
 const sdList = document.getElementById("sd-list");
 const sdError = document.getElementById("sd-error");
 const sdDrop = document.getElementById("sd-drop");
-const folderInput = document.getElementById("sd-folder");
+const nameInput = document.getElementById("sd-name");
+const editor = document.getElementById("sd-editor");
+const editorName = document.getElementById("sd-editor-name");
+const editorText = document.getElementById("sd-text");
 const CARD_KEY = "bigsigner-sdcard";
 const MAX_BYTES = 256000;
 const PANEL_WIDTH_MM = 51.84;
@@ -188,6 +205,9 @@ document.getElementById("size-label").addEventListener("click", () => setPanelSc
 
 let card = loadCard();
 let sdHere = "";
+let editingPath = "";
+let editTimer = 0;
+let sdNoticeTimer = 0;
 let dirty = false;
 let started = false;
 let refreshTimer = 0;
@@ -266,7 +286,18 @@ function saveCard() {
   }
 }
 function setSdError(text) {
+  clearTimeout(sdNoticeTimer);
+  sdError.classList.remove("notice");
   sdError.textContent = text || "";
+}
+function setSdNotice(text) {
+  clearTimeout(sdNoticeTimer);
+  sdError.classList.add("notice");
+  sdError.textContent = text;
+  sdNoticeTimer = setTimeout(() => {
+    sdError.textContent = "";
+    sdError.classList.remove("notice");
+  }, 3000);
 }
 function noteCard() {
   dirty = true;
@@ -311,10 +342,11 @@ function renderSd() {
     item.className = "empty";
     item.textContent = sdHere ? "This folder is empty." : "This SD card is empty.";
     sdList.append(item);
-    return;
+  } else {
+    for (const name of dirs) renderRow(name, joinPath(sdHere, name), "dir");
+    for (const name of files) renderRow(name, joinPath(sdHere, name), "file");
   }
-  for (const name of dirs) renderRow(name, joinPath(sdHere, name), "dir");
-  for (const name of files) renderRow(name, joinPath(sdHere, name), "file");
+  syncEditor();
 }
 function childName(path, prefix) {
   if (prefix) {
@@ -339,16 +371,152 @@ function renderRow(name, path, kind) {
     label.className = "file";
     label.textContent = name;
     label.setAttribute("data-path", path);
+    if (path === editingPath) label.classList.add("open");
     item.append(label);
   }
+  const actions = document.createElement("div");
+  actions.className = "row-actions";
+  const rename = document.createElement("button");
+  rename.type = "button";
+  rename.className = "rename";
+  rename.textContent = "Rename";
+  rename.setAttribute("data-path", path);
+  rename.setAttribute("data-kind", kind);
+  actions.append(rename);
   const remove = document.createElement("button");
   remove.type = "button";
   remove.className = "delete";
   remove.textContent = "Delete";
   remove.setAttribute("data-path", path);
   remove.setAttribute("data-kind", kind);
-  item.append(remove);
+  actions.append(remove);
+  item.append(actions);
   sdList.append(item);
+}
+function isAscii(text) {
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) > 127) return false;
+  }
+  return true;
+}
+function closeEditor() {
+  editingPath = "";
+  editor.hidden = true;
+  editorName.textContent = "";
+  editorText.value = "";
+}
+function syncEditor() {
+  if (!editingPath || typeof card.files[editingPath] !== "string") {
+    if (editingPath) closeEditor();
+    return;
+  }
+  editor.hidden = false;
+  editorName.textContent = editingPath;
+  if (document.activeElement === editorText) card.files[editingPath] = editorText.value;
+  else if (editorText.value !== card.files[editingPath]) editorText.value = card.files[editingPath];
+}
+function openFile(path) {
+  if (editingPath === path) {
+    closeEditor();
+    renderSd();
+    return;
+  }
+  const text = card.files[path];
+  if (typeof text !== "string") return;
+  if (!isAscii(text)) {
+    downloadFile(path);
+    setSdNotice("Downloading a binary file.");
+    return;
+  }
+  setSdError("");
+  editingPath = path;
+  editor.hidden = false;
+  editorName.textContent = path;
+  editorText.value = text;
+  renderSd();
+  editorText.focus();
+}
+function saveEditorSoon() {
+  if (!editingPath || typeof card.files[editingPath] !== "string") return;
+  card.files[editingPath] = editorText.value;
+  dirty = true;
+  saveCard();
+  clearTimeout(editTimer);
+  editTimer = setTimeout(() => {
+    if (started) enqueue(() => sendTick({kind: "frame"}));
+  }, 200);
+}
+function applyRename(path, kind, name) {
+  if (!validName(name)) {
+    setSdError("Choose a different name.");
+    return;
+  }
+  const next = joinPath(parentOf(path), name);
+  if (next === path) {
+    renderSd();
+    return;
+  }
+  if (card.files[next]) {
+    setSdError("A file already has that name.");
+    return;
+  }
+  if (card.dirs.includes(next)) {
+    setSdError("A folder already has that name.");
+    return;
+  }
+  if (kind === "dir") {
+    const from = path + "/";
+    card.dirs = card.dirs.map((dir) => {
+      if (dir === path || dir.startsWith(from)) return next + dir.slice(path.length);
+      return dir;
+    });
+    const files = {};
+    for (const [file, text] of Object.entries(card.files)) {
+      if (file.startsWith(from)) files[next + file.slice(path.length)] = text;
+      else files[file] = text;
+    }
+    card.files = files;
+    if (sdHere === path || sdHere.startsWith(from)) sdHere = next + sdHere.slice(path.length);
+    if (editingPath === path || editingPath.startsWith(from)) editingPath = next + editingPath.slice(path.length);
+  } else {
+    card.files[next] = card.files[path];
+    delete card.files[path];
+    if (editingPath === path) editingPath = next;
+  }
+  setSdError("");
+  noteCard();
+}
+function startRename(path, kind, item) {
+  const current = path.slice(path.lastIndexOf("/") + 1);
+  const label = item.querySelector(".enter, .file");
+  const input = document.createElement("input");
+  input.className = "rename-input";
+  input.value = current;
+  input.setAttribute("aria-label", "New name");
+  label.replaceWith(input);
+  const rename = item.querySelector(".rename");
+  rename.textContent = "Save";
+  rename.classList.add("save");
+  input.focus();
+  input.select();
+  function commit() {
+    applyRename(path, kind, input.value.trim());
+  }
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commit();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      renderSd();
+    }
+  });
+  rename.addEventListener("mousedown", (event) => event.preventDefault());
+  rename.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    commit();
+  });
 }
 function downloadFile(path) {
   const text = card.files[path];
@@ -368,8 +536,10 @@ function deletePath(path, kind) {
       if (file === path || file.startsWith(path + "/")) delete card.files[file];
     }
     if (sdHere === path || sdHere.startsWith(path + "/")) sdHere = parentOf(path);
+    if (editingPath === path || editingPath.startsWith(path + "/")) closeEditor();
   } else {
     delete card.files[path];
+    if (editingPath === path) closeEditor();
   }
   noteCard();
 }
@@ -389,9 +559,32 @@ function createFolder(name) {
     return;
   }
   addDirPath(card, path);
-  folderInput.value = "";
+  nameInput.value = "";
   setSdError("");
   noteCard();
+}
+function createFile(name) {
+  const trimmed = name.trim();
+  if (!validName(trimmed)) {
+    setSdError("Choose a different file name.");
+    return;
+  }
+  const path = joinPath(sdHere, trimmed);
+  if (card.dirs.includes(path)) {
+    setSdError("A folder already has that name.");
+    return;
+  }
+  if (typeof card.files[path] === "string") {
+    setSdError("That file already exists.");
+    return;
+  }
+  const parent = parentOf(path);
+  if (parent) addDirPath(card, parent);
+  card.files[path] = "";
+  nameInput.value = "";
+  setSdError("");
+  noteCard();
+  openFile(path);
 }
 async function addFiles(items) {
   const errors = [];
@@ -484,21 +677,22 @@ sdPath.addEventListener("click", (event) => {
   sdHere = button.getAttribute("data-path") || "";
   renderSd();
 });
-document.getElementById("sd-new").addEventListener("submit", (event) => {
-  event.preventDefault();
-  createFolder(folderInput.value);
-});
+document.getElementById("sd-new").addEventListener("submit", (event) => event.preventDefault());
+document.getElementById("sd-new-folder").addEventListener("click", () => createFolder(nameInput.value));
+document.getElementById("sd-new-file").addEventListener("click", () => createFile(nameInput.value));
 sdList.addEventListener("click", (event) => {
   const button = event.target.closest("button");
-  if (!button) return;
+  if (!button || button.classList.contains("save")) return;
   const path = button.getAttribute("data-path");
   if (button.classList.contains("delete")) deletePath(path, button.getAttribute("data-kind"));
-  else if (button.classList.contains("file")) downloadFile(path);
+  else if (button.classList.contains("rename")) startRename(path, button.getAttribute("data-kind"), button.closest("li"));
+  else if (button.classList.contains("file")) openFile(path);
   else if (button.classList.contains("enter")) {
     sdHere = path;
     renderSd();
   }
 });
+editorText.addEventListener("input", saveEditorSoon);
 sdDrop.addEventListener("dragover", (event) => {
   event.preventDefault();
   sdDrop.classList.add("over");

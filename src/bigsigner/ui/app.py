@@ -17,7 +17,7 @@ from .. import __version__
 from ..entropy import mnemonic_from_camera, mnemonic_from_coins, mnemonic_from_dice
 from ..rpc import split_line
 from ..parse import ParseError
-from ..paths import HARDENED, MULTISIG_NATIVE, SINGLESIG_NATIVE, SINGLESIG_TAPROOT, format_path
+from ..paths import HARDENED, MULTISIG_NATIVE, SINGLESIG_NATIVE, SINGLESIG_TAPROOT, coin_type, format_path
 from ..psbt_review import ReviewError, review_psbt, sign_with
 from ..qr import qr_matrix
 from ..session import (
@@ -30,6 +30,18 @@ from ..session import (
     normalize_address_text,
 )
 from ..bsms import bsms_text
+from ..message_sign import (
+    address_message_text,
+    bip137_signature,
+    message_ending,
+    MESSAGE_MAX_BYTES,
+    message_lines,
+    native_sign_path,
+    parse_sign_command,
+    read_sign_command,
+    signing_secret,
+    starts_with_signmessage_command,
+)
 from ..scan import QrSequence, import_scanned, read_address
 from ..sdcard import SdError, child_path, file_exists, list_folder, parent_path, read_text, write_text
 from ..licenses import NOTICES
@@ -48,6 +60,7 @@ from .canvas import (
     NAVY,
     PAPER,
     RED,
+    WARNING,
     WHITE,
     BODY_SIZE,
     TITLE_SIZE,
@@ -116,9 +129,17 @@ def _address_screen_title(branch: int, index: int) -> str:
 
 
 def _address_text_groups(address: str) -> list[str]:
-    """Groups of four. Trailing spaces make the last group four characters too."""
-    padded = address + " " * ((-len(address)) % 4)
+    """Groups of four. Spaces pad the address to a multiple of 16 so the last row is full."""
+    if not address:
+        return []
+    padded = address + " " * ((-len(address)) % 16)
     return [padded[index : index + 4] for index in range(0, len(padded), 4)]
+
+
+def _address_rows(address: str) -> list[list[str]]:
+    """Four groups per row. Every row, including the last, is 16 characters."""
+    groups = _address_text_groups(address)
+    return [groups[index : index + 4] for index in range(0, len(groups), 4)]
 
 
 def _address_path_lines(path: str, limit: int = ADDRESS_PATH_CHARS) -> list[str]:
@@ -201,6 +222,21 @@ BOOT_HOLD = 1.0
 NOTICE_HOLD = 4.0
 QR_HINT_HOLD = 2.0
 PASSPHRASE_MAX = 128
+# The passphrase keyboard's top row. A message being edited keeps the same keyboard.
+KEYBOARD_TOP = 470
+MESSAGE_NOTE_SIZE = 24
+MESSAGE_HINT_SIZE = 28
+MESSAGE_QR = ADDRESS_QR
+MESSAGE_WATCH_ONLY = "Unavailable in watch-only wallets."
+MESSAGE_ADDRESS_HINT = "If you don't have a file or QR code from a wallet app, go back and select the address you want to sign a message with."
+MESSAGE_MORE = "There is more content in the text area. Scroll all the way down."
+MESSAGE_ENDS_SPACE = "Ends with a space."
+MESSAGE_ENDS_NEWLINE = "Ends with a newline."
+MESSAGE_EMPTY = "The message cannot be empty."
+MESSAGE_ADDRESS_COMMAND = (
+    "In order to use sign-message commands, go to the wallet's main screen and choose Sign Message."
+)
+ADDRESS_SIGN_ONLY = "Signing messages is supported only in Native-Segwit SingleSig wallets."
 ACCOUNT_INDEX_WARNING = (
     "Changing the account index of a multisig wallet is an advanced feature. "
     "Losing the exact sequence of account indexes you used might make it impossible to recover the funds."
@@ -231,6 +267,9 @@ QR_ZOOM_CELL = 46
 QR_ZOOM_COUNT = 9
 QR_ZOOM_RIGHT = 4
 QR_ZOOM_BAND = 32
+# What white and the page background become. A camera reading this panel is
+# blinded when the screen is too bright, so the control changes every pixel,
+# not only the QR. The middle stop is the normal page color. Black stays black.
 QR_BRIGHTNESS_STOPS = (
     (118, 122, 128),
     (176, 180, 186),
@@ -329,6 +368,22 @@ class App:
         self.passphrase_text = ""
         self.passphrase_cursor = 0
         self.passphrase_mode = "lower"
+        self.message_text = ""
+        self.message_cursor = 0
+        self.message_keyboard = False
+        self.message_scroll = 0
+        self.message_scroll_max = 0
+        self.message_box = None
+        self.message_layout = None
+        self.message_reached_end = False
+        self.message_end_dirty = True
+        self.message_reveal = False
+        self.message_branch = 0
+        self.message_index = 0
+        self.message_steps = []
+        self.message_signature = ""
+        self.message_from_address = False
+        self.message_return_back = []
         self.confirm = None
         self.entropy_words = 24
         self.open_dropdown = None
@@ -448,6 +503,11 @@ class App:
             "address-verify": self._address_verify,
             "address-type": self._address_type,
             "address-verify-result": self._address_verify_result,
+            "address-message": self._address_message,
+            "message-source": self._message_source,
+            "message-edit": self._message_edit,
+            "message-review": self._message_review,
+            "message-signed": self._message_signed,
             "generate": self._generate,
             "dice": self._dice,
             "coins": self._coins,
@@ -508,6 +568,7 @@ class App:
     def render(self) -> Image.Image:
         self.dirty = None
         self.keyboard_top = None
+        self.message_box = None
         self._still_boxes = []
         self._hscroll_box = None
         # A remembered picture is only valid while that screen is showing.
@@ -538,6 +599,8 @@ class App:
             self.address_search_shown = True
         if self._addresses_loading:
             self._addresses_loading_shown = True
+        if self._shown_to_a_camera():
+            return _dim_for_camera(frame.image, self.qr_brightness)
         return frame.image
 
     def _touch_blocked(self) -> bool:
@@ -566,9 +629,12 @@ class App:
             self.camera_final = camera.get("final") or b""
         if not self.notice_error:
             self.set_notice("")
+        self._last_tap = (x, y)
         for hit in reversed(self.hits):
             left, top, right, bottom = hit["box"]
             if left <= x < right and top <= y < bottom:
+                if self.notice_error and hit["action"] != "dismiss-notice":
+                    return
                 self._act(hit["action"])
                 return
 
@@ -580,6 +646,8 @@ class App:
             return
         if self._in_hscroll_field(x, y):
             panel = "hfield"
+        elif self._in_message_box(x, y):
+            panel = "message"
         elif self._in_seed_grid(x, y):
             panel = "seed"
         elif self._in_qr_panel(x, y):
@@ -596,6 +664,8 @@ class App:
             self._grid_origin = self.entropy_scroll
         elif panel == "hfield":
             self._grid_origin = self.hscroll
+        elif panel == "message":
+            self._grid_origin = self.message_scroll
         else:
             self._grid_origin = self.seed_grid_scroll
 
@@ -609,6 +679,13 @@ class App:
     def _in_qr_panel(self, x: int, y: int) -> bool:
         box = self.qr_scroll_box
         if self.screen != "qr" or self.qr_kind not in ("key", "descriptor") or box is None or self.qr_scroll_max <= 0:
+            return False
+        left, top, right, bottom = box
+        return left <= x < right and top <= y < bottom
+
+    def _in_message_box(self, x: int, y: int) -> bool:
+        box = self.message_box
+        if self.screen != "message-edit" or box is None:
             return False
         left, top, right, bottom = box
         return left <= x < right and top <= y < bottom
@@ -687,6 +764,15 @@ class App:
                 return False
             self.entropy_scroll = offset
             self.entropy_scroll_stick = offset >= self.entropy_scroll_max
+            self._note_scroll()
+            return True
+        if panel == "message":
+            offset = max(0, min(self.message_scroll_max, int(self._grid_origin - dy)))
+            if offset == self.message_scroll:
+                return False
+            self.message_scroll = offset
+            if offset >= self.message_scroll_max:
+                self.message_reached_end = True
             self._note_scroll()
             return True
         limit = self.scroll_max.get(self.screen, 0)
@@ -1147,8 +1233,22 @@ class App:
         "address-type": _act_address_type,
         "address-scan": _act_address_scan,
         "address-sd": lambda self: self._open_sd("address"),
+        "address-sign": lambda self: self._open_address_sign(),
+        "address-message-manual": lambda self: self._begin_address_message(""),
+        "address-message-sd": lambda self: self._open_sd("address-message"),
+        "address-message-scan": lambda self: self._open_address_message_scan(),
         "address-verify-text": lambda self: self._verify_entered_address(self.address_text),
         "address-go": lambda self: self._open_found_address(),
+        "sign-message": lambda self: self._open_sign_message(),
+        "message-scan": lambda self: self._open_message_scan(),
+        "message-sd": lambda self: self._open_sd("message"),
+        "message-continue": lambda self: self._continue_message(),
+        "message-hide": lambda self: self._hide_message_keyboard(),
+        "message-keyboard": lambda self: None,
+        "message-focus": lambda self: self._focus_message(),
+        "message-sign": lambda self: self._sign_message(),
+        "message-export": lambda self: self._open_message_export(),
+        "message-wallet": lambda self: self._return_to_message_wallet(),
     }
 
     def _act(self, action: str):
@@ -1493,15 +1593,29 @@ class App:
 
     def _read_sd_file(self, relative: str):
         try:
-            text = read_text(relative)
+            text = read_text(relative, raw=self.sd_expect in ("message", "address-message"))
         except SdError as exc:
             if self.sd_expect == "address":
                 self.set_error(str(exc))
+                return
+            if self.sd_expect == "message":
+                self.set_error(str(exc))
+                self._return_to_message_source()
+                return
+            if self.sd_expect == "address-message":
+                self.set_error(str(exc))
+                self._return_to_address_message()
                 return
             self._show_load_error(str(exc), self.sd_expect)
             return
         if self.sd_expect == "address":
             self._verify_loaded_address(text, "file")
+            return
+        if self.sd_expect == "message":
+            self._load_sign_message(text, "file")
+            return
+        if self.sd_expect == "address-message":
+            self._begin_address_message(text)
             return
         self._import_payload(text, self.sd_expect, "file")
 
@@ -1614,12 +1728,23 @@ class App:
         self.confirm = "replace-file"
 
     def _open_export_name(self):
-        self.filename = self._suggested_export_name()
+        self.filename = self._unused_export_name(self._suggested_export_name())
         self.filename_cursor = len(self.filename)
         self.passphrase_mode = "lower"
         self.go("export-name")
 
+    def _unused_export_name(self, name: str) -> str:
+        """Keep the suggested name, or add `` (1)``, `` (2)``, … before its extension."""
+        try:
+            entries = list_folder(self.sd_dir)
+        except SdError:
+            return name
+        return _unused_filename(name, {entry["name"] for entry in entries})
+
     def _suggested_export_name(self) -> str:
+        if self.export_label == "Signature" and self.wallet_index < len(self.session.wallets):
+            fingerprint = self.session.wallets[self.wallet_index].fingerprints[0].hex()
+            return f"{fingerprint}-signature.txt"
         if self.export_label == "Address" and self.wallet_index < len(self.session.wallets):
             wallet = self.session.wallets[self.wallet_index]
             fingerprint = wallet.fingerprints[0].hex()
@@ -1777,6 +1902,10 @@ class App:
             return "Point the camera at one wallet descriptor QR code."
         if self.scan_kind == "address":
             return "Point the camera at an address QR code."
+        if self.scan_kind == "message":
+            return "Point the camera at one message signing QR code."
+        if self.scan_kind == "address-message":
+            return "Point the camera at the message."
         return "Point the camera at one QR code."
 
     def _scan(self, frame: Frame):
@@ -1784,6 +1913,8 @@ class App:
             title = "Scan descriptor"
         elif self.scan_kind == "address":
             title = "Scan Address"
+        elif self.scan_kind in ("message", "address-message"):
+            title = "Scan Message"
         else:
             title = "Scan QR"
         frame.header(title, "back")
@@ -1832,6 +1963,32 @@ class App:
                 return
             self.qr_sequence.reset()
             self._verify_loaded_address(payload, "QR code")
+            return
+        if self.scan_kind == "message":
+            try:
+                payload = self.qr_sequence.take(text, self.session.network, "QR code", "message")
+            except SessionError as exc:
+                self.qr_sequence.reset()
+                self.set_error(str(exc))
+                self._return_to_message_source()
+                return
+            if payload is None:
+                return
+            self.qr_sequence.reset()
+            self._load_sign_message(payload, "QR code")
+            return
+        if self.scan_kind == "address-message":
+            try:
+                payload = self.qr_sequence.take(text, self.session.network, "QR code", "address-message")
+            except SessionError as exc:
+                self.qr_sequence.reset()
+                self.set_error(str(exc))
+                self._return_to_address_message()
+                return
+            if payload is None:
+                return
+            self.qr_sequence.reset()
+            self._begin_address_message(payload)
             return
         try:
             payload = self.qr_sequence.take(text, self.session.network, "QR code", self.scan_kind)
@@ -2431,6 +2588,12 @@ class App:
         top = y - offset
         if paint and top + height > HEADER and top < HEIGHT:
             frame.button(top, label, action, label=hit_label, enabled=enabled)
+        return y + height + 12
+
+    def _flow_note(self, frame: Frame, y: int, text: str, paint: bool, offset: int, fill=MUTED, size: int = MESSAGE_NOTE_SIZE) -> int:
+        height = self._text_height(frame, text, size)
+        if paint:
+            frame.text(text, MARGIN, y - offset, size=size, fill=fill)
         return y + height + 12
 
     def _open_derive_menu(self):
@@ -3251,6 +3414,18 @@ class App:
         y = self._flow_button(
             frame, y, "Export Descriptor\nto SD Card", "export-wallet", paint, offset, "Export Descriptor to SD Card",
         )
+        if wallet.role == SINGLESIG_NATIVE:
+            has_seed = self.session._seed_for(wallet.fingerprints[0]) is not None
+            y = self._flow_button(
+                frame, y, "Sign Message (BIP137)", "sign-message", paint, offset, enabled=has_seed,
+            )
+            if not has_seed:
+                y = self._flow_note(frame, y, MESSAGE_WATCH_ONLY, paint, offset)
+        else:
+            y = self._flow_button(
+                frame, y, "Sign Message (BIP137)", "sign-message", paint, offset, enabled=False,
+            )
+            y = self._flow_note(frame, y, ADDRESS_SIGN_ONLY, paint, offset, size=TITLE_SIZE)
         return y, open_field, open_fp
 
     def _wallet_key_card(self, frame: Frame, wallet, fingerprint: bytes, y: int, paint: bool, offset: int) -> int:
@@ -3906,12 +4081,12 @@ class App:
         offset = self._scroll_offset("address", sheet["end"], clearance=8)
         self._paste_address_sheet(frame, sheet, offset)
         frame.header(title, "back")
-        button = sheet["button"]
-        if button is not None:
-            top = button[1] - offset
-            bottom = button[3] - offset
-            if bottom > HEADER and top < HEIGHT:
-                frame.hit((button[0], top, button[2], bottom), "export-address", "Export to SD Card")
+        self._hit_address_control(frame, sheet.get("button"), offset, "export-address", "Export to SD Card")
+        self._hit_address_control(frame, sheet.get("sign"), offset, "address-sign", "Sign Message")
+        note = sheet.get("note") or ""
+        note_y = sheet.get("note_y")
+        if note and note_y is not None:
+            self._mark_wrapped(frame, note, MARGIN, note_y - offset, TITLE_SIZE)
         # The body is already drawn. A drag only copies the visible slice.
         if reused and self._press is not None:
             self.dirty = (HEADER, HEIGHT)
@@ -3919,14 +4094,18 @@ class App:
     def _build_address_sheet(self, title: str, address: str, label: str, path_lines: list[str], key) -> dict:
         """Draw the body once, including the parts below the screen, and keep that picture."""
         del title
+        can_sign = key[4] == SINGLESIG_NATIVE
+        note = "" if can_sign else ADDRESS_SIGN_ONLY
         metrics = Frame()
         button_h = metrics.button_height("Export to SD Card")
+        sign_h = metrics.button_height("Sign Message")
+        note_h = self._text_height(metrics, note, TITLE_SIZE) if note else 0
         end = HEADER + 12 + ADDRESS_QR + 4 + self._grouped_address_height(metrics, address) + 8
         end += self._text_height(metrics, label, TITLE_SIZE)
         end += len(path_lines) * (ADDRESS_PATH_SIZE + 8)
-        end += 4 + button_h
+        end += 4 + button_h + 12 + sign_h + 12 + note_h
         sheet = Frame()
-        sheet.image = Image.new("RGB", (WIDTH, max(end, 1)), PAPER)
+        sheet.image = Image.new("RGB", (WIDTH, max(end, 1) + 64), PAPER)
         sheet.draw = ImageDraw.Draw(sheet.image)
         sheet.clip_bottom = sheet.image.height
         y = HEADER + 12
@@ -3937,14 +4116,46 @@ class App:
         y = sheet.text(label, MARGIN, y + 8, size=TITLE_SIZE, fill=MUTED)
         for line in path_lines:
             y = self._centered_mono(sheet, line, y, ADDRESS_PATH_SIZE, MUTED)
+        y = sheet.button(y + 4, "Export to SD Card", "export-address")
+        y = sheet.button(y, "Sign Message", "address-sign", enabled=can_sign)
         button = None
-        if y + button_h > HEADER:
-            sheet.button(y + 4, "Export to SD Card", "export-address")
-            for hit in sheet.hits:
-                if hit["action"] == "export-address":
-                    button = hit["box"]
-        self._address_sheet = {"key": key, "image": sheet.image, "end": end, "button": button}
+        sign_button = None
+        for hit in sheet.hits:
+            if hit["action"] == "export-address":
+                button = hit["box"]
+            elif hit["action"] == "address-sign":
+                sign_button = hit["box"]
+        note_y = None
+        if note:
+            note_y = y
+            y = sheet.text(note, MARGIN, note_y, size=TITLE_SIZE, fill=MUTED)
+        self._address_sheet = {
+            "key": key,
+            "image": sheet.image,
+            "end": y,
+            "button": button,
+            "sign": sign_button,
+            "note": note,
+            "note_y": note_y,
+        }
         return self._address_sheet
+
+    def _hit_address_control(self, frame: Frame, box, offset: int, action: str, label: str):
+        if box is None:
+            return
+        top = box[1] - offset
+        bottom = box[3] - offset
+        if bottom > HEADER and top < HEIGHT:
+            frame.hit((box[0], top, box[2], bottom), action, label)
+
+    def _mark_wrapped(self, frame: Frame, value: str, x: int, y: int, size: int):
+        """Record wrapped lines that are already painted, so a scroll does not draw them twice."""
+        face = font(size)
+        width = WIDTH - x - MARGIN
+        for line in wrap(frame.draw, value, face, width):
+            if HEADER <= y < HEIGHT:
+                frame.mark(line, frame.draw.textbbox((x, y), line, font=face))
+            y += size + 8
 
     def _paste_address_sheet(self, frame: Frame, sheet: dict, offset: int) -> None:
         image = sheet["image"]
@@ -3956,36 +4167,22 @@ class App:
         return self._grouped_address(frame, address, 0, paint=False)
 
     def _grouped_address(self, frame: Frame, address: str, y: int, paint: bool = True) -> int:
-        groups = _address_text_groups(address)
+        """Four groups of four on each centered row. Even groups are grey. The last row is padded to 16 characters."""
         face = font(TITLE_SIZE, mono=True)
         space = frame.draw.textlength(" ", font=face)
         line_h = TITLE_SIZE + 8
-        limit = WIDTH - 2 * MARGIN
         bottom = getattr(frame, "clip_bottom", HEIGHT)
-        lines: list[list[tuple[str, tuple, float]]] = []
-        current: list[tuple[str, tuple, float]] = []
-        width = 0.0
-        for index, group in enumerate(groups):
-            group_width = frame.draw.textlength(group, font=face)
-            gap = space if current else 0
-            if current and width + gap + group_width > limit:
-                lines.append(current)
-                current = []
-                width = 0.0
-                gap = 0
-            color = MUTED if index % 2 else INK
-            current.append((group, color, group_width))
-            width += gap + group_width
-        if current:
-            lines.append(current)
-        for line in lines:
-            total = sum(item[2] for item in line) + space * (len(line) - 1)
+        for row_index, groups in enumerate(_address_rows(address)):
+            widths = [frame.draw.textlength(group, font=face) for group in groups]
+            total = sum(widths) + space * (len(groups) - 1)
             x = (WIDTH - total) / 2
             if paint and y + line_h > HEADER and y < bottom:
-                for index, (group, color, group_width) in enumerate(line):
+                for index, (group, group_width) in enumerate(zip(groups, widths)):
+                    color = MUTED if (row_index * 4 + index) % 2 else INK
                     frame.draw.text((x, y), group, font=face, fill=color)
+                    frame.mark(group, frame.draw.textbbox((x, y), group, font=face))
                     x += group_width
-                    if index < len(line) - 1:
+                    if index < len(groups) - 1:
                         x += space
             y += line_h
         return y
@@ -3995,7 +4192,9 @@ class App:
         width = frame.draw.textlength(text, font=face)
         bottom = getattr(frame, "clip_bottom", HEIGHT)
         if y >= HEADER and y < bottom:
-            frame.draw.text(((WIDTH - width) / 2, y), text, font=face, fill=fill)
+            x = (WIDTH - width) / 2
+            frame.draw.text((x, y), text, font=face, fill=fill)
+            frame.mark(text, frame.draw.textbbox((x, y), text, font=face))
         return y + size + 8
 
     def _address_tools(self, frame: Frame):
@@ -4909,9 +5108,11 @@ class App:
             frame.hit((hit_left, box[1], hit_right, box[3]), f"passcur-{index}", f"passcur-{index}")
 
     def _passphrase_keyboard(self, frame: Frame):
-        modes = (("abc", "lower"), ("ABC", "upper"), (".?123", "digit"), ("#+=", "symbol"))
-        y = 470
+        y = KEYBOARD_TOP
         self.keyboard_top = y
+        if self.screen == "message-edit":
+            frame.hit((0, y, WIDTH, HEIGHT), "message-keyboard", "keyboard")
+        modes = (("abc", "lower"), ("ABC", "upper"), (".?123", "digit"), ("#+=", "symbol"))
         gap = 8
         width = (WIDTH - 2 * MARGIN - gap * 3) // 4
         for index, (label, mode) in enumerate(modes):
@@ -4953,11 +5154,27 @@ class App:
                 )
                 x += key_w + 6
             y += key_h + 6
-        space = (MARGIN, y, WIDTH - MARGIN - 100, y + key_h)
+        delete = (WIDTH - MARGIN - 88, y, WIDTH - MARGIN, y + key_h)
+        if self.screen == "message-edit":
+            enter_w = 120
+            gap = 12
+            enter = (delete[0] - gap - enter_w, y, delete[0] - gap, y + key_h)
+            space = (MARGIN, y, enter[0] - gap, y + key_h)
+        else:
+            enter = None
+            space = (MARGIN, y, WIDTH - MARGIN - 100, y + key_h)
         frame.draw.rounded_rectangle(space, radius=8, fill=WHITE, outline=LINE)
         frame.draw.text((space[0] + 16, y + 8), "space", font=font(TITLE_SIZE), fill=INK)
         frame.hit(self._key_hit(space, bottom=True, left=True), "passkey- ", "space")
-        delete = (WIDTH - MARGIN - 88, y, WIDTH - MARGIN, y + key_h)
+        if enter is not None:
+            frame.draw.rounded_rectangle(enter, radius=8, fill=WHITE, outline=LINE)
+            label = "enter"
+            face = font(TITLE_SIZE)
+            text_width = frame.draw.textlength(label, font=face)
+            _left, text_top, _right, text_bottom = frame.draw.textbbox((0, 0), label, font=face)
+            text_y = y + (key_h - (text_bottom - text_top)) / 2 - text_top
+            frame.draw.text((enter[0] + (enter_w - text_width) / 2, text_y), label, font=face, fill=INK)
+            frame.hit(self._key_hit(enter, bottom=True), "passkey-enter", label)
         frame.draw.rounded_rectangle(delete, radius=8, fill=BLUE)
         frame.draw.text((delete[0] + 16, y + 8), "del", font=font(TITLE_SIZE), fill=WHITE)
         frame.hit(self._key_hit(delete, bottom=True, right=True), "passkey-backspace", "backspace")
@@ -4968,6 +5185,9 @@ class App:
             return
         if self.screen == "address-type":
             self._type_address(key)
+            return
+        if self.screen == "message-edit":
+            self._type_message(key)
             return
         if key == "backspace":
             if self.passphrase_cursor > 0:
@@ -5085,8 +5305,12 @@ class App:
                 y = self._flow_text(frame, y, f"OP_RETURN {text}", paint, offset, size, mono=True)
             else:
                 y = self._flow_text(
-                    frame, y, f"{item['amount'] / 1e8:.8f} {item['address']}", paint, offset, size, mono=True,
+                    frame, y, f"{item['amount'] / 1e8:.8f} BTC", paint, offset, size,
                 )
+                if paint:
+                    y = self._grouped_address(frame, item["address"], y - offset) + offset
+                else:
+                    y += self._grouped_address_height(frame, item["address"])
         return y
 
     def _qr(self, frame: Frame):
@@ -5126,7 +5350,7 @@ class App:
         else:
             self.seed_grid_box = None
             self.seed_grid_max = 0
-            light = _qr_light(self.qr_brightness)
+            light = _qr_light(QR_BRIGHTNESS_DEFAULT)
             frame.draw.rectangle((0, HEADER, WIDTH, HEIGHT), fill=light)
             image = _qr_image(self._seed_qr_payload(), 360, light)
             frame.image.paste(image, ((WIDTH - image.width) // 2, HEADER + 12))
@@ -5219,7 +5443,7 @@ class App:
         count = QR_ZOOM_COUNT
         left, top, grid_bottom = _zoom_grid_box()
         light = (
-            _qr_light(self.qr_brightness)
+            _qr_light(QR_BRIGHTNESS_DEFAULT)
             if self.screen == "seed-show" or self.qr_kind in ("key", "descriptor")
             else WHITE
         )
@@ -5365,6 +5589,8 @@ class App:
             return "Go to Seed Key?" if self._wallet_key_target[2] else "Go to External Key?"
         if self.confirm == "account-warning":
             return ACCOUNT_INDEX_WARNING
+        if self.confirm == "message-more":
+            return MESSAGE_MORE
         return "Delete this key?"
 
     def _confirm(self, frame: Frame):
@@ -5398,6 +5624,13 @@ class App:
         self._confirm_buttons(frame, box)
 
     def _confirm_buttons(self, frame: Frame, box):
+        if self.confirm == "message-more":
+            height = BODY_SIZE + 36
+            y = box[3] - 24 - height
+            left = box[0] + 20
+            right = box[2] - 20
+            self._dialog_button(frame, (left, y, right, y + height), "OK", "confirm-no", BLUE)
+            return
         gap = 12
         height = BODY_SIZE + 36
         y = box[3] - 24 - height
@@ -6269,7 +6502,7 @@ class App:
     def _draw_key_qr(self, frame: Frame):
         formats = self._key_qr_formats()
         if not formats:
-            light = _qr_light(self.qr_brightness)
+            light = _qr_light(QR_BRIGHTNESS_DEFAULT)
             frame.draw.rectangle((0, 0, WIDTH, HEIGHT), fill=light)
             frame.header("QR", "back")
             frame.text("This key is no longer loaded.", MARGIN, 140)
@@ -6339,7 +6572,7 @@ class App:
             note=note,
             format_name=format_name,
             show_zoom=show_zoom,
-            light=_qr_light(self.qr_brightness),
+            light=_qr_light(QR_BRIGHTNESS_DEFAULT),
             view_top=view_top,
             view_bottom=view_bottom,
             view_h=view_h,
@@ -6437,6 +6670,479 @@ class App:
         elif direction == "down":
             y = min(limit, y + 1)
         self.qr_zoom = (x, y)
+
+    def _shown_to_a_camera(self) -> bool:
+        """True when this picture is meant to be read by another device's camera."""
+        if self.screen == "message-signed":
+            return bool(self.message_signature)
+        if self.screen == "seed-show":
+            return SEED_FORMATS[self.seed_format] != "words"
+        return self.screen == "qr" and self.qr_kind in ("key", "descriptor")
+
+    def _message_wallet(self):
+        if self.wallet_index >= len(self.session.wallets):
+            return None
+        wallet = self.session.wallets[self.wallet_index]
+        if wallet.role != SINGLESIG_NATIVE or wallet.multisig:
+            return None
+        return wallet
+
+    def _open_sign_message(self):
+        wallet = self._message_wallet()
+        if wallet is None:
+            self.set_error("This wallet is no longer loaded.")
+            return
+        if self.session._seed_for(wallet.fingerprints[0]) is None:
+            return
+        self.message_return_back = list(self.back)
+        self.go("message-source")
+
+    def _open_address_sign(self):
+        if self._message_wallet() is None:
+            return
+        self._capture_address_message()
+        if "wallet" in self.back:
+            index = len(self.back) - 1 - self.back[::-1].index("wallet")
+            self.message_return_back = self.back[:index]
+        else:
+            self.message_return_back = list(self.back)
+        self.go("address-message")
+
+    def _capture_address_message(self):
+        """Remember the open address. Later edits do not change which key signs."""
+        wallet = self.session.wallets[self.wallet_index]
+        fingerprint = wallet.fingerprints[0]
+        account = wallet.accounts[fingerprint]
+        self.message_branch = self.address_branch
+        self.message_index = self.address_index
+        self.message_steps = [
+            84 | HARDENED,
+            coin_type(self.session.network) | HARDENED,
+            account | HARDENED,
+            self.address_branch,
+            self.address_index,
+        ]
+
+    def _address_message(self, frame: Frame):
+        frame.header("Sign Message", "back")
+        y = frame.button(HEADER + 24, "Manual Entry", "address-message-manual")
+        y = frame.button(y, "Load from SD Card", "address-message-sd")
+        frame.button(y, "Scan QR Code", "address-message-scan")
+
+    def _open_address_message_scan(self):
+        self.scan_kind = "address-message"
+        self.qr_sequence.reset()
+        self.go("scan")
+
+    def _return_to_address_message(self):
+        self.back = [screen for screen in self.back if screen not in ("scan", "sd")]
+        if self.back and self.back[-1] == "address-message":
+            self.back.pop()
+        self.screen = "address-message"
+        self.menu = False
+        self.add_menu = False
+
+    def _begin_address_message(self, text: str):
+        if self._message_wallet() is None:
+            self.set_error("This wallet is no longer loaded.")
+            self._return_to_address_message()
+            return
+        try:
+            message = address_message_text(text)
+        except SessionError as exc:
+            self.set_error(str(exc))
+            self._return_to_address_message()
+            return
+        if not self.message_steps:
+            self._capture_address_message()
+        self.set_notice("")
+        self.message_text = message
+        self.message_cursor = 0
+        self.message_scroll = 0
+        self.message_keyboard = message == ""
+        self.message_reached_end = False
+        self.message_end_dirty = True
+        self.message_reveal = False
+        self.message_signature = ""
+        self.message_from_address = True
+        self.passphrase_mode = "lower"
+        self._return_to_address_message()
+        self.go("message-edit")
+
+    def _open_message_scan(self):
+        self.scan_kind = "message"
+        self.qr_sequence.reset()
+        self.go("scan")
+
+    def _return_to_message_source(self):
+        self.back = [screen for screen in self.back if screen not in ("scan", "sd")]
+        if self.back and self.back[-1] == "message-source":
+            self.back.pop()
+        self.screen = "message-source"
+        self.menu = False
+        self.add_menu = False
+
+    def _load_sign_message(self, text: str, source: str):
+        wallet = self._message_wallet()
+        if wallet is None:
+            self.set_error("This wallet is no longer loaded.")
+            self._return_to_message_source()
+            return
+        fingerprint = wallet.fingerprints[0]
+        account = wallet.accounts[fingerprint]
+        try:
+            command = read_sign_command(text, source, self.session.network)
+            path_text, message = parse_sign_command(command)
+            branch, index, steps = native_sign_path(path_text, self.session.network, account)
+        except SessionError as exc:
+            self.set_error(str(exc))
+            self._return_to_message_source()
+            return
+        self.set_notice("")
+        self.message_text = message
+        self.message_cursor = 0
+        self.message_scroll = 0
+        self.message_keyboard = message == ""
+        self.message_reached_end = False
+        self.message_end_dirty = True
+        self.message_reveal = False
+        self.message_branch = branch
+        self.message_index = index
+        self.message_steps = steps
+        self.message_from_address = False
+        self.passphrase_mode = "lower"
+        self._return_to_message_source()
+        self.go("message-edit")
+
+    def _message_source(self, frame: Frame):
+        frame.header("Sign Message", "back")
+        y = frame.button(HEADER + 24, "Scan QR Code", "message-scan")
+        y = frame.button(y, "Load from SD Card", "message-sd")
+        frame.text(MESSAGE_ADDRESS_HINT, MARGIN, y + 8, size=MESSAGE_HINT_SIZE, fill=MUTED)
+
+    def _message_is_address_command(self) -> bool:
+        return self.message_from_address and starts_with_signmessage_command(self.message_text)
+
+    def _message_note(self, keyboard: bool) -> tuple[str, tuple]:
+        if self._message_is_address_command():
+            return MESSAGE_ADDRESS_COMMAND, RED
+        if not self.message_text:
+            if keyboard:
+                return "", MUTED
+            return MESSAGE_EMPTY, RED
+        ending = message_ending(self.message_text)
+        if ending == "space":
+            return MESSAGE_ENDS_SPACE, WARNING
+        if ending == "newline":
+            return MESSAGE_ENDS_NEWLINE, WARNING
+        return "", MUTED
+
+    def _message_metrics(self, frame: Frame, keyboard: bool) -> dict:
+        note, note_fill = self._message_note(keyboard)
+        note_h = self._text_height(frame, note, MESSAGE_HINT_SIZE) if note else 0
+        pad = 12
+        top = HEADER + 16
+        if keyboard:
+            button_h = frame.button_height("Hide Keyboard", icon=True)
+            hide_top = KEYBOARD_TOP - 12 - button_h
+            bottom = hide_top - 12 - (note_h + 12 if note else 0)
+        else:
+            button_h = frame.button_height("Continue")
+            continue_top = HEIGHT - 16 - button_h
+            bottom = continue_top - 12 - (note_h + 12 if note else 0)
+        bottom = max(bottom, top + MESSAGE_NOTE_SIZE + pad * 2)
+        box = (MARGIN, top, WIDTH - MARGIN, bottom)
+        face = font(TITLE_SIZE, mono=True)
+        room = box[2] - box[0] - pad * 2
+        columns = 1
+        while columns < 80 and frame.draw.textlength("0" * (columns + 1), font=face) <= room:
+            columns += 1
+        char_w = frame.draw.textlength("0", font=face) or 1
+        line_h = TITLE_SIZE + 8
+        lines = message_lines(self.message_text, columns)
+        content_h = pad + len(lines) * line_h
+        return {
+            "box": box,
+            "pad": pad,
+            "face": face,
+            "char_w": char_w,
+            "line_h": line_h,
+            "lines": lines,
+            "content_h": content_h,
+            "warning": note,
+            "warning_h": note_h,
+            "warning_fill": note_fill,
+            "keyboard": keyboard,
+        }
+
+    def _message_edit(self, frame: Frame):
+        keyboard = self.message_keyboard
+        metrics = self._message_metrics(frame, keyboard)
+        box = metrics["box"]
+        pad = metrics["pad"]
+        line_h = metrics["line_h"]
+        lines = metrics["lines"]
+        max_scroll = max(0, metrics["content_h"] - (box[3] - box[1]))
+        if self.message_reveal:
+            self.message_reveal = False
+            cursor_line = 0
+            for index, (start, visible) in enumerate(lines):
+                if start <= self.message_cursor:
+                    cursor_line = index
+            target = pad + cursor_line * line_h
+            view_h = box[3] - box[1]
+            if target < self.message_scroll:
+                self.message_scroll = target
+            elif target + line_h > self.message_scroll + view_h:
+                self.message_scroll = target + line_h - view_h
+        self.message_scroll = max(0, min(self.message_scroll, max_scroll))
+        self.message_scroll_max = max_scroll
+        if self.message_scroll >= max_scroll:
+            self.message_reached_end = True
+        elif self.message_end_dirty:
+            self.message_reached_end = False
+        self.message_end_dirty = False
+        if keyboard:
+            frame.hit((0, 0, WIDTH, HEIGHT), "message-hide", "outside")
+        self._paint_message_box(frame, metrics)
+        warning_y = box[3] + 12
+        if metrics["warning"]:
+            frame.text(
+                metrics["warning"], MARGIN, warning_y, size=MESSAGE_HINT_SIZE, fill=metrics["warning_fill"],
+            )
+            warning_y += metrics["warning_h"] + 12
+        else:
+            warning_y = box[3] + 12
+        if keyboard:
+            frame.button(warning_y, "Hide Keyboard", "message-hide", icon=Icons.CHEVRON_DOWN)
+            self._passphrase_keyboard(frame)
+            frame.header("Sign Message", "message-hide")
+        else:
+            frame.button(
+                HEIGHT - 16 - frame.button_height("Continue"),
+                "Continue",
+                "message-continue",
+                enabled=bool(self.message_text) and not self._message_is_address_command(),
+            )
+            frame.header("Sign Message", "back")
+
+    def _paint_message_box(self, frame: Frame, metrics: dict):
+        box = metrics["box"]
+        pad = metrics["pad"]
+        face = metrics["face"]
+        line_h = metrics["line_h"]
+        char_w = metrics["char_w"]
+        lines = metrics["lines"]
+        width = box[2] - box[0]
+        height = box[3] - box[1]
+        layer = Image.new("RGB", (max(width, 1), max(height, 1)), WHITE)
+        draw = ImageDraw.Draw(layer)
+        y = pad - self.message_scroll
+        cursor_line = 0
+        cursor_col = 0
+        for index, (start, visible) in enumerate(lines):
+            if start <= self.message_cursor:
+                cursor_line = index
+                cursor_col = min(len(visible), self.message_cursor - start)
+            if y + line_h > 0 and y < height:
+                draw.text((pad, y), visible, font=face, fill=INK)
+                frame.mark(visible, (box[0] + pad, box[1] + y, box[0] + pad + int(draw.textlength(visible, font=face)), box[1] + y + line_h))
+            y += line_h
+        caret_y = pad + cursor_line * line_h - self.message_scroll
+        if 0 <= caret_y < height:
+            caret_x = pad + cursor_col * char_w
+            draw.line((caret_x, caret_y + 4, caret_x, min(height - 4, caret_y + line_h - 4)), fill=BLUE, width=2)
+        frame.image.paste(layer, (box[0], box[1]))
+        frame.draw = ImageDraw.Draw(frame.image)
+        frame.draw.rounded_rectangle(box, radius=12, outline=LINE, width=2)
+        frame.hit(box, "message-focus", "Message")
+        self.message_box = box
+        self.message_layout = {
+            "box": box,
+            "pad": pad,
+            "scroll": self.message_scroll,
+            "line_h": line_h,
+            "char_w": char_w,
+            "lines": lines,
+        }
+
+    def _focus_message(self):
+        x, y = getattr(self, "_last_tap", (0, 0))
+        layout = self.message_layout
+        if layout is None:
+            self.message_keyboard = True
+            self.message_reveal = True
+            return
+        box = layout["box"]
+        lines = layout["lines"]
+        local_y = y - box[1] + layout["scroll"] - layout["pad"]
+        if not lines or local_y < 0:
+            index = 0
+        else:
+            line_index = int(local_y // layout["line_h"])
+            if line_index >= len(lines):
+                index = len(self.message_text)
+            else:
+                start, visible = lines[line_index]
+                column = int((x - box[0] - layout["pad"] + layout["char_w"] / 2) // layout["char_w"])
+                column = max(0, min(len(visible), column))
+                index = start + column
+        self.message_cursor = max(0, min(len(self.message_text), index))
+        self.message_keyboard = True
+        self.message_reveal = True
+
+    def _hide_message_keyboard(self):
+        self.message_keyboard = False
+
+    def _type_message(self, key: str):
+        if key == "backspace":
+            if self.message_cursor <= 0:
+                return
+            self.message_text = (
+                self.message_text[: self.message_cursor - 1] + self.message_text[self.message_cursor :]
+            )
+            self.message_cursor -= 1
+        else:
+            if key == "enter":
+                key = "\n"
+            if len(self.message_text.encode("utf-8")) + len(key.encode("utf-8")) > MESSAGE_MAX_BYTES:
+                return
+            self.message_text = (
+                self.message_text[: self.message_cursor] + key + self.message_text[self.message_cursor :]
+            )
+            self.message_cursor += len(key)
+        self.message_end_dirty = True
+        self.message_reveal = True
+
+    def _message_closed_fits(self) -> bool:
+        metrics = self._message_metrics(Frame(), keyboard=False)
+        return metrics["content_h"] <= metrics["box"][3] - metrics["box"][1]
+
+    def _continue_message(self):
+        if not self.message_text or self._message_is_address_command():
+            return
+        if not self._message_closed_fits() and not self.message_reached_end:
+            self.confirm = "message-more"
+            return
+        self.message_keyboard = False
+        self.scroll["message-review"] = 0
+        self.go("message-review")
+
+    def _message_review(self, frame: Frame):
+        frame.header("Sign Message", "back")
+        wallet = self._message_wallet()
+        if wallet is None or not self.message_steps:
+            frame.text("This wallet is no longer loaded.", MARGIN, HEADER + 24, size=TITLE_SIZE)
+            return
+        button_h = frame.button_height("Sign Message")
+        end = self._message_review_flow(frame, wallet, paint=False, offset=0)
+        offset = self._scroll_offset("message-review", end, clearance=button_h + 28)
+        self._message_review_flow(frame, wallet, paint=True, offset=offset)
+        frame.button(HEIGHT - 16 - button_h, "Sign Message", "message-sign")
+        frame.header("Sign Message", "back")
+
+    def _message_review_flow(self, frame: Frame, wallet, paint: bool, offset: int) -> int:
+        fingerprint = wallet.fingerprints[0]
+        record = self.session.fingerprints.get(fingerprint)
+        nickname = "" if record is None else record.nickname
+        y = HEADER + 16
+        y = _draw_name_block(
+            frame, y, _fingerprint_name_lines(nickname), NAME_ON_WALLET, Icons.KEY, False, _DETAIL_ICON, paint, offset,
+        )
+        if paint and y - offset >= HEADER:
+            frame.fingerprint_line(y - offset, fingerprint.hex(), text_size=TITLE_SIZE, icon_size=_DETAIL_ICON)
+        y += _DETAIL_ICON + 8
+        account = wallet.accounts[fingerprint]
+        branch = "Receive" if self.message_branch == 0 else "Change"
+        y = self._flow_text(frame, y, f"Account: {account}", paint, offset, TITLE_SIZE)
+        y = self._flow_text(frame, y, f"Address Type: {branch}", paint, offset, TITLE_SIZE)
+        y = self._flow_text(frame, y, f"Address Index: {self.message_index}", paint, offset, TITLE_SIZE)
+        try:
+            address = self.session.addresses(self.wallet_index, self.message_branch, self.message_index, 1)[0]
+        except SessionError:
+            address = ""
+        if address:
+            y = self._flow_text(frame, y, "Address", paint, offset, TITLE_SIZE, fill=MUTED)
+            if paint:
+                y = self._grouped_address(frame, address, y - offset) + offset
+            else:
+                y += self._grouped_address_height(frame, address)
+        path = format_path(list(self.message_steps))
+        y = self._flow_text(frame, y, "Derivation Path", paint, offset, TITLE_SIZE, fill=MUTED)
+        face = font(ADDRESS_PATH_SIZE, mono=True)
+        room = WIDTH - 2 * MARGIN
+        columns = 1
+        while columns < 80 and frame.draw.textlength("0" * (columns + 1), font=face) <= room:
+            columns += 1
+        for line in _address_path_lines(path, columns):
+            if paint:
+                self._centered_mono(frame, line, y - offset, ADDRESS_PATH_SIZE, INK)
+            y += ADDRESS_PATH_SIZE + 8
+        return y
+
+    def _sign_message(self):
+        wallet = self._message_wallet()
+        if wallet is None or not self.message_steps:
+            self.set_error("This wallet is no longer loaded.")
+            return
+        seed = self.session._seed_for(wallet.fingerprints[0])
+        try:
+            secret = signing_secret(seed, self.message_steps)
+            self.message_signature = bip137_signature(secret, self.message_text)
+        except SessionError as exc:
+            self.set_error(str(exc))
+            return
+        self.scroll["message-signed"] = 0
+        self.go("message-signed")
+
+    def _message_signed(self, frame: Frame):
+        frame.header("Signed Message", "back")
+        if not self.message_signature:
+            frame.text("This message has not been signed.", MARGIN, HEADER + 24, size=TITLE_SIZE)
+            return
+        end = self._message_signed_flow(frame, paint=False, offset=0)
+        offset = self._scroll_offset("message-signed", end, clearance=16)
+        self._message_signed_flow(frame, paint=True, offset=offset)
+        frame.header("Signed Message", "back")
+
+    def _message_signed_flow(self, frame: Frame, paint: bool, offset: int) -> int:
+        y = HEADER + 12
+        light = _qr_light(QR_BRIGHTNESS_DEFAULT)
+        if paint:
+            image = _qr_image(self.message_signature, MESSAGE_QR, light)
+            left = (WIDTH - image.width) // 2
+            top = y - offset
+            if top < HEIGHT and top + image.height > HEADER:
+                frame.image.paste(image, (left, top))
+        y += MESSAGE_QR + 8
+        if paint:
+            self._brightness_control(frame, y - offset)
+        y += 52 + 12
+        y = self._flow_text(frame, y, self.message_signature, paint, offset, TITLE_SIZE, mono=True)
+        y += 8
+        y = self._flow_button(frame, y, "Export to SD Card", "message-export", paint, offset)
+        y = self._flow_button(frame, y, "Back to Wallet", "message-wallet", paint, offset)
+        return y
+
+    def _open_message_export(self):
+        if not self.message_signature:
+            self.set_error("This message has not been signed.")
+            return
+        self.export_label = "Signature"
+        self.export_text = self.message_signature
+        self.export_return = self.screen
+        self.export_back = list(self.back)
+        self.sd_mode = "export"
+        self.sd_dir = ""
+        self.scroll["sd"] = 0
+        self.go("sd")
+
+    def _return_to_message_wallet(self):
+        self.message_keyboard = False
+        self.confirm = None
+        self.menu = False
+        self.screen = "wallet"
+        self.back = list(self.message_return_back)
 
 # Pip positions on a die face, as (column, row) in a 3 by 3 grid.
 _DIE_PIPS = {
@@ -6551,6 +7257,28 @@ def _wrap_indented(draw, text: str, face, width: int) -> list[str]:
         if index < len(body):
             lines.extend(wrap(draw, body[index:], face, width))
     return lines
+
+
+def _unused_filename(name: str, taken: set[str]) -> str:
+    """``name`` when it is free. Otherwise ``basename (1).ext``, ``basename (2).ext``, and so on.
+
+    The number is added to the part before the last dot. A name with no dot
+    gets the number at the end. A folder counts as taken, the same as a file.
+    """
+    if name not in taken:
+        return name
+    stem, dot, ext = name.rpartition(".")
+    if dot and stem:
+        base, suffix = stem, f".{ext}"
+    else:
+        base, suffix = name, ""
+    number = 1
+    while number < 10000:
+        candidate = f"{base} ({number}){suffix}"
+        if candidate not in taken:
+            return candidate
+        number += 1
+    return candidate
 
 
 def _filename_lines(draw, text: str, face, width: int, limit: int = 3) -> list[str]:
@@ -6705,6 +7433,24 @@ def _qr_modules(data):
 
 def _qr_light(level: int) -> tuple[int, int, int]:
     return QR_BRIGHTNESS_STOPS[level]
+
+
+def _dim_for_camera(image: Image.Image, level: int) -> Image.Image:
+    """Move every pixel with the brightness control. Black stays black.
+
+    The picture is drawn at the normal page color. This scales it so that
+    color becomes the selected stop. The QR, the title bar, the text, and
+    the buttons all move together, because a bright panel blinds a camera.
+    """
+    if level == QR_BRIGHTNESS_DEFAULT:
+        return image
+    chosen = QR_BRIGHTNESS_STOPS[level]
+    base = QR_BRIGHTNESS_STOPS[QR_BRIGHTNESS_DEFAULT]
+    tables = [
+        bytes(min(255, channel * stop // origin) for channel in range(256))
+        for stop, origin in zip(chosen, base)
+    ]
+    return image.point(tables[0] + tables[1] + tables[2])
 
 
 @lru_cache(maxsize=4)
