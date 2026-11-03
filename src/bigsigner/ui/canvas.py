@@ -222,7 +222,7 @@ class Frame:
 
         text_delta = edge_gap(boxes[0]) - boxes[0][1]
         last_ink_bottom = text_delta + (len(lines) - 1) * line_h + boxes[-1][3]
-        height = last_ink_bottom + edge_gap(boxes[-1])
+        height = round(last_ink_bottom + edge_gap(boxes[-1]))
         return face, lines, line_h, height, text_delta, icon_size, icon_gap
 
     def button(self, y: int, text: str, action: str, color=BLUE, label: str = "", icon: str | None = None, awesome: bool = False, enabled: bool = True):

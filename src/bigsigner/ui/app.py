@@ -4031,7 +4031,10 @@ class App:
             if src_bottom <= src_top:
                 continue
             dest_y = list_top + max(0, top - offset)
-            frame.image.paste(image.crop((0, src_top, WIDTH, src_bottom)), (0, dest_y))
+            frame.image.paste(
+                image.crop((0, int(src_top), WIDTH, int(src_bottom))),
+                (0, int(dest_y)),
+            )
 
     def _pair_buttons(self, frame: Frame, y: int, left, right) -> int:
         gap = 12
@@ -6110,6 +6113,9 @@ class App:
                 frame.draw.text((MARGIN + 16, y), line, font=face, fill=WHITE)
                 y += line_h
             return
+        overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 110))
+        frame.image = Image.alpha_composite(frame.image.convert("RGBA"), overlay).convert("RGB")
+        frame.draw = ImageDraw.Draw(frame.image)
         frame.draw.rounded_rectangle(
             (MARGIN, top, WIDTH - MARGIN, top + height), radius=16, fill=WHITE, outline=LINE, width=2
         )
