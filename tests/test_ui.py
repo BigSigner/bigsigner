@@ -1312,3 +1312,22 @@ def test_about_opens_dependency_licenses():
     app.back_one()
     app.back_one()
     assert app.screen == "about"
+
+
+def test_a_button_leaves_the_same_gap_under_every_last_line():
+    from bigsigner.ui.canvas import Frame
+
+    frame = Frame()
+    face = font(BODY_SIZE)
+
+    def bottom_gap(label: str) -> float:
+        _face, lines, line_h, height, text_delta, *_rest = frame._button_metrics(label, False)
+        _left, _top, _right, bottom = frame.draw.textbbox((0, 0), lines[-1], font=face)
+        ink_bottom = text_delta + (len(lines) - 1) * line_h + bottom
+        return height - ink_bottom
+
+    assert frame.button_height("Addresses") == BODY_SIZE + 36
+    assert bottom_gap("Sign Message\n(BIP137)") == bottom_gap("(BIP137)")
+    assert bottom_gap("Export Descriptor\nto SD Card") == bottom_gap("to SD Card")
+    assert bottom_gap("Addresses") == bottom_gap("SD Card")
+    assert bottom_gap("Show Descriptor") == bottom_gap("Export Descriptor")

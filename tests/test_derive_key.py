@@ -36,8 +36,14 @@ def test_a_seed_offers_one_derive_button_and_then_a_type_choice():
     height = next(hit["box"] for hit in app.hits if hit["action"] == "derive-taproot")
     native = next(hit["box"] for hit in app.hits if hit["action"] == "derive-native")
     multisig = next(hit["box"] for hit in app.hits if hit["action"] == "derive-multisig")
-    assert height[3] - height[1] == native[3] - native[1] == multisig[3] - multisig[1]
-    assert height[3] - height[1] > Frame().button_height("Taproot")
+    one_line = Frame().button_height("Taproot")
+    taproot_h = height[3] - height[1]
+    native_h = native[3] - native[1]
+    multisig_h = multisig[3] - multisig[1]
+    assert native_h == multisig_h
+    assert taproot_h > one_line
+    assert native_h > one_line
+    assert abs(taproot_h - native_h) <= 1
 
 
 def test_the_derive_screen_shows_the_account_selector_and_the_derived_key():

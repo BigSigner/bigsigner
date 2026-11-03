@@ -212,22 +212,22 @@ class Frame:
         text_width_limit = WIDTH - 2 * MARGIN - 32 - (icon_size + icon_gap if icon else 0)
         lines = wrap(self.draw, text, face, text_width_limit)
         line_h = BODY_SIZE + 6
-        if len(lines) == 1:
-            height = BODY_SIZE + 36
-            text_delta = None
-        else:
-            pad = 12
-            height = pad * 2 + line_h * len(lines) - 6
-            text_delta = pad
+        # The space under a one-line button's ink. A longer label keeps that
+        # same space under its last line, and the same space above its first.
+        boxes = [self.draw.textbbox((0, 0), line, font=face) for line in lines]
+
+        def edge_gap(box) -> float:
+            ink_h = box[3] - box[1]
+            return (BODY_SIZE + 36 - ink_h) / 2
+
+        text_delta = edge_gap(boxes[0]) - boxes[0][1]
+        last_ink_bottom = text_delta + (len(lines) - 1) * line_h + boxes[-1][3]
+        height = last_ink_bottom + edge_gap(boxes[-1])
         return face, lines, line_h, height, text_delta, icon_size, icon_gap
 
     def button(self, y: int, text: str, action: str, color=BLUE, label: str = "", icon: str | None = None, awesome: bool = False, enabled: bool = True):
         face, lines, line_h, height, text_delta, icon_size, icon_gap = self._button_metrics(text, icon is not None)
-        if text_delta is None:
-            _left, top, _right, bottom = self.draw.textbbox((0, 0), lines[0], font=face)
-            text_top = y + (height - (bottom - top)) / 2 - top
-        else:
-            text_top = y + text_delta
+        text_top = y + text_delta
         box = (MARGIN, y, WIDTH - MARGIN, y + height)
         text_fill = WHITE
         if not enabled:
