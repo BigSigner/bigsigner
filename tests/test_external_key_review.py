@@ -4,7 +4,7 @@ from pathlib import Path
 
 from bigsigner.slip132 import display_form, to_canonical
 from bigsigner.ui.app import App
-from bigsigner.ui.canvas import RED
+from bigsigner.ui.canvas import BLUE, HEIGHT, PAPER, RED, WIDTH, Frame
 from test_domain import ABANDON, LEGAL, expression, root_of
 from test_ui import ScreenRecord
 
@@ -51,6 +51,16 @@ def _has_red(image):
     return any(pixel[:3] == RED for pixel in image.getdata())
 
 
+def test_the_warning_button_keeps_a_gap_above_the_bottom():
+    app = _open_review(expression(ABANDON, "m/84h/0h/0h"))
+    image = app.render()
+    box = next(hit["box"] for hit in app.hits if hit["action"] == "external-next")
+    gap = 110 - Frame().button_height("OK")
+    assert HEIGHT - box[3] == gap
+    assert image.getpixel((WIDTH // 2, HEIGHT - 1))[:3] == PAPER
+    assert image.getpixel((WIDTH // 2, box[3] - 2))[:3] == BLUE
+
+
 def test_external_key_review_saves_screenshots():
     text = expression(ABANDON, "m/84h/0h/0h")
     app = _open_review(text)
@@ -62,7 +72,7 @@ def test_external_key_review_saves_screenshots():
     assert app.session.fingerprints == {}
     record.shot(app, "warning")
     continue_box = next(hit["box"] for hit in app.hits if hit["action"] == "external-next")
-    assert continue_box[1] < 800
+    assert HEIGHT - continue_box[3] == 110 - Frame().button_height("OK")
     assert any(hit["label"] == "Show Extended Public Key Details" for hit in app.hits)
     record.click(app, "external-next")
     assert app.screen == "external-details"

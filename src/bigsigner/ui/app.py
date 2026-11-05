@@ -5980,11 +5980,17 @@ class App:
             frame.text("This external key is no longer waiting to be loaded.", MARGIN, HEADER + 24)
             return
         frame.header("Load MultiSig Wallet" if multisig else "Load External Key", "back")
+
+        def pin(text, action):
+            # HEIGHT - 110 is the top of a one-line button. A taller label keeps that button's bottom gap.
+            gap = 110 - frame.button_height("OK")
+            frame.button(HEIGHT - frame.button_height(text) - gap, text, action)
+
         if not multisig:
             self._centered_text(frame, "Warning", HEADER + 28, 34, RED)
             message = self._wallet_key_warning() or self._lone_key_warning()
             frame.text(message, MARGIN, HEADER + 88, size=TITLE_SIZE, fill=RED)
-            frame.button(HEIGHT - 110, "Show Extended Public Key Details", "external-next")
+            pin("Show Extended Public Key Details", "external-next")
             return
         known, total = self._multisig_key_counts()
         y = HEADER + 16
@@ -5994,9 +6000,9 @@ class App:
         if known < total:
             y = self._centered_text(frame, "Warning", y, 34, RED)
             frame.text(self._wallet_key_warning(), MARGIN, y, size=TITLE_SIZE, fill=RED)
-            frame.button(HEIGHT - 110, "Show Extended Public Key Details", "external-next")
+            pin("Show Extended Public Key Details", "external-next")
             return
-        frame.button(HEIGHT - 110, "Continue", "external-known")
+        pin("Continue", "external-known")
 
     def _external_details(self, frame: Frame):
         key = self.pending_external

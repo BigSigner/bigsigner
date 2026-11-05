@@ -49,7 +49,7 @@ A bare key expression is not stored on the first screen. Checks for an unsupport
 
 A wallet descriptor loaded from Bitcoin Keys opens a choice screen instead. An unsupported descriptor opens Error loading key, with no mention of Bitcoin Wallets. A singlesig descriptor offers Both Wallet and Key (the wallets-page import) or Only the Key (the key expression). A multisig descriptor offers Load Both Wallet and All Keys, then a menu of `<fingerprint> <first 10 characters of the xpub>…` in descriptor order, then Load Only Selected Key.
 
-When the checks pass, Load External Key is two screens. The first is a red Warning and a Show Extended Public Key Details button. The second shows the type, account, derivation path, and a format menu (`xpub` or `tpub`, the SLIP-132 form when the path has one, and the full key expression). Only Continue on that second screen stores the key. Back from the details returns to the warning. Back from the warning leaves the key unloaded.
+When the checks pass, Load External Key is two screens. The first is a red Warning and a Show Extended Public Key Details button. That button keeps the same gap above the bottom edge as a one-line button. The second shows the type, account, derivation path, and a format menu (`xpub` or `tpub`, the SLIP-132 form when the path has one, and the full key expression). Only Continue on that second screen stores the key. Back from the details returns to the warning. Back from the warning leaves the key unloaded.
 
 ## Fingerprint names
 
