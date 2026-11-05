@@ -18,6 +18,8 @@ from ..entropy import mnemonic_from_camera, mnemonic_from_coins, mnemonic_from_d
 from ..rpc import split_line
 from ..parse import ParseError
 from ..paths import HARDENED, MULTISIG_NATIVE, SINGLESIG_NATIVE, SINGLESIG_TAPROOT, coin_type, format_path
+from ..psbt_check import check_loaded_psbt, psbt_yaml
+from ..psbt_load import TOO_LARGE, UNREADABLE, SpecterParts, explain_not_psbt, psbt_bytes, psbt_text
 from ..psbt_review import ReviewError, review_psbt, sign_with
 from ..qr import qr_matrix
 from ..session import (
@@ -228,6 +230,7 @@ MESSAGE_NOTE_SIZE = 24
 MESSAGE_HINT_SIZE = 28
 MESSAGE_QR = ADDRESS_QR
 MESSAGE_WATCH_ONLY = "Unavailable in watch-only wallets."
+TX_WATCH_ONLY = "Signing transactions is not available in watch-only wallets."
 MESSAGE_ADDRESS_HINT = "If you don't have a file or QR code from a wallet app, go back and select the address you want to sign a message with."
 MESSAGE_MORE = "There is more content in the text area. Scroll all the way down."
 MESSAGE_ENDS_SPACE = "Ends with a space."
@@ -389,6 +392,9 @@ class App:
         self.open_dropdown = None
         self.scan_kind = "key"
         self.qr_sequence = QrSequence()
+        self.psbt_parts = SpecterParts()
+        self.psbt_yaml_text = ""
+        self.psbt_error = ""
         self.camera_unavailable = False
         self.sd_dir = ""
         self.sd_expect = "key"
@@ -504,6 +510,9 @@ class App:
             "address-type": self._address_type,
             "address-verify-result": self._address_verify_result,
             "address-message": self._address_message,
+            "load-psbt": self._load_psbt,
+            "psbt-error": self._psbt_error,
+            "psbt-yaml": self._psbt_yaml,
             "message-source": self._message_source,
             "message-edit": self._message_edit,
             "message-review": self._message_review,
@@ -1165,6 +1174,7 @@ class App:
         "entropy-save": lambda self: self._save_pending_mnemonic(),
         "open-licenses": _act_open_licenses,
         "load-error-ok": _act_load_error_ok,
+        "psbt-error-ok": lambda self: self._close_psbt_error(),
         "dismiss-notice": lambda self: self.set_notice(""),
         "external-known": lambda self: self._continue_loaded_multisig(),
         "external-next": _act_external_next,
@@ -1239,6 +1249,9 @@ class App:
         "address-message-scan": lambda self: self._open_address_message_scan(),
         "address-verify-text": lambda self: self._verify_entered_address(self.address_text),
         "address-go": lambda self: self._open_found_address(),
+        "sign-transaction": lambda self: self._open_sign_transaction(),
+        "psbt-scan": lambda self: self._open_psbt_scan(),
+        "psbt-sd": lambda self: self._open_sd("psbt"),
         "sign-message": lambda self: self._open_sign_message(),
         "message-scan": lambda self: self._open_message_scan(),
         "message-sd": lambda self: self._open_sd("message"),
@@ -1606,6 +1619,10 @@ class App:
                 self.set_error(str(exc))
                 self._return_to_address_message()
                 return
+            if self.sd_expect == "psbt":
+                self.set_error(str(exc))
+                self._return_to_load_psbt()
+                return
             self._show_load_error(str(exc), self.sd_expect)
             return
         if self.sd_expect == "address":
@@ -1616,6 +1633,9 @@ class App:
             return
         if self.sd_expect == "address-message":
             self._begin_address_message(text)
+            return
+        if self.sd_expect == "psbt":
+            self._accept_psbt_text(text, "file")
             return
         self._import_payload(text, self.sd_expect, "file")
 
@@ -1895,6 +1915,8 @@ class App:
         if self.camera_unavailable:
             return "The camera is not available."
         if self.qr_sequence.expected > 1 and self.qr_sequence.received:
+            if self.scan_kind == "psbt" and self.qr_sequence.received < self.qr_sequence.expected:
+                return f"Scanned {self.qr_sequence.received} of {self.qr_sequence.expected}"
             if self.qr_sequence.received < self.qr_sequence.expected:
                 return f"Scanned {self.qr_sequence.received} of {self.qr_sequence.expected} parts."
             return "Reading the QR sequence."
@@ -1906,6 +1928,8 @@ class App:
             return "Point the camera at one message signing QR code."
         if self.scan_kind == "address-message":
             return "Point the camera at the message."
+        if self.scan_kind == "psbt":
+            return "Point the camera at the PSBT QR code."
         return "Point the camera at one QR code."
 
     def _scan(self, frame: Frame):
@@ -1915,6 +1939,8 @@ class App:
             title = "Scan Address"
         elif self.scan_kind in ("message", "address-message"):
             title = "Scan Message"
+        elif self.scan_kind == "psbt":
+            title = "Scan PSBT"
         else:
             title = "Scan QR"
         frame.header(title, "back")
@@ -1976,6 +2002,9 @@ class App:
                 return
             self.qr_sequence.reset()
             self._load_sign_message(payload, "QR code")
+            return
+        if self.scan_kind == "psbt":
+            self._accept_psbt_qr(text)
             return
         if self.scan_kind == "address-message":
             try:
@@ -3414,6 +3443,12 @@ class App:
         y = self._flow_button(
             frame, y, "Export Descriptor\nto SD Card", "export-wallet", paint, offset, "Export Descriptor to SD Card",
         )
+        can_sign_tx = any(self.session._seed_for(fingerprint) is not None for fingerprint in wallet.fingerprints)
+        y = self._flow_button(
+            frame, y, "Sign Transaction", "sign-transaction", paint, offset, enabled=can_sign_tx,
+        )
+        if not can_sign_tx:
+            y = self._flow_note(frame, y, TX_WATCH_ONLY, paint, offset, size=TITLE_SIZE)
         if wallet.role == SINGLESIG_NATIVE:
             has_seed = self.session._seed_for(wallet.fingerprints[0]) is not None
             y = self._flow_button(
@@ -6692,6 +6727,145 @@ class App:
         if wallet.role != SINGLESIG_NATIVE or wallet.multisig:
             return None
         return wallet
+
+    def _can_sign_transaction(self, wallet) -> bool:
+        return any(self.session._seed_for(fingerprint) is not None for fingerprint in wallet.fingerprints)
+
+    def _open_sign_transaction(self):
+        if self.wallet_index >= len(self.session.wallets):
+            self.set_error("This wallet is no longer loaded.")
+            return
+        wallet = self.session.wallets[self.wallet_index]
+        if not self._can_sign_transaction(wallet):
+            return
+        self.psbt_parts.reset()
+        self.qr_sequence.reset()
+        self.go("load-psbt")
+
+    def _load_psbt(self, frame: Frame):
+        frame.header("Load PSBT", "back")
+        y = frame.button(HEADER + 24, "Scan QR Code", "psbt-scan")
+        frame.button(y, "Load from SD Card", "psbt-sd")
+
+    def _open_psbt_scan(self):
+        self.scan_kind = "psbt"
+        self.qr_sequence.reset()
+        self.psbt_parts.reset()
+        self.go("scan")
+
+    def _return_to_load_psbt(self):
+        self.back = [screen for screen in self.back if screen not in ("scan", "sd")]
+        if self.back and self.back[-1] == "load-psbt":
+            self.back.pop()
+        self.screen = "load-psbt"
+        self.menu = False
+        self.add_menu = False
+
+    def _accept_psbt_qr(self, text: str):
+        try:
+            payload = self._take_psbt_qr(text)
+        except SessionError as exc:
+            self.qr_sequence.reset()
+            self.psbt_parts.reset()
+            self.set_error(str(exc))
+            self._return_to_load_psbt()
+            return
+        if payload is None:
+            return
+        self.qr_sequence.reset()
+        self.psbt_parts.reset()
+        self._accept_psbt_text(payload, "QR code")
+
+    def _take_psbt_qr(self, text: str) -> str | None:
+        match = None
+        compact = " ".join(str(text).split())
+        if compact.lower().startswith("p") and "of" in compact.lower():
+            parts = compact.split(" ", 1)
+            if len(parts) == 2 and parts[0].lower().startswith("p") and "of" in parts[0].lower():
+                match = parts
+        if match is not None:
+            prefix, chunk = match
+            number, count = prefix[1:].lower().split("of", 1)
+            if number.isdigit() and count.isdigit():
+                joined = self.psbt_parts.add(int(number), int(count), chunk)
+                self.qr_sequence.received = self.psbt_parts.received
+                self.qr_sequence.expected = self.psbt_parts.count
+                return joined
+        if text.strip().lower().startswith("ur:") or text.strip().upper().startswith("B$"):
+            payload = self.qr_sequence.take(text, self.session.network, "QR code", "psbt")
+            return payload
+        return text
+
+    def _accept_psbt_text(self, text: str, source: str):
+        try:
+            psbt_bytes(text)
+            checked = check_loaded_psbt(self.session, self.wallet_index, psbt_text(text))
+        except SessionError as exc:
+            message = str(exc)
+            if message == UNREADABLE:
+                message = explain_not_psbt(text, source, self.session.network)
+                if message.startswith("This is a transaction"):
+                    message = UNREADABLE
+            self.set_error(message if message != TOO_LARGE else TOO_LARGE)
+            self._return_to_load_psbt()
+            return
+        except ReviewError as exc:
+            message = str(exc)
+            if message == UNREADABLE:
+                self.set_error(message)
+                self._return_to_load_psbt()
+                return
+            self._show_psbt_error(message)
+            return
+        self.psbt_yaml_text = psbt_yaml(checked)
+        self.scroll["psbt-yaml"] = 0
+        if self.screen != "load-psbt":
+            self._return_to_load_psbt()
+        self.go("psbt-yaml")
+
+    def _show_psbt_error(self, message: str):
+        """A failed PSBT check replaces the popup, so the refusal is the whole screen."""
+        self.psbt_error = message
+        self.notice = ""
+        self.notice_until = None
+        self.notice_error = False
+        self.confirm = None
+        self.menu = False
+        self.add_menu = False
+        self.open_dropdown = None
+        self.scroll["psbt-error"] = 0
+        self._return_to_load_psbt()
+        self.go("psbt-error")
+
+    def _close_psbt_error(self):
+        self.psbt_error = ""
+        self.back_one()
+
+    def _psbt_error(self, frame: Frame):
+        frame.header("Error loading PSBT")
+        message = self.psbt_error or "This PSBT could not be loaded."
+        button_top = HEIGHT - 110
+        text_top = HEADER + 28
+        lines = wrap(frame.draw, message, font(BODY_SIZE), WIDTH - 2 * MARGIN)
+        content_end = text_top + len(lines) * (BODY_SIZE + 8)
+        limit = button_top - 16
+        offset = self._scroll_offset("psbt-error", content_end, clearance=HEIGHT - limit)
+        frame.clip_bottom = limit
+        y = text_top - offset
+        for line in lines:
+            y = frame.text(line, MARGIN, y, size=BODY_SIZE, fill=RED)
+        frame.button(button_top, "OK", "psbt-error-ok")
+
+    def _psbt_yaml(self, frame: Frame):
+        frame.header("PSBT", "back")
+        text = self.psbt_yaml_text or "This PSBT is no longer loaded."
+        end = HEADER + 16
+        for line in text.splitlines() or [""]:
+            end += self._text_height(frame, line, TITLE_SIZE, mono=True)
+        offset = self._scroll_offset("psbt-yaml", end, clearance=16)
+        y = HEADER + 16 - offset
+        for line in text.splitlines() or [""]:
+            y = frame.text(line, MARGIN, y, size=TITLE_SIZE, fill=INK, mono=True)
 
     def _open_sign_message(self):
         wallet = self._message_wallet()

@@ -37,6 +37,8 @@ Wallets are descriptors built from those keys. Changing the network drops wallet
 | `scan.py` | One scanned or loaded string: mnemonic, SeedQR, key expression, or descriptor. |
 | `seedqr.py` | Standard and compact SeedQR. |
 | `entropy.py` | Dice, coin, and camera entropy, following SeedSigner. |
+| `psbt_load.py` | Read a PSBT from base64, base43, Specter parts, UR, or BBQr. |
+| `psbt_check.py` | Refuse a PSBT this signer will not sign, then describe it as YAML. |
 | `psbt_review.py` | Check a PSBT against one loaded wallet, then sign with a seed that is in memory. |
 | `sdcard.py` | The SD card kept in memory. The browser page and the tests mount that card. |
 | `licenses.py` | Notices shown from About → Licenses. |
@@ -55,7 +57,7 @@ A seed key opens Derive Key (`derive`) for one of the three supported paths. The
 
 `scan.classify_content` names a QR payload or an SD card file: an address, a seed, a compact seed, a numeric seed, a BSMS file, a wallet descriptor, a key expression, or a transaction. The screen that asked for one kind refuses the others by that name.
 
-Load External Key is two screens, `external-review` and `external-details`. A failed QR or SD import uses `load-error`. The license list is `licenses`, and one notice is `license`.
+Load External Key is two screens, `external-review` and `external-details`. A failed QR or SD import uses `load-error`. A PSBT that fails a check uses `psbt-error`. A file that is not a PSBT stays a popup. The license list is `licenses`, and one notice is `license`.
 
 On the Pi, `camera_preview_box` is the viewfinder rectangle for the scan and camera screens. `hardware/camera.py` fills it from picamera2 when that is installed, otherwise from the legacy picamera that bigsigner-os ships, and reads QR codes with pyzbar. Those packages come from the device image. They are not imported on a machine that is not capturing, and the emulator does not use that module. The emulator page shows the computer's camera above the panel.
 

@@ -64,6 +64,10 @@ def _tap(app, label):
     app.render()
     matches = [hit for hit in app.hits if hit["label"] == label or hit["action"] == label]
     if not matches:
+        app.scroll[app.screen] = 10**9
+        app.render()
+        matches = [hit for hit in app.hits if hit["label"] == label or hit["action"] == label]
+    if not matches:
         raise AssertionError(label)
     hit = min(matches, key=lambda item: (item["box"][2] - item["box"][0]) * (item["box"][3] - item["box"][1]))
     left, top, right, bottom = hit["box"]
@@ -164,6 +168,7 @@ def test_bip137_signs_the_abandon_receive_address():
 
 def test_a_native_segwit_wallet_offers_message_signing():
     app = _native_wallet()
+    app.scroll["wallet"] = 10**9
     app.render()
     assert any(hit["label"] == "Sign Message (BIP137)" for hit in app.hits)
     _tap(app, "Sign Message (BIP137)")
