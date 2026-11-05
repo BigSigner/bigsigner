@@ -3288,17 +3288,17 @@ class App:
         origin = format_path(list(key.path))[2:]
         text = f"{kind}([{selected.hex()}/{origin}]{key.xpub.to_string()}/<0;1>/*)"
         try:
-            plan = self.session.plan_wallet_import(text)
+            added = self.session.add_text(text)
         except SessionError as exc:
             self.set_error(str(exc))
             return
-        self.wallet_plan = plan
-        self.wallet_plan_pos = 0
-        self.pending_external = None
-        self.external_format = "xpub"
-        self.open_dropdown = None
-        self.scroll["external-review"] = 0
-        self.go("external-review")
+        self.set_notice(added["message"])
+        wallet = added.get("wallet")
+        if wallet is not None and wallet in self.session.wallets:
+            self._show_wallet(self.session.wallets.index(wallet))
+            return
+        self.back = ["wallets"]
+        self.screen = "wallets"
 
     def _list_card_clip(self, frame: Frame, y: int, row_h: int, list_top: int, visible_bottom: int):
         """Keep the part of a card that sits in the list. The rest can show only partly."""

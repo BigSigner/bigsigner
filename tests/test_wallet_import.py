@@ -520,14 +520,3 @@ def test_a_known_singlesig_key_is_named_before_the_wallet_is_created():
     assert external.back == ["wallets"]
     assert len(external.session.wallets) == 1
     assert len(external.session.fingerprints) == 1
-
-    picked = App()
-    added = picked.session.add_mnemonic(ABANDON.split())
-    picked.screen = "singlesig"
-    picked.singlesig_selected = added["fingerprint"]
-    picked._act("ss-create")
-    assert picked.screen == "external-review"
-    assert picked._known_keys_sentence() == "The singlesig wallet's key was already loaded: a seed key."
-    assert picked.session.wallets == []
-    picked._act("external-known")
-    assert picked.screen == "wallet"
