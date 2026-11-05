@@ -16,6 +16,8 @@ Exported descriptors from BigSigner use `xpub` on mainnet and `tpub` on testnet.
 
 If a checksum is present, it is checked. A wrong checksum is rejected. A descriptor with no checksum is accepted.
 
+A Specter-DIY wallet export is a JSON object whose only keys are `label`, `blockheight`, and `descriptor`. A QR code or an SD card file in that shape is read as the `descriptor` string, which has to be a string. A Bitcoin Core descriptor file may contain blank lines and lines that start with `#`. The first remaining line is the descriptor that contains `<0;1>`. Each later line is that same descriptor with `<0;1>` written as `0` or as `1`. Those lines have different checksums, because the text changed. The combined descriptor is the one that is loaded.
+
 ## What is rejected
 
 BigSigner refuses the descriptor when any of these are true:
