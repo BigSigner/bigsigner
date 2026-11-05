@@ -282,6 +282,24 @@ QR_BRIGHTNESS_STOPS = (
 )
 
 
+def _kind_count(count: int, singular: str) -> str:
+    word = singular if count == 1 else f"{singular}s"
+    return f"{count} {word}"
+
+
+def _loaded_kinds_phrase(seeds: int, externals: int) -> str:
+    """The already-loaded keys, seed keys first."""
+    if seeds and externals:
+        return f"{_kind_count(seeds, 'seed key')} and {_kind_count(externals, 'external key')}"
+    if seeds == 1:
+        return "a seed key"
+    if externals == 1:
+        return "an external key"
+    if seeds:
+        return _kind_count(seeds, "seed key")
+    return _kind_count(externals, "external key")
+
+
 def _in_box(box: tuple[int, int, int, int], x: int, y: int) -> bool:
     """True when the point is inside the box. The right and bottom edges are excluded."""
     left, top, right, bottom = box
@@ -3270,17 +3288,17 @@ class App:
         origin = format_path(list(key.path))[2:]
         text = f"{kind}([{selected.hex()}/{origin}]{key.xpub.to_string()}/<0;1>/*)"
         try:
-            added = self.session.add_text(text)
+            plan = self.session.plan_wallet_import(text)
         except SessionError as exc:
             self.set_error(str(exc))
             return
-        self.set_notice(added["message"])
-        wallet = added.get("wallet")
-        if wallet is not None and wallet in self.session.wallets:
-            self._show_wallet(self.session.wallets.index(wallet))
-            return
-        self.back = ["wallets"]
-        self.screen = "wallets"
+        self.wallet_plan = plan
+        self.wallet_plan_pos = 0
+        self.pending_external = None
+        self.external_format = "xpub"
+        self.open_dropdown = None
+        self.scroll["external-review"] = 0
+        self.go("external-review")
 
     def _list_card_clip(self, frame: Frame, y: int, row_h: int, list_top: int, visible_bottom: int):
         """Keep the part of a card that sits in the list. The rest can show only partly."""
@@ -5804,7 +5822,9 @@ class App:
         if plan["existing"] is not None:
             self.screen = "wallet-import-note"
             return
-        self._finish_wallet_import()
+        self.pending_external = None
+        self.scroll["external-review"] = 0
+        self.screen = "external-review"
 
     def _advance_wallet_import(self):
         plan = self.wallet_plan
@@ -5921,12 +5941,30 @@ class App:
         known = total - len(plan["new_keys"])
         return known, total
 
+    def _known_key_kinds(self) -> tuple[int, int]:
+        """How many already-loaded keys are seeds, and how many are external keys."""
+        plan = self.wallet_plan
+        fresh = {(key.fingerprint, tuple(key.path)) for key in plan["new_keys"]}
+        seeds = externals = 0
+        for key in plan["parsed"].keys:
+            if (key.fingerprint, tuple(key.path)) in fresh:
+                continue
+            if self.session._seed_for(key.fingerprint) is not None:
+                seeds += 1
+            else:
+                externals += 1
+        return seeds, externals
+
     def _known_keys_sentence(self) -> str:
         known, total = self._multisig_key_counts()
+        kinds = _loaded_kinds_phrase(*self._known_key_kinds())
+        wallet = "multisig" if self._importing_multisig_wallet() else "singlesig"
+        if total == 1:
+            return f"The {wallet} wallet's key was already loaded: {kinds}."
         if known == total:
-            return f"All of the multisig wallet's {total} keys were already loaded."
+            return f"All of the {wallet} wallet's {total} keys were already loaded: {kinds}."
         verb = "was" if known == 1 else "were"
-        return f"{known} of the multisig wallet's {total} keys {verb} already loaded."
+        return f"{known} of the {wallet} wallet's {total} keys {verb} already loaded: {kinds}."
 
     def _wallet_key_warning(self) -> str | None:
         """The warning used while importing a wallet. A lone external key keeps its own text."""
@@ -5975,17 +6013,31 @@ class App:
 
     def _external_warning(self, frame: Frame):
         multisig = self._importing_multisig_wallet()
-        if self.pending_external is None and not multisig:
+        plan = self.wallet_plan
+        known_singlesig = (
+            plan is not None
+            and not plan["parsed"].multisig
+            and not plan["new_keys"]
+            and plan["existing"] is None
+        )
+        if self.pending_external is None and not multisig and not known_singlesig:
             frame.header("Load External Key", "back")
             frame.text("This external key is no longer waiting to be loaded.", MARGIN, HEADER + 24)
             return
-        frame.header("Load MultiSig Wallet" if multisig else "Load External Key", "back")
+        frame.header(
+            "Load SingleSig Wallet" if known_singlesig else "Load MultiSig Wallet" if multisig else "Load External Key",
+            "back",
+        )
 
         def pin(text, action):
             # HEIGHT - 110 is the top of a one-line button. A taller label keeps that button's bottom gap.
             gap = 110 - frame.button_height("OK")
             frame.button(HEIGHT - frame.button_height(text) - gap, text, action)
 
+        if known_singlesig:
+            frame.text(self._known_keys_sentence(), MARGIN, HEADER + 16, size=TITLE_SIZE)
+            pin("Continue", "external-known")
+            return
         if not multisig:
             self._centered_text(frame, "Warning", HEADER + 28, 34, RED)
             message = self._wallet_key_warning() or self._lone_key_warning()

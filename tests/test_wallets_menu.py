@@ -263,6 +263,10 @@ def test_selecting_an_existing_singlesig_key_creates_its_wallet():
     app.render()
     assert any(hit["label"] == "Create Wallet" and hit["action"] == "ss-create" for hit in app.hits)
     _tap(app, "ss-create")
+    assert app.screen == "external-review"
+    assert app._known_keys_sentence() == "The singlesig wallet's key was already loaded: an external key."
+    assert app.session.wallets == []
+    _tap(app, "external-known")
     assert app.screen == "wallet"
     assert app.back == ["wallets"]
     wallet = app.session.wallets[0]
@@ -290,6 +294,9 @@ def test_selecting_an_existing_singlesig_key_creates_its_wallet():
     assert app.session.fingerprints[first["fingerprint"]].nickname in taproot_hits
     _tap(app, f"pick-ss-{taproot['fingerprint'].hex()}")
     _tap(app, "ss-create")
+    assert app.screen == "external-review"
+    assert "an external key" in app._known_keys_sentence()
+    _tap(app, "external-known")
     created = app.session.wallets[app.wallet_index]
     assert created.role == SINGLESIG_TAPROOT
     assert created.accounts[taproot["fingerprint"]] == 3

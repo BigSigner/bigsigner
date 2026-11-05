@@ -183,7 +183,9 @@ def test_a_multisig_import_counts_keys_that_are_already_known():
     app.scan_kind = "descriptor"
     app.accept_qr(_multisig(first, second))
     assert app.screen == "external-review"
-    assert app._known_keys_sentence() == "1 of the multisig wallet's 2 keys was already loaded."
+    assert app._known_keys_sentence() == (
+        "1 of the multisig wallet's 2 keys was already loaded: a seed key."
+    )
     assert app._wallet_key_warning().startswith("You are about to load 1 external key for a multisig wallet.")
     app.render()
     assert any(hit["label"] == "Show Extended Public Key Details" for hit in app.hits)
@@ -207,7 +209,9 @@ def test_a_multisig_import_counts_keys_that_are_already_known():
     seeds.accept_qr(_multisig(first, second))
     assert seeds.screen == "external-review"
     assert seeds.session.wallets == []
-    assert seeds._known_keys_sentence() == "All of the multisig wallet's 2 keys were already loaded."
+    assert seeds._known_keys_sentence() == (
+        "All of the multisig wallet's 2 keys were already loaded: 2 seed keys."
+    )
     seeds.render()
     assert any(hit["label"] == "Continue" and hit["action"] == "external-known" for hit in seeds.hits)
 
@@ -425,3 +429,105 @@ def test_an_already_loaded_wallet_marks_a_nonzero_account_non_default():
         'Wallet "Grateful Ivory Impala 0A Native-Segwit" was already loaded. '
         "This descriptor points to account-index 3 (non-default)."
     )
+
+
+def test_loaded_keys_are_counted_as_seeds_or_external_keys():
+    from embit.bip39 import mnemonic_from_bytes
+
+    external = App()
+    external.session.add_text(expression(LEGAL, "m/48h/0h/0h/2h"))
+    external.screen = "scan"
+    external.scan_kind = "descriptor"
+    external.accept_qr(
+        _multisig(expression(LEGAL, "m/48h/0h/0h/2h"), expression(ABANDON, "m/48h/0h/0h/2h"))
+    )
+    assert external._known_keys_sentence() == (
+        "1 of the multisig wallet's 2 keys was already loaded: an external key."
+    )
+
+    both = App()
+    both.session.add_text(expression(ABANDON, "m/48h/0h/0h/2h"))
+    both.session.add_text(expression(LEGAL, "m/48h/0h/0h/2h"))
+    both.screen = "scan"
+    both.scan_kind = "descriptor"
+    both.accept_qr(_multisig(expression(ABANDON, "m/48h/0h/0h/2h"), expression(LEGAL, "m/48h/0h/0h/2h")))
+    assert both.screen == "external-review"
+    assert both._known_keys_sentence() == (
+        "All of the multisig wallet's 2 keys were already loaded: 2 external keys."
+    )
+
+    mixed = App()
+    mixed.session.add_mnemonic(ABANDON.split())
+    mixed.session.add_text(expression(LEGAL, "m/48h/0h/0h/2h"))
+    third = mnemonic_from_bytes(bytes([4]) + b"\x3c" * 15)
+    mixed.screen = "scan"
+    mixed.scan_kind = "descriptor"
+    mixed.accept_qr(
+        _multisig(
+            expression(ABANDON, "m/48h/0h/0h/2h"),
+            expression(LEGAL, "m/48h/0h/0h/2h"),
+            expression(third, "m/48h/0h/0h/2h"),
+            threshold=2,
+        )
+    )
+    assert mixed._known_keys_sentence() == (
+        "2 of the multisig wallet's 3 keys were already loaded: 1 seed key and 1 external key."
+    )
+
+    wide = App()
+    wide.session.add_mnemonic(ABANDON.split())
+    extras = [mnemonic_from_bytes(bytes([n]) + b"\x3c" * 15) for n in range(2, 8)]
+    wide.session.add_text(expression(extras[0], "m/48h/0h/0h/2h"))
+    wide.session.add_text(expression(extras[1], "m/48h/0h/0h/2h"))
+    keys = [expression(ABANDON, "m/48h/0h/0h/2h")]
+    keys.extend(expression(words, "m/48h/0h/0h/2h") for words in extras)
+    wide.screen = "scan"
+    wide.scan_kind = "descriptor"
+    wide.accept_qr(_multisig(*keys, threshold=3))
+    assert wide._known_keys_sentence() == (
+        "3 of the multisig wallet's 7 keys were already loaded: 1 seed key and 2 external keys."
+    )
+
+
+def test_a_known_singlesig_key_is_named_before_the_wallet_is_created():
+    seed = App()
+    seed.session.add_mnemonic(ABANDON.split())
+    seed.screen = "scan"
+    seed.scan_kind = "descriptor"
+    seed.accept_qr(_single(expression(ABANDON, "m/84h/0h/0h")))
+    assert seed.screen == "external-review"
+    assert seed.session.wallets == []
+    assert seed._known_keys_sentence() == "The singlesig wallet's key was already loaded: a seed key."
+    seed.render()
+    assert any(item["text"] == "Load SingleSig Wallet" for item in seed.texts)
+    assert any(hit["label"] == "Continue" and hit["action"] == "external-known" for hit in seed.hits)
+    seed.back_one()
+    assert seed.screen == "wallets"
+    assert seed.session.wallets == []
+
+    external = App()
+    external.session.commit_external_key(
+        external.session.prepare_external_key(expression(ABANDON, "m/84h/0h/2h"))
+    )
+    external.screen = "scan"
+    external.scan_kind = "descriptor"
+    external.accept_qr(_single(expression(ABANDON, "m/84h/0h/2h")))
+    assert external._known_keys_sentence() == (
+        "The singlesig wallet's key was already loaded: an external key."
+    )
+    external._act("external-known")
+    assert external.screen == "wallet"
+    assert external.back == ["wallets"]
+    assert len(external.session.wallets) == 1
+    assert len(external.session.fingerprints) == 1
+
+    picked = App()
+    added = picked.session.add_mnemonic(ABANDON.split())
+    picked.screen = "singlesig"
+    picked.singlesig_selected = added["fingerprint"]
+    picked._act("ss-create")
+    assert picked.screen == "external-review"
+    assert picked._known_keys_sentence() == "The singlesig wallet's key was already loaded: a seed key."
+    assert picked.session.wallets == []
+    picked._act("external-known")
+    assert picked.screen == "wallet"
