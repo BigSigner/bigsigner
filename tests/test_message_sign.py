@@ -566,7 +566,7 @@ def test_a_native_address_signs_with_its_own_path():
     _tap(app, "Sign Message")
     assert app.screen == "address-message"
     app.render()
-    labels = ["Manual Entry", "Load from SD Card", "Scan QR Code"]
+    labels = ["Manual Entry", "Scan QR Code", "Load from SD Card"]
     tops = []
     for label in labels:
         hit = next(item for item in app.hits if item["label"] == label)
