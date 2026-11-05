@@ -191,7 +191,7 @@ Condemned Chocolate
 Chimpanzee DD
 ```
 
-Below the name is a fingerprint icon followed by the fingerprint hex. A seed card adds one more line under the fingerprint: a seedling icon, then the seed's first word followed by "…". If that seed has a passphrase, the line continues with " + Passphrase" and the passphrase's number, for example "Abandon… + Passphrase1". An external-key card adds two lines under the fingerprint hex: Native-Segwit or Taproot, then the account, for example "Native-Segwit" and "Account #0". The section title already says whether the key is singlesig or multisig.
+Below the name is a fingerprint icon followed by the fingerprint hex. A seed card adds one more line under the fingerprint: a seedling icon, then the seed's first word followed by "…". If that seed has a passphrase, the line continues with " + Passphrase" and the passphrase's number, for example "abandon… + Passphrase1". An external-key card adds two lines under the fingerprint hex: Native-Segwit or Taproot, then the account, for example "Native-Segwit" and "Account #0". The section title already says whether the key is singlesig or multisig.
 
 If the fingerprint has a seed or seed + passphrase in its list of keys (in this case the list in this case will only contain one key), we should show in a new row a symbol of a key followed by a small title "Generated from a 12/18/24 words seed".
 In the case of a seed + passphrase, it should say "Generated from a 12/18/24 words seed + passphrase" and that passphrase's number, for example "Generated from a 12 words seed + passphrase1".
@@ -215,7 +215,7 @@ For xpub key expressions, the screen will show the key's:
 - Fingerprint nickname
 - Fingerprint hex
 
-The fingerprint name is the calculated adjective-color-animal-hex name. It is not editable. On the key screen it is broken after the second word. A seed has a key icon on the left of that name, and an external key has an eye icon, the same size as the fingerprint icon below it. The name lines start at the same left edge as "Fingerprint: ". The screen scrolls when the sentences and buttons do not fit under the title.
+The fingerprint name is the calculated adjective-color-animal-hex name. It is not editable. On the key screen it is broken after the second word. A seed has a key icon on the left of that name, and an external key has an eye icon, the same size as the fingerprint icon below it. The name lines start at the same left edge as "Fingerprint: ". Under that line, a seed shows the seedling icon and "First Word: " followed by the first word in lowercase. The screen scrolls when the sentences and buttons do not fit under the title.
 
 Xpub key expressions should also show the account, the derivation path (which includes the account), and the xpub. Type, account, the path, and the extended public key use the same size as the fingerprint line. "Derivation Path:" is its own line, and the path is centered on the next line. "Extended Public Key:" is its own line, and the 19-character preview is centered on the next line. Show Full Details comes next. Export to SD Card follows it. Delete Key is the next button after that, in the list, not pinned to the bottom.
 Some xpub keys may have a zpub/Zpub presentation (Depending on the derivation path prefix, for exmaple if it begins with m/84h/0h/<account>h and we know that it's a Native-Segwit). Show Full Details shows a QR code of the key, followed by the text, and its format switcher offers Key Expression, the canonical extended key, and that SLIP-132 form when the path has one.

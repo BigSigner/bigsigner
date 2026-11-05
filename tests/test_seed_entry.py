@@ -6,6 +6,25 @@ from bigsigner.ui.canvas import HEADER, HEIGHT, MARGIN, MUTED, PAPER, TITLE_SIZE
 WORDS = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".split()
 
 
+def test_the_seed_key_shows_the_first_word_under_the_fingerprint():
+    from embit.bip39 import WORDLIST
+
+    app = App()
+    added = app.session.add_mnemonic(WORDS)
+    app.screen = "key"
+    app.selected_fp = added["fingerprint"]
+    image = app.render()
+    line = next(item for item in app.texts if item["text"].startswith("First Word: "))
+    assert line["text"] == "First Word: abandon"
+    assert line["box"][2] <= WIDTH - MARGIN
+    face = ui_font(TITLE_SIZE)
+    label = "First Word: "
+    icon = 36
+    used = MARGIN + icon + 10 + ImageDraw.Draw(image).textlength(label, font=face)
+    widest = max(WORDLIST, key=lambda word: ImageDraw.Draw(image).textlength(word, font=face))
+    assert used + ImageDraw.Draw(image).textlength(widest, font=face) <= WIDTH - MARGIN
+
+
 def test_a_press_left_of_q_a_and_z_still_types_them():
     app = App()
     app.screen = "passphrase"

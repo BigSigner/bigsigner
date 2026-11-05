@@ -28,10 +28,17 @@
   #size-note, #sd-note { margin: 0; color: #9a9a9a; font: 13px/1.4 sans-serif; text-align: center; }
   #size-note { max-width: 52mm; }
   #sd-column { width: min(40rem, 100%); display: grid; gap: 12px; align-content: start; position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; }
-  #sd-panel { display: grid; gap: 12px; padding: 12px; border: 1px solid #333; border-radius: 12px; background: #1b1b1b; }
+  #sd-panel, #hash-panel { display: grid; gap: 12px; padding: 12px; border: 1px solid #333; border-radius: 12px; background: #1b1b1b; }
+  .card-toggle { display: flex; align-items: center; gap: 8px; width: 100%; margin: 0; padding: 0; background: transparent; color: #eee; border: 0; cursor: pointer; font: 600 16px/1.3 sans-serif; text-align: left; }
+  .card-toggle .chevron { width: 16px; height: 16px; flex: none; }
+  #sd-panel.collapsed .chevron, #hash-panel.collapsed .chevron { transform: rotate(-90deg); }
+  #sd-panel.collapsed #sd-body, #hash-panel.collapsed #hash-body { display: none; }
+  #sd-body, #hash-body { display: grid; gap: 12px; }
   #sd-path { display: flex; flex-wrap: wrap; gap: 4px; }
+  #sd-path:empty { display: none; }
   #sd-path button { background: transparent; color: #9ec1ff; border: 0; padding: 0; cursor: pointer; font: inherit; }
   #sd-path button + button::before { content: "/"; color: #777; margin-right: 4px; }
+  #sd-path button.root + button::before { content: ""; margin: 0; }
   #sd-new { display: flex; gap: 8px; }
   #sd-name { flex: 1; min-width: 0; background: #111; color: #eee; border: 1px solid #444; border-radius: 8px; padding: 8px; font: inherit; }
   #sd-drop { display: grid; justify-items: center; gap: 8px; padding: 16px; border: 1px dashed #555; border-radius: 12px; text-align: center; }
@@ -55,7 +62,6 @@
   #sd-editor-name { color: #9a9a9a; font: 13px/1.4 sans-serif; overflow-wrap: anywhere; }
   #sd-text { width: 100%; box-sizing: border-box; min-height: 8em; max-height: 16em; resize: vertical; overflow: auto; white-space: pre; background: #111; color: #eee; border: 1px solid #444; border-radius: 8px; padding: 8px; font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
   #sd-list .empty { display: block; color: #9a9a9a; }
-  #hash-panel { display: grid; gap: 12px; padding: 12px; border: 1px solid #333; border-radius: 12px; background: #1b1b1b; }
   #hash-panel label { display: grid; gap: 4px; color: #9a9a9a; font: 13px/1.4 sans-serif; }
   #hash-panel label span { color: #9a9a9a; font: 13px/1.4 sans-serif; }
   .hash-field { display: grid; gap: 4px; }
@@ -78,10 +84,15 @@
       <button type="button" id="size-label" title="Reset to the Waveshare picture size"></button>
       <button type="button" id="larger" title="Larger">+</button>
     </div>
-    <p id="size-note">The 4 inch Waveshare picture is 51.8 mm wide. Match a ruler, then leave it. Do not type a real seed into this page.</p>
+    <p id="size-note">The 4 inch Waveshare picture is 51.8 mm wide. Match a ruler, then leave it.</p>
   </div>
   <aside id="sd-column">
     <div id="sd-panel">
+      <button type="button" class="card-toggle" id="sd-toggle" aria-expanded="true" aria-controls="sd-body">
+        <svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        SD Card
+      </button>
+      <div id="sd-body">
       <div id="sd-path"></div>
       <form id="sd-new">
         <input id="sd-name" placeholder="Folder/File name" autocomplete="off">
@@ -99,8 +110,14 @@
         <textarea id="sd-text" wrap="off" spellcheck="false" autocapitalize="off" autocorrect="off"></textarea>
       </div>
       <p id="sd-note">These files stay in this browser cache and are not uploaded anywhere.</p>
+      </div>
     </div>
     <form id="hash-panel" method="dialog" autocomplete="off">
+      <button type="button" class="card-toggle" id="hash-toggle" aria-expanded="true" aria-controls="hash-body">
+        <svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Preloaded Parameters
+      </button>
+      <div id="hash-body">
       <div class="hash-field">
         <span class="hash-label-row">
           <label for="hash-seed">seed</label>
@@ -124,6 +141,7 @@
         </select>
       </label>
       <button type="submit">Reload</button>
+      </div>
     </form>
   </aside>
 </div>
@@ -157,6 +175,16 @@ document.getElementById("hash-example").addEventListener("click", () => {
 document.getElementById("hash-descriptor-example").addEventListener("click", () => {
   hashDescriptor.value = "wpkh([42c649e1/84h/0h/0h]xpub6BsXXeh3fxRHtmfpnbXcAWjfnXz92n3BKYT7tf9Xcay6weGXt44g3iVaZHdivvwdzVnf9exeVLVBwVTzgxxScv53dQuXvT6FyrVJy9v4TaD/<0;1>/*)";
 });
+function setCardOpen(id, open) {
+  const button = document.getElementById(id);
+  button.setAttribute("aria-expanded", open ? "true" : "false");
+  button.parentElement.classList.toggle("collapsed", !open);
+}
+for (const id of ["sd-toggle", "hash-toggle"]) {
+  document.getElementById(id).addEventListener("click", () => {
+    setCardOpen(id, document.getElementById(id).getAttribute("aria-expanded") !== "true");
+  });
+}
 document.getElementById("hash-panel").addEventListener("submit", (event) => {
   event.preventDefault();
   const parts = [];
@@ -204,6 +232,8 @@ document.getElementById("larger").addEventListener("click", () => setPanelScale(
 document.getElementById("size-label").addEventListener("click", () => setPanelScale(1));
 
 let card = loadCard();
+setCardOpen("sd-toggle", card.dirs.length > 0 || Object.keys(card.files).length > 0);
+setCardOpen("hash-toggle", Boolean(initial.seed.trim() || initial.descriptor.trim() || initial.network.trim()));
 let sdHere = "";
 let editingPath = "";
 let editTimer = 0;
@@ -307,12 +337,14 @@ function noteCard() {
 }
 function renderSd() {
   sdPath.replaceChildren();
-  const root = document.createElement("button");
-  root.type = "button";
-  root.textContent = "SD Card";
-  root.setAttribute("data-path", "");
-  sdPath.append(root);
   if (sdHere) {
+    const root = document.createElement("button");
+    root.type = "button";
+    root.className = "root";
+    root.textContent = "/";
+    root.setAttribute("aria-label", "SD card root");
+    root.setAttribute("data-path", "");
+    sdPath.append(root);
     let built = "";
     for (const part of sdHere.split("/")) {
       built = built ? built + "/" + part : part;

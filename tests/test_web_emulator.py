@@ -27,6 +27,13 @@ def test_the_static_page_reads_the_bundle_and_checks_downloads():
     assert 'params.get("descriptor")' in page
     assert 'params.get("network")' in page
     assert 'id="hash-panel"' in page
+    assert "Preloaded Parameters" in page
+    assert 'id="sd-toggle"' in page
+    assert 'id="hash-toggle"' in page
+    assert 'root.textContent = "SD Card"' not in page
+    assert 'setCardOpen("sd-toggle", card.dirs.length > 0 || Object.keys(card.files).length > 0)' in page
+    assert 'setCardOpen("hash-toggle", Boolean(initial.seed.trim() || initial.descriptor.trim() || initial.network.trim()))' in page
+    assert 'class="chevron"' in page
     assert 'method="dialog"' in page
     assert 'id="hash-seed"' in page
     assert 'id="hash-descriptor"' in page

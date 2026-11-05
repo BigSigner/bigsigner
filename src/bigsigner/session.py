@@ -704,9 +704,7 @@ class Session:
         self.passphrases.pop(passphrase, None)
 
     def seed_summary(self, key) -> str:
-        word = key.mnemonic[0]
-        titled = word[:1].upper() + word[1:]
-        summary = f"{titled}\u2026"
+        summary = f"{key.mnemonic[0].lower()}\u2026"
         if key.passphrase:
             summary += f" + Passphrase{self.passphrase_index(key.passphrase)}"
         return summary

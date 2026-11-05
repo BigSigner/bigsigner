@@ -2558,6 +2558,17 @@ class App:
                 return text_size, icon
         return 28, 28
 
+    def _first_word_line(self, frame: Frame, y: int, word: str, text_size: int, icon_size: int) -> None:
+        """The seedling icon and the seed's first word, aligned with the fingerprint line."""
+        frame.glyph(Icons.SEED, MARGIN + icon_size / 2, y + icon_size / 2, icon_size, MUTED, awesome=True)
+        label = f"First Word: {word}"
+        face = font(text_size)
+        _left, top, _right, bottom = frame.draw.textbbox((0, 0), label, font=face)
+        text_y = y + (icon_size - (bottom - top)) / 2 - top
+        x = MARGIN + icon_size + 10
+        frame.draw.text((x, text_y), label, font=face, fill=MUTED)
+        frame.mark(label, frame.draw.textbbox((x, text_y), label, font=face))
+
     def _key_flow(self, frame: Frame, record, key, paint: bool, offset: int = 0) -> int:
         """Lay out the key screen under the title. Returns the unshifted y after the last control."""
         y = HEADER + 20
@@ -2569,6 +2580,10 @@ class App:
         if paint:
             frame.fingerprint_line(y - offset, record.fingerprint.hex(), text_size=text_size, icon_size=icon)
         y += icon + 16
+        if key.has_seed:
+            if paint:
+                self._first_word_line(frame, y - offset, key.mnemonic[0].lower(), text_size, icon)
+            y += icon + 16
         if key.has_seed:
             generated = self.session.generated_from(key)
             if paint:
