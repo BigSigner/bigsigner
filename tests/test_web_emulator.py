@@ -28,6 +28,11 @@ def test_the_static_page_reads_the_bundle_and_checks_downloads():
     assert 'params.get("network")' in page
     assert 'id="hash-panel"' in page
     assert "Preloaded Parameters" in page
+    assert 'id="about-panel" class="collapsed"' in page
+    assert 'id="about-toggle"' in page
+    assert 'aria-expanded="false"' in page
+    assert "Isolated Chocolate Boar 4D" in page
+    assert "https://bigsigner.com" in page
     assert 'id="sd-toggle"' in page
     assert 'id="hash-toggle"' in page
     assert 'root.textContent = "SD Card"' not in page

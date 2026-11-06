@@ -981,6 +981,16 @@ def test_seed_qr_switches_between_compact_and_text():
     assert app.screen == "seed-show"
     assert app.seed_format == 0
     app.render()
+    assert "12 Words" in [item["text"] for item in app.texts]
+    saved = app.qr_text
+    app.qr_text = " ".join(["abandon"] * 18)
+    app.render()
+    assert "18 Words" in [item["text"] for item in app.texts]
+    app.qr_text = " ".join(["abandon"] * 24)
+    app.render()
+    assert "24 Words" in [item["text"] for item in app.texts]
+    app.qr_text = saved
+    app.render()
     assert not any(hit["action"] == "zoom-in" for hit in app.hits)
     app._act("seed-format-next")
     assert app.seed_format == 1

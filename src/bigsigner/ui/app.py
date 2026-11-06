@@ -5413,6 +5413,7 @@ class App:
         name = SEED_FORMAT_NAMES[self.seed_format]
         if SEED_FORMATS[self.seed_format] == "words":
             words = self.qr_text.split()
+            name = f"{len(words)} Words"
             self._draw_indexed_grid(
                 frame, words, HEADER + 16, HEIGHT - 110,
                 scroll=True, columns=SEED_CARD_COLUMNS, gap=SEED_CARD_GAP,
@@ -5482,7 +5483,9 @@ class App:
         text_width = frame.draw.textlength(name, font=face)
         text_left, text_top, _text_right, text_bottom = frame.draw.textbbox((0, 0), name, font=face)
         text_y = y + (64 - (text_bottom - text_top)) / 2 - text_top
-        frame.draw.text(((WIDTH - text_width) / 2 - text_left, text_y), name, font=face, fill=INK)
+        origin = ((WIDTH - text_width) / 2 - text_left, text_y)
+        frame.draw.text(origin, name, font=face, fill=INK)
+        frame.mark(name, frame.draw.textbbox(origin, name, font=face))
 
     def _step_seed_format(self, delta: int):
         self.seed_format = (self.seed_format + delta) % len(SEED_FORMATS)

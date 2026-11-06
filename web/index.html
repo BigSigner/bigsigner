@@ -28,11 +28,17 @@
   #size-note, #sd-note { margin: 0; color: #9a9a9a; font: 13px/1.4 sans-serif; text-align: center; }
   #size-note { max-width: 52mm; }
   #sd-column { width: min(40rem, 100%); display: grid; gap: 12px; align-content: start; position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; }
-  #sd-panel, #hash-panel { display: grid; gap: 12px; padding: 12px; border: 1px solid #333; border-radius: 12px; background: #1b1b1b; }
+  #about-panel, #sd-panel, #hash-panel { display: grid; gap: 12px; padding: 12px; border: 1px solid #333; border-radius: 12px; background: #1b1b1b; }
   .card-toggle { display: flex; align-items: center; gap: 8px; width: 100%; margin: 0; padding: 0; background: transparent; color: #eee; border: 0; cursor: pointer; font: 600 16px/1.3 sans-serif; text-align: left; }
   .card-toggle .chevron { width: 16px; height: 16px; flex: none; }
-  #sd-panel.collapsed .chevron, #hash-panel.collapsed .chevron { transform: rotate(-90deg); }
-  #sd-panel.collapsed #sd-body, #hash-panel.collapsed #hash-body { display: none; }
+  #about-panel.collapsed .chevron, #sd-panel.collapsed .chevron, #hash-panel.collapsed .chevron { transform: rotate(-90deg); }
+  #about-panel.collapsed #about-body, #sd-panel.collapsed #sd-body, #hash-panel.collapsed #hash-body { display: none; }
+  #about-body { color: #ddd; font: 14px/1.45 sans-serif; }
+  #about-body p, #about-body h3 { margin: 0; }
+  #about-body h3 { margin-top: 12px; color: #eee; font: 600 15px/1.3 sans-serif; }
+  #about-body ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 8px; }
+  #about-body a { color: #9ec1ff; }
+  #about-body code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   #sd-body, #hash-body { display: grid; gap: 12px; }
   #sd-path { display: flex; flex-wrap: wrap; gap: 4px; }
   #sd-path:empty { display: none; }
@@ -87,6 +93,35 @@
     <p id="size-note">The 4 inch Waveshare picture is 51.8 mm wide. Match a ruler, then leave it.</p>
   </div>
   <aside id="sd-column">
+    <section id="about-panel" class="collapsed">
+      <button type="button" class="card-toggle" id="about-toggle" aria-expanded="false" aria-controls="about-body">
+        <svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        About
+      </button>
+      <div id="about-body">
+        <p>BigSigner is a multisig-first wallet, built to make the usual ways of losing funds harder. You need to understand the basics of how Bitcoin wallets work before you use it.</p>
+        <p>Here is the terminology you need to know:</p>
+        <h3>Seed Key</h3>
+        <p>If you are here, you already know what this is. A passphrase is part of the seed. The same 24 words with a passphrase are a completely different seed from those 24 words without a passphrase.</p>
+        <h3>Fingerprint</h3>
+        <p>A fingerprint is an 8-character identifier for a seed. It does not reveal the seed itself. A wallet app on a phone or computer uses it when it talks to the hardware wallet. In a multisig wallet, for example, it says which seed must sign, and where. Two randomly generated seeds can share a fingerprint, which would be a problem in a multisig wallet that included both of them, but the odds are extremely low.</p>
+        <h3>Fingerprint Name</h3>
+        <p>An easy-to-remember name calculated from the fingerprint. It is an adjective, a color, an animal, and the last two characters of the fingerprint. For example, the name for <code>1a2b3c4d</code> is <code>Isolated Chocolate Boar 4D</code>.</p>
+        <h3>External Key</h3>
+        <p>The fingerprint from another hardware wallet that holds the private seed, together with a type, account index, and their matching xpub (see below). You can use it in a multisig wallet, or as a watch-only wallet: you can see that wallet's addresses, but you cannot spend from them.</p>
+        <ul>
+          <li>The supported types are Native-Segwit SingleSig, Native-Segwit MultiSig, and Taproot SingleSig. BigSigner does not let a key be used for a type other than the one it was made for.</li>
+          <li>Account index: a number that derives different keys from the same seed and the same type. The default is 0. In a singlesig wallet, this can keep coins received from different sources apart, to avoid accidental mixing. BigSigner will not sign a transaction whose inputs come from more than one account. You would have to move the bitcoin from account A to account B, and then spend from account B. Some wallet apps hide non-zero account indexes as an advanced feature, because a less technical user may forget which account index they used and think the funds are lost.</li>
+          <li>xpub: an extended public key. It lets you find the addresses for one type and one account index without knowing the Seed Key. In a multisig setup, each hardware wallet must have the xpubs generated by the other hardware wallets, in order to calculate the addresses of the multisig wallet.</li>
+        </ul>
+        <h3>SingleSig Wallet</h3>
+        <p>A fingerprint together with a type: Native-Segwit SingleSig or Taproot SingleSig. If the matching Seed Key is loaded, you can see the addresses of every account and sign transactions. If you have only External Keys for that fingerprint, you can switch only among the account indexes that those external keys include. You can see their addresses, but you cannot sign. The wallet is removed automatically when its Seed Key and all of its External Keys are removed.</p>
+        <h3>Native-Segwit MultiSig Wallet</h3>
+        <p>A set of fingerprints and the number of signatures required (m-of-n). As with a SingleSig wallet, you can use account indexes to keep funds separate, and each fingerprint can have its own account index. For example, a 2-of-3 multisig of fingerprints <code>00112233</code>, <code>aabbccdd</code>, and <code>a1b2c3d4</code> may be switched to account indexes (0, 7, 4). Non-zero account indexes are rarely used in multisig wallets - people usually just keep a different seed for each multisig wallet that they own (or being part of).</p>
+        <p>If you have the Seed Key for one of the fingerprints, you can add its signature to transactions (the other hardware wallets may still need to sign to complete the transaction). If you have none of the seeds, you can watch the addresses, but you cannot sign. The wallet is removed automatically if, for any of its fingerprints, the Seed Key and all of the External Keys are gone. Even in a 2-of-3 wallet, if you have the seed or the xpubs for the first two fingerprints but not for the third, you cannot find the wallet's addresses.</p>
+        <p>For more information, visit <a href="https://bigsigner.com">bigsigner.com</a>.</p>
+      </div>
+    </section>
     <div id="sd-panel">
       <button type="button" class="card-toggle" id="sd-toggle" aria-expanded="true" aria-controls="sd-body">
         <svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -180,7 +215,7 @@ function setCardOpen(id, open) {
   button.setAttribute("aria-expanded", open ? "true" : "false");
   button.parentElement.classList.toggle("collapsed", !open);
 }
-for (const id of ["sd-toggle", "hash-toggle"]) {
+for (const id of ["about-toggle", "sd-toggle", "hash-toggle"]) {
   document.getElementById(id).addEventListener("click", () => {
     setCardOpen(id, document.getElementById(id).getAttribute("aria-expanded") !== "true");
   });
