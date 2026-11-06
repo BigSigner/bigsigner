@@ -6873,7 +6873,7 @@ class App:
         self.go("load-psbt")
 
     def _load_psbt(self, frame: Frame):
-        frame.header("Load PSBT", "back")
+        frame.header("Load Transaction", "back")
         y = frame.button(HEADER + 24, "Scan QR Code", "psbt-scan")
         frame.button(y, "Load from SD Card", "psbt-sd")
 
@@ -6987,7 +6987,7 @@ class App:
         frame.button(button_top, "OK", "psbt-error-ok")
 
     def _psbt_yaml(self, frame: Frame):
-        frame.header("PSBT", "back")
+        frame.header("Transaction Signing", "back")
         text = self.psbt_yaml_text or "This PSBT is no longer loaded."
         end = HEADER + 16
         for line in text.splitlines() or [""]:

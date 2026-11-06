@@ -105,6 +105,7 @@ def test_sign_transaction_is_disabled_for_a_watch_only_wallet():
     _tap(seeded, "Sign Transaction")
     assert seeded.screen == "load-psbt"
     seeded.render()
+    assert "Load Transaction" in _texts(seeded)
     labels = [hit["label"] for hit in seeded.hits if hit["action"] in ("psbt-scan", "psbt-sd")]
     assert labels == ["Scan QR Code", "Load from SD Card"]
 
@@ -212,6 +213,7 @@ def test_a_specter_sequence_counts_the_parts_and_a_large_psbt_is_refused():
     app.accept_qr(f"p2of2 {encoded[mid:]}")
     assert app.screen == "psbt-yaml"
     app.render()
+    assert "Transaction Signing" in _texts(app)
     assert "transaction_version: 2" in " ".join(_texts(app))
 
     blob = b"psbt\xff" + b"\x00" * 100_001
