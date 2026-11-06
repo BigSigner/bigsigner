@@ -532,10 +532,14 @@ def test_a_singlesig_xpub_can_create_and_reopen_its_wallet():
     added = app.session.add_text(expression(ABANDON, "m/84h/0h/7h"))
     app.selected_fp = added["fingerprint"]
     app.screen = "key"
+    app.scroll["key"] = 10**9
     app.render()
     assert any(hit["label"] == "Go to Native-Segwit SingleSig Wallet" for hit in app.hits)
     app.session.delete_wallet(0)
+    app.scroll["key"] = 10**9
     app.render()
+    tops = {hit["label"]: hit["box"][1] for hit in app.hits}
+    assert tops["Export to SD Card"] < tops["Create a Native-Segwit SingleSig Wallet"]
     assert any(hit["label"] == "Create a Native-Segwit SingleSig Wallet" for hit in app.hits)
     draw = ImageDraw.Draw(Image.new("RGB", (WIDTH, 8)))
     face = font(BODY_SIZE)
@@ -555,6 +559,7 @@ def test_a_singlesig_xpub_can_create_and_reopen_its_wallet():
     assert app.session.wallets[0].accounts[added["fingerprint"]] == 7
     assert "/7h" in app.session.descriptor_text(0)
     app.screen = "key"
+    app.scroll["key"] = 10**9
     app.render()
     assert any(hit["label"] == "Go to Native-Segwit SingleSig Wallet" for hit in app.hits)
     app._act("make-xpub-wallet")

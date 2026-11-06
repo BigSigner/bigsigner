@@ -2611,17 +2611,17 @@ class App:
         preview = key.xpub.to_string()[:XPUB_KEY_PREVIEW] + ELLIPSIS
         y = self._flow_value_below(frame, y, "Derivation Path:", format_path(list(key.path)), paint, offset, text_size)
         y = self._flow_value_below(frame, y, "Extended Public Key:", preview, paint, offset, text_size)
+        y = self._flow_button(frame, y, "Show Full Details", "show-qr", paint, offset)
+        y = self._flow_button(frame, y, "Export to SD Card", "export-key", paint, offset)
         if key.role == SINGLESIG_NATIVE:
-            y = self._flow_button(
+            return self._flow_button(
                 frame, y, self._seed_wallet_label(SINGLESIG_NATIVE, "Native-Segwit"), "make-xpub-wallet", paint, offset,
             )
-        elif key.role == SINGLESIG_TAPROOT:
-            y = self._flow_button(
+        if key.role == SINGLESIG_TAPROOT:
+            return self._flow_button(
                 frame, y, self._seed_wallet_label(SINGLESIG_TAPROOT, "Taproot"), "make-xpub-wallet", paint, offset,
             )
-        y += 20
-        y = self._flow_button(frame, y, "Show Full Details", "show-qr", paint, offset)
-        return self._flow_button(frame, y, "Export to SD Card", "export-key", paint, offset)
+        return y
 
     def _open_show_export(self):
         _record, key = self._stored_key()

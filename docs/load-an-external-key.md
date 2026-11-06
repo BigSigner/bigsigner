@@ -37,4 +37,4 @@ That screen first asks you to verify the extended public key on the other hardwa
 
 Continue is at the bottom of the second page. Scroll to it. Only that Continue stores the key and opens its External Key screen. Back from the details returns to the warning. Back from the warning leaves the key unloaded.
 
-On the External Key screen, Show Full Details is followed by Export to SD Card, then Delete Key. Export to SD Card asks for Key Expression, the canonical extended key, or the SLIP-132 form when this path has one. The next screen lists the SD card. Choosing a file replaces it after a confirmation. New File asks for a name and writes that file.
+On the External Key screen, Show Full Details is followed by Export to SD Card, then the button that creates or opens the singlesig wallet, then Delete Key. Export to SD Card asks for Key Expression, the canonical extended key, or the SLIP-132 form when this path has one. The next screen lists the SD card. Choosing a file replaces it after a confirmation. New File asks for a name and writes that file.
