@@ -2,7 +2,7 @@
 
 Create the transaction in a coordinator such as Sparrow. Export it as a PSBT and move that PSBT to BigSigner without using the network. A QR code or a file you carry yourself is the intended path. The coordinator is not trusted. BigSigner checks the PSBT against the wallet you have selected.
 
-PSBT version 0 and version 2 are read. Bitcoin transaction versions 2 and 3 are accepted. Other versions are rejected.
+PSBT version 0 and version 2 are read. A version 0 PSBT that contains a per-input required locktime is rejected. Bitcoin transaction versions 2 and 3 are accepted. Other versions are rejected.
 
 ## What has to match
 

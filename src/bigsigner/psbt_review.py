@@ -23,8 +23,10 @@ def review_psbt(session, wallet_index: int, raw: str | bytes) -> dict:
         psbt = PSBT.from_string(raw) if isinstance(raw, str) else PSBT.parse(raw)
     except (PSBTError, Exception) as exc:
         raise ReviewError("The PSBT could not be read.") from exc
-    if psbt.version not in (None, 0, 2):
-        raise ReviewError("Only PSBT version 0 and version 2 are supported.")
+    from .psbt_check import refuse_v0_required_locktime, require_psbt_version
+
+    require_psbt_version(psbt)
+    refuse_v0_required_locktime(psbt)
     transaction = psbt.tx
     if transaction is None or transaction.version not in (1, 2):
         raise ReviewError("Only Bitcoin transaction version 1 and version 2 are supported.")

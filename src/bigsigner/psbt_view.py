@@ -368,9 +368,9 @@ def _more_info(locktime: int) -> str:
     if locktime <= 0 or locktime >= LOCKTIME_THRESHOLD:
         return ""
     return (
-        "Modern wallets often set a block-height locktime close to the current block height. "
-        "That discourages a miner from rewriting a recent block, called a reorg. "
-        "If you did not set a custom locktime and you want to broadcast this transaction now, "
+        "Modern wallets often set a block-height locktime close to the current block height, "
+        "in order to discourage miners from rewriting recent blocks (a.k.a. reorgs). "
+        "If you did not set a custom locktime and you want to broadcast this transaction right away, "
         f"check that the current block height is above {locktime}."
     )
 
@@ -381,7 +381,7 @@ def _locktime_label(locktime: int, relative: list[int]) -> str:
     if locktime <= 0:
         return "No Absolute Locktime"
     if locktime < LOCKTIME_THRESHOLD:
-        return f"Absolute Locktime: After Block Height {locktime}"
+        return f"Absolute Locktime: After block height {locktime}"
     return f"Absolute Locktime: {format_locktime(locktime)}"
 
 

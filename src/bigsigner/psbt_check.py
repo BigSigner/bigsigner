@@ -15,6 +15,24 @@ from .psbt_review import ReviewError, _tx_weight
 from .session import SessionError, _descriptor, _public_for
 
 UNSUPPORTED = "unsupported by this hardware wallet"
+
+
+def require_psbt_version(psbt) -> None:
+    """Version 0 may be omitted. Version 2 is BIP 370. Nothing else is signed."""
+    if psbt.version not in (None, 0, 2):
+        raise ReviewError(f"A PSBT version other than 0 or 2 is {UNSUPPORTED}.")
+
+
+def refuse_v0_required_locktime(psbt) -> None:
+    """BIP 370 puts these fields on version 2 only. A version 0 PSBT that carries one is refused."""
+    if psbt.version == 2:
+        return
+    for scope in psbt.inputs:
+        for key in scope.unknown:
+            if key[:1] in (b"\x11", b"\x12"):
+                raise ReviewError(
+                    f"A per-input required locktime on a version 0 PSBT is {UNSUPPORTED}."
+                )
 SEQUENCE_FINAL = 0xFFFFFFFF
 # Bitcoin Core 31's default -datacarriersize. The scripts of every standard
 # OP_RETURN output are added together. The amount is not limited: an
@@ -40,6 +58,8 @@ def check_loaded_psbt(session, wallet_index: int, text: str) -> PSBT:
             raise
         except (PSBTError, Exception) as exc:
             raise ReviewError(UNREADABLE) from exc
+    require_psbt_version(psbt)
+    refuse_v0_required_locktime(psbt)
     transaction = psbt.tx
     if transaction is None or transaction.version not in (2, 3):
         raise ReviewError(f"A transaction version other than 2 or 3 is {UNSUPPORTED}.")

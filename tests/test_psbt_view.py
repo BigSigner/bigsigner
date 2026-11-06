@@ -72,7 +72,7 @@ def test_warnings_name_op_return_fee_locktime_and_rbf():
     assert view["banner"] == "This transaction can be mined only after block height 159408."
     assert "above 159408" in view["more_info"]
     assert "equal" not in view["more_info"]
-    assert view["locktime_label"] == "Absolute Locktime: After Block Height 159408"
+    assert view["locktime_label"] == "Absolute Locktime: After block height 159408"
 
     stamped = _psbt(session)
     stamped.locktime = 1_700_000_000

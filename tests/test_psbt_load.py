@@ -234,6 +234,21 @@ def test_each_psbt_refusal_names_the_unsupported_case():
     version = _psbt(session, version=1)
     _raises(session, version, "version other than 2 or 3")
 
+    psbt_version = _psbt(session)
+    psbt_version.version = 1
+    _raises(session, psbt_version, "PSBT version other than 0 or 2")
+    psbt_version.version = 2
+    assert check_loaded_psbt(session, 0, psbt_version).version == 2
+
+    for key, value in ((b"\x11", 500_000_000), (b"\x12", 10000)):
+        locked = _psbt(session)
+        locked.inputs[0].unknown = {key: value.to_bytes(4, "little")}
+        _raises(session, locked.serialize(), "per-input required locktime")
+        locked.version = 0
+        _raises(session, locked, "per-input required locktime")
+        locked.version = 2
+        assert check_loaded_psbt(session, 0, locked).tx.locktime == 0
+
     version3 = _psbt(session, version=3)
     assert check_loaded_psbt(session, 0, version3.serialize()).tx.version == 3
 
