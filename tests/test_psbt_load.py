@@ -249,6 +249,14 @@ def test_each_psbt_refusal_names_the_unsupported_case():
         locked.version = 2
         assert check_loaded_psbt(session, 0, locked).tx.locktime == 0
 
+    modifiable = _psbt(session)
+    modifiable.unknown = {b"\x06": b"\x00"}
+    _raises(session, modifiable.serialize(), "modifiable transaction")
+    modifiable.version = 0
+    _raises(session, modifiable, "modifiable transaction")
+    modifiable.version = 2
+    _raises(session, modifiable.serialize(), "modifiable transaction")
+
     version3 = _psbt(session, version=3)
     assert check_loaded_psbt(session, 0, version3.serialize()).tx.version == 3
 

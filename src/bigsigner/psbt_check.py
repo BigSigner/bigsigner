@@ -33,6 +33,14 @@ def refuse_v0_required_locktime(psbt) -> None:
                 raise ReviewError(
                     f"A per-input required locktime on a version 0 PSBT is {UNSUPPORTED}."
                 )
+
+
+def refuse_modifiable(psbt) -> None:
+    """PSBT_GLOBAL_TX_MODIFIABLE means someone may still add inputs or outputs."""
+    if any(key[:1] == b"\x06" for key in psbt.unknown):
+        raise ReviewError(f"A modifiable transaction is {UNSUPPORTED}.")
+
+
 SEQUENCE_FINAL = 0xFFFFFFFF
 # Bitcoin Core 31's default -datacarriersize. The scripts of every standard
 # OP_RETURN output are added together. The amount is not limited: an
@@ -60,6 +68,7 @@ def check_loaded_psbt(session, wallet_index: int, text: str) -> PSBT:
             raise ReviewError(UNREADABLE) from exc
     require_psbt_version(psbt)
     refuse_v0_required_locktime(psbt)
+    refuse_modifiable(psbt)
     transaction = psbt.tx
     if transaction is None or transaction.version not in (2, 3):
         raise ReviewError(f"A transaction version other than 2 or 3 is {UNSUPPORTED}.")

@@ -12,7 +12,7 @@ All inputs in the transaction must use the same combination of accounts. If that
 
 An output is change only when its derivations use that same account combination, share one branch and address index, and the script BigSigner derives is the script in the output. Anything else is an external output, including an output that belongs to another account of the same seed.
 
-The signature hash must be SIGHASH_ALL. Taproot also allows the default sighash. SIGHASH_NONE, SIGHASH_SINGLE, and ANYONECANPAY are rejected.
+The signature hash must be SIGHASH_ALL. Taproot also allows the default sighash. SIGHASH_NONE, SIGHASH_SINGLE, and ANYONECANPAY are rejected. A PSBT that contains PSBT_GLOBAL_TX_MODIFIABLE is rejected on version 0 and version 2.
 
 ## Transaction Signing
 
