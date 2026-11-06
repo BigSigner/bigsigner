@@ -23,6 +23,8 @@ def test_the_static_page_reads_the_bundle_and_checks_downloads():
     assert 'id="sd-filename"' not in page
     assert 'rename.textContent = "Rename"' in page
     assert "Downloading a binary file." in page
+    assert "file.arrayBuffer" in page
+    assert 'return "That file is not text."' not in page
     assert 'params.get("seed")' in page
     assert 'params.get("descriptor")' in page
     assert 'params.get("network")' in page

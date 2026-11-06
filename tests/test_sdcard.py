@@ -3,7 +3,9 @@ import pytest
 from bigsigner.sdcard import (
     SdError,
     consume_memory_change,
+    file_exists,
     list_folder,
+    memory_snapshot,
     mount_memory,
     read_text,
     unmount_memory,
@@ -337,6 +339,20 @@ def test_write_text_on_a_memory_card_is_reported_once():
     with pytest.raises(SdError):
         write_text("../note.txt", "nope")
     assert consume_memory_change() is None
+
+
+def test_a_non_text_file_stays_on_the_card_and_is_not_read_as_text():
+    import base64
+
+    raw = b"psbt\xff\x00not-text"
+    mount_memory({"files": {"wallet.psbt": {"base64": base64.b64encode(raw).decode("ascii")}}})
+    assert file_exists("wallet.psbt")
+    assert list_folder("")[0]["name"] == "wallet.psbt"
+    with pytest.raises(SdError, match="not text"):
+        read_text("wallet.psbt")
+    assert consume_memory_change() is None
+    snapshot = memory_snapshot()
+    assert snapshot["files"]["wallet.psbt"] == {"base64": base64.b64encode(raw).decode("ascii")}
 
 
 def test_memory_card_rejects_a_bad_shape():

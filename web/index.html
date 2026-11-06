@@ -307,7 +307,8 @@ function normalizeCard(raw) {
     if (typeof dir === "string") addDirPath(next, safePath(dir));
   }
   for (const [path, text] of Object.entries(files)) {
-    if (typeof text !== "string") continue;
+    const stored = storedFile(text);
+    if (stored === null) continue;
     const rel = safePath(path);
     if (!rel || next.dirs.includes(rel)) continue;
     const parent = parentOf(rel);
@@ -316,7 +317,7 @@ function normalizeCard(raw) {
       addDirPath(next, parent);
     }
     if (next.dirs.includes(rel)) continue;
-    next.files[rel] = text;
+    next.files[rel] = stored;
   }
   return next;
 }
@@ -460,11 +461,36 @@ function renderRow(name, path, kind) {
   item.append(actions);
   sdList.append(item);
 }
+function storedFile(value) {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && typeof value.base64 === "string") return {base64: value.base64};
+  return null;
+}
+function isBinaryFile(value) {
+  return Boolean(value && typeof value === "object" && typeof value.base64 === "string");
+}
 function isAscii(text) {
   for (let i = 0; i < text.length; i++) {
     if (text.charCodeAt(i) > 127) return false;
   }
   return true;
+}
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+function textFromBytes(bytes) {
+  try {
+    const text = new TextDecoder("utf-8", {fatal: true}).decode(bytes);
+    if (text.includes("\0")) return null;
+    return text;
+  } catch (err) {
+    return null;
+  }
 }
 function closeEditor() {
   editingPath = "";
@@ -489,12 +515,12 @@ function openFile(path) {
     return;
   }
   const text = card.files[path];
-  if (typeof text !== "string") return;
-  if (!isAscii(text)) {
+  if (isBinaryFile(text) || (typeof text === "string" && !isAscii(text))) {
     downloadFile(path);
     setSdNotice("Downloading a binary file.");
     return;
   }
+  if (typeof text !== "string") return;
   setSdError("");
   editingPath = path;
   editor.hidden = false;
@@ -587,9 +613,17 @@ function startRename(path, kind, item) {
 }
 function downloadFile(path) {
   const text = card.files[path];
-  if (typeof text !== "string") return;
   const name = path.slice(path.lastIndexOf("/") + 1);
-  const url = URL.createObjectURL(new Blob([text], {type: "text/plain"}));
+  let blob;
+  if (isBinaryFile(text)) {
+    const binary = atob(text.base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    blob = new Blob([bytes]);
+  } else if (typeof text === "string") {
+    blob = new Blob([text], {type: "text/plain"});
+  } else return;
+  const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
   link.download = name;
@@ -641,7 +675,7 @@ function createFile(name) {
     setSdError("A folder already has that name.");
     return;
   }
-  if (typeof card.files[path] === "string") {
+  if (storedFile(card.files[path]) !== null) {
     setSdError("That file already exists.");
     return;
   }
@@ -674,19 +708,19 @@ async function addOneFile(path, file) {
   if (!rel) return "Choose a different file name.";
   if (card.dirs.includes(rel)) return "A folder already has that name.";
   if (file.size > MAX_BYTES) return "That file is too large.";
-  let text = "";
+  let bytes;
   try {
-    text = await file.text();
+    bytes = new Uint8Array(await file.arrayBuffer());
   } catch (err) {
     return "That file cannot be read.";
   }
-  if (text.includes("\0")) return "That file is not text.";
+  const text = textFromBytes(bytes);
   const parent = parentOf(rel);
   if (parent) {
     if (card.files[parent]) return "A file already has that name.";
     addDirPath(card, parent);
   }
-  card.files[rel] = text;
+  card.files[rel] = text === null ? {base64: bytesToBase64(bytes)} : text;
   return "";
 }
 function collectDrop(dataTransfer) {

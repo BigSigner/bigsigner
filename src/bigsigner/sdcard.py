@@ -1,9 +1,11 @@
 """The SD card kept in memory.
 
 The browser page and the tests call mount_memory. An empty mounted card is
-inserted. Nothing is read from a folder on disk.
+inserted. Nothing is read from a folder on disk. A text file is a string. A
+non-text file is stored as bytes, from a ``{"base64": "..."}`` value.
 """
 
+import base64
 from pathlib import Path
 
 
@@ -35,7 +37,8 @@ def memory_snapshot() -> dict | None:
     """The mounted card, or None when no card is inserted."""
     if _memory is None:
         return None
-    return {"dirs": sorted(_memory["dirs"]), "files": dict(_memory["files"])}
+    files = {path: _export_file(value) for path, value in _memory["files"].items()}
+    return {"dirs": sorted(_memory["dirs"]), "files": files}
 
 
 def consume_memory_change() -> dict | None:
@@ -101,7 +104,7 @@ def _normalize_memory(card: dict) -> dict:
     if not isinstance(raw_files, dict):
         raise SdError("The SD card data is not valid.")
     dirs: set[str] = set()
-    files: dict[str, str] = {}
+    files: dict[str, str | bytes] = {}
     for item in raw_dirs:
         if not isinstance(item, str):
             continue
@@ -109,7 +112,10 @@ def _normalize_memory(card: dict) -> dict:
         if rel:
             _remember_dir(dirs, rel)
     for path, text in raw_files.items():
-        if not isinstance(path, str) or not isinstance(text, str):
+        if not isinstance(path, str):
+            continue
+        stored = _stored_file(text)
+        if stored is None:
             continue
         rel = _safe_memory_path(path)
         if not rel or rel in dirs:
@@ -119,11 +125,33 @@ def _normalize_memory(card: dict) -> dict:
             _remember_dir(dirs, parent)
         if rel in dirs:
             continue
-        files[rel] = text
+        files[rel] = stored
     for path in list(files):
         if path in dirs:
             del files[path]
     return {"dirs": dirs, "files": files}
+
+
+def _stored_file(value):
+    """A text string, the bytes of a base64 file, or None when the value is unusable."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, dict):
+        encoded = value.get("base64")
+        if isinstance(encoded, str):
+            try:
+                return base64.b64decode(encoded, validate=True)
+            except Exception:
+                return None
+    return None
+
+
+def _export_file(value):
+    if isinstance(value, bytes):
+        return {"base64": base64.b64encode(value).decode("ascii")}
+    return value
 
 
 def _remember_dir(dirs: set[str], relative: str) -> None:
@@ -186,12 +214,16 @@ def _read_memory(relative: str, raw: bool = False) -> str:
     path = _memory_path(relative)
     if not path or path in _memory["dirs"] or path not in _memory["files"]:
         raise SdError("That is not a file.")
-    data = _memory["files"][path].encode("utf-8")
+    stored = _memory["files"][path]
+    data = stored if isinstance(stored, bytes) else stored.encode("utf-8")
     if len(data) > 256_000:
         raise SdError("That file is too large.")
     if b"\x00" in data:
         raise SdError("That file is not text.")
-    text = data.decode("utf-8")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SdError("That file is not text.") from exc
     return text if raw else text.strip()
 
 
