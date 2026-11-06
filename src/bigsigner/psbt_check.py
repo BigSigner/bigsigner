@@ -70,6 +70,10 @@ def check_loaded_psbt(session, wallet_index: int, text: str) -> PSBT:
         _sighash(wallet, psbt.inputs[index])
         _sequence(psbt.inputs[index], transaction.vin[index])
     _outputs(session, wallet, psbt)
+    if _all_inputs_signed_by_wallet(session, wallet, psbt):
+        raise ReviewError(
+            f"A transaction whose inputs are already signed by this wallet is {UNSUPPORTED}."
+        )
     return psbt
 
 
@@ -397,6 +401,54 @@ def _push_only(data: bytes) -> bool:
         if index > len(data):
             return False
     return True
+
+
+def _all_inputs_signed_by_wallet(session, wallet, psbt: PSBT) -> bool:
+    """True when every input already has a signature from each seed this wallet holds.
+
+    Other cosigners may still be missing. A watch-only wallet has no seed, so it
+    is not treated as having signed.
+    """
+    if not any(session._seed_for(fingerprint) is not None for fingerprint in wallet.fingerprints):
+        return False
+    taproot = wallet.role == SINGLESIG_TAPROOT
+    for scope in psbt.inputs:
+        keys = _our_signing_keys(session, wallet, scope)
+        if not keys or not all(_has_our_signature(scope, key, taproot) for key in keys):
+            return False
+    return True
+
+
+def _our_signing_keys(session, wallet, scope):
+    keys = []
+    for _pubkey, derivation in _derivation_items(scope):
+        fingerprint = derivation.fingerprint
+        if fingerprint not in wallet.fingerprints or session._seed_for(fingerprint) is None:
+            continue
+        row = _parse_path(list(derivation.derivation))
+        if row["branch"] is None:
+            continue
+        keys.append(_child_key(session, wallet, fingerprint, row))
+    return keys
+
+
+def _has_our_signature(scope, pubkey, taproot: bool) -> bool:
+    for signed in scope.partial_sigs:
+        if _same_key(signed, pubkey, taproot):
+            return True
+    if taproot:
+        for signed, _leaf in getattr(scope, "taproot_sigs", {}):
+            if _same_key(signed, pubkey, True):
+                return True
+        if b"\x13" in getattr(scope, "unknown", {}):
+            return True
+        witness = scope.final_scriptwitness
+        return witness is not None and len(witness.items) == 1 and len(witness.items[0]) in (64, 65)
+    witness = scope.final_scriptwitness
+    if witness is None:
+        return False
+    sec = pubkey.sec() if hasattr(pubkey, "sec") else bytes(pubkey)
+    return any(item == sec for item in witness.items)
 
 
 def _outputs(session, wallet, psbt: PSBT):

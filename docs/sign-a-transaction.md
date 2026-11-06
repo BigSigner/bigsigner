@@ -28,7 +28,7 @@ You also get a warning when:
 - the fee is large compared with the amount being spent
 - the transaction contains an OP_RETURN output
 
-An OP_RETURN payload can be read as text or as hex. Any number of OP_RETURN outputs is accepted, including one that carries bitcoin. That matches Bitcoin Core 31's default relay policy: an unspendable output is not dust. Each script must be OP_RETURN followed only by data pushes, and the scripts together must be at most 100000 bytes. Any other output must be Native-Segwit SingleSig, Taproot, or Native-Segwit MultiSig. A Native-Segwit SingleSig output below 294 sats is refused, and a Taproot or Native-Segwit MultiSig output below 330 sats is refused.
+An OP_RETURN payload can be read as text or as hex. Any number of OP_RETURN outputs is accepted, including one that carries bitcoin. That matches Bitcoin Core 31's default relay policy: an unspendable output is not dust. Each script must be OP_RETURN followed only by data pushes, and the scripts together must be at most 100000 bytes. Any other output must be Native-Segwit SingleSig, Taproot, or Native-Segwit MultiSig. A Native-Segwit SingleSig output below 294 sats is refused, and a Taproot or Native-Segwit MultiSig output below 330 sats is refused. A transaction whose inputs are already signed by every seed this wallet holds is refused, even when a multisig still needs signatures from other wallets.
 
 ## Signing
 

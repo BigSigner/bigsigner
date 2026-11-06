@@ -362,6 +362,76 @@ def test_each_psbt_refusal_names_the_unsupported_case():
     _raises(session, foreign, "derived address does not match the PSBT")
 
 
+def test_a_transaction_already_signed_by_this_wallet_is_refused():
+    from embit.descriptor.checksum import checksum
+    from embit.script import Witness
+
+    from bigsigner.session import _account_path, _public_for
+    from test_domain import LEGAL, expression
+
+    session = _native()
+    _fingerprint, child, _path = _child(session)
+    signed = _psbt(session)
+    signed.inputs[0].partial_sigs[child.key] = b"\x30"
+    _raises(session, signed, "already signed")
+
+    partial = _psbt(session, extra_input=True)
+    partial.inputs[0].partial_sigs[child.key] = b"\x30"
+    assert check_loaded_psbt(session, 0, partial).tx.version == 2
+    finalized = _psbt(session)
+    finalized.inputs[0].final_scriptwitness = Witness([b"\x30", child.key.sec()])
+    _raises(session, finalized, "already signed")
+
+    taproot = _native_taproot()
+    key_spend = _psbt(taproot, sighash=None)
+    key_spend.inputs[0].final_scriptwitness = Witness([b"\x11" * 64])
+    _raises(taproot, key_spend, "already signed")
+    field = _psbt(taproot, sighash=None)
+    field.inputs[0].unknown = {b"\x13": b"\x22" * 64}
+    _raises(taproot, field, "already signed")
+
+    multi = Session()
+    multi.add_mnemonic(ABANDON.split())
+    first = expression(ABANDON, "m/48h/0h/0h/2h")
+    second = expression(LEGAL, "m/48h/0h/0h/2h")
+    body = f"wsh(sortedmulti(2,{first},{second}))"
+    multi.add_text(f"{body}#{checksum(body)}")
+    wallet = multi.wallets[0]
+    receive = multi.addresses(0, 0, 0, 1)[0]
+    script = address_to_scriptpubkey(receive)
+    destination = address_to_scriptpubkey("bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu")
+    tx = Transaction(
+        version=2,
+        vin=[TransactionInput(b"\x11" * 32, 0, sequence=0xFFFFFFFD)],
+        vout=[TransactionOutput(50_000, destination)],
+    )
+    psbt = PSBT(tx)
+    psbt.inputs[0].witness_utxo = TransactionOutput(100_000, script)
+    ours = None
+    for fingerprint in wallet.fingerprints:
+        stored = _public_for(multi, fingerprint, wallet.role, 0)
+        derived = stored.xpub.derive("m/0/0")
+        path = _account_path("main", wallet.role, 0) + [0, 0]
+        psbt.inputs[0].bip32_derivations[derived.key] = DerivationPath(fingerprint, path)
+        if multi._seed_for(fingerprint) is not None:
+            ours = derived.key
+    psbt.inputs[0].partial_sigs[ours] = b"\x30"
+    _raises(multi, psbt, "already signed")
+
+
+def _native_taproot():
+    from embit import bip32, bip39
+    from embit.descriptor.checksum import checksum
+
+    session = Session()
+    session.add_mnemonic(ABANDON.split())
+    root = bip32.HDKey.from_seed(bip39.mnemonic_to_seed(ABANDON))
+    public = root.derive("m/86h/0h/0h").to_public()
+    key = f"[{root.my_fingerprint.hex()}/86h/0h/0h]{public.to_string()}/<0;1>/*"
+    session.add_text(f"tr({key})#{checksum('tr(' + key + ')')}")
+    return session
+
+
 def test_a_deep_psbt_problem_opens_its_own_screen():
     session = _native()
     wallet = session.wallets[0]
