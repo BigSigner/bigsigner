@@ -2,7 +2,7 @@ import pytest
 
 from bigsigner.nicknames import normalize_nickname
 from bigsigner.parse import ParseError, parse_key_expression, parse_wallet
-from bigsigner.session import Session, SessionError
+from bigsigner.session import Session, SessionError, _passphrase_id
 from embit import bip32, bip39
 from embit.descriptor.checksum import checksum
 
@@ -194,16 +194,18 @@ def test_the_same_passphrase_keeps_its_number_until_no_seed_uses_it():
     second_words = mnemonic_from_bytes(b"\x11" * 16).split()
     second = session.add_mnemonic(second_words, passphrase="shared")
     assert first["fingerprint"] != second["fingerprint"]
-    assert session.passphrases["shared"] == 1
+    shared = _passphrase_id("shared")
+    assert "shared" not in session.passphrases
+    assert session.passphrases[shared] == 1
     first_key = session.fingerprints[first["fingerprint"]].keys[0]
     assert session.seed_summary(first_key) == "abandon\u2026 + Passphrase1"
     assert session.generated_from(first_key) == "Generated from a 12 words seed + passphrase1."
     session.delete_key(first["fingerprint"], 0)
-    assert session.passphrases["shared"] == 1
+    assert session.passphrases[shared] == 1
     session.delete_key(second["fingerprint"], 0)
-    assert "shared" not in session.passphrases
+    assert shared not in session.passphrases
     again = session.add_mnemonic(ABANDON, passphrase="shared")
-    assert session.passphrases["shared"] == 2
+    assert session.passphrases[_passphrase_id("shared")] == 2
     again_key = session.fingerprints[again["fingerprint"]].keys[0]
     assert "Passphrase2" in session.seed_summary(again_key)
     assert session.generated_from(again_key) == "Generated from a 12 words seed + passphrase2."

@@ -1,6 +1,8 @@
 """In-memory keys and wallets. Nothing here is written to disk."""
 
+import hashlib
 import unicodedata
+from secrets import compare_digest
 
 from embit import bip32, bip39
 from embit.bip85 import derive_mnemonic
@@ -208,10 +210,11 @@ class Session:
 
     def passphrase_index(self, passphrase: str) -> int:
         """The stable number for a loaded passphrase. A new phrase gets the next number."""
-        if passphrase not in self.passphrases:
+        key = _passphrase_id(passphrase)
+        if key not in self.passphrases:
             self.passphrase_counter += 1
-            self.passphrases[passphrase] = self.passphrase_counter
-        return self.passphrases[passphrase]
+            self.passphrases[key] = self.passphrase_counter
+        return self.passphrases[key]
 
     def deletion_message(self, fingerprint: bytes, key_index: int) -> str:
         """What the confirmation dialog should say before this key is deleted."""
@@ -662,7 +665,9 @@ class Session:
 
     def _reject_seed_collision(self, fingerprint, mnemonic, passphrase):
         for key in self._seeds(fingerprint):
-            if key.mnemonic == mnemonic and key.passphrase == passphrase:
+            same_words = compare_digest(" ".join(key.mnemonic).encode(), " ".join(mnemonic).encode())
+            same_phrase = compare_digest((key.passphrase or "").encode(), (passphrase or "").encode())
+            if same_words & same_phrase:
                 raise SessionError("This seed is already loaded.")
             raise SessionError(
                 "A different seed with this fingerprint is already loaded. "
@@ -701,7 +706,7 @@ class Session:
         for record in self.fingerprints.values():
             if any(key.has_seed and key.passphrase == passphrase for key in record.keys):
                 return
-        self.passphrases.pop(passphrase, None)
+        self.passphrases.pop(_passphrase_id(passphrase), None)
 
     def seed_summary(self, key) -> str:
         summary = f"{key.mnemonic[0].lower()}\u2026"
@@ -817,6 +822,11 @@ def _account_lost_by_removing(wallet, fingerprint: bytes, removed, remaining):
     if _keys_cover_account(remaining, wallet.role, removed.account):
         return None
     return removed.account
+
+
+def _passphrase_id(passphrase: str) -> bytes:
+    """The SHA-256 of a passphrase, used as the key for its display number."""
+    return hashlib.sha256(passphrase.encode()).digest()
 
 
 def _clean_mnemonic(words) -> list[str]:
