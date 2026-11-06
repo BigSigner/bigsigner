@@ -344,6 +344,17 @@ def test_memory_card_rejects_a_bad_shape():
         mount_memory({"dirs": "seeds", "files": {}})
 
 
+def test_show_export_omits_the_passphrase_button_when_there_is_none():
+    app = App()
+    added = app.session.add_mnemonic(ABANDON.split())
+    app.selected_fp = added["fingerprint"]
+    app.screen = "key"
+    app._act("show-export")
+    app.render()
+    labels = [hit["label"] for hit in app.hits if hit["action"] in ("show-seed", "show-passphrase", "export-seed")]
+    assert labels == ["Show Seed", "Export Seed to SD Card"]
+
+
 def test_export_seed_writes_words_that_load_from_the_card():
     mount_memory({"files": {}})
     app = App()
@@ -353,10 +364,15 @@ def test_export_seed_writes_words_that_load_from_the_card():
     app.scroll["key"] = 10_000
     app.render()
     tops = {hit["label"]: hit["box"][1] for hit in app.hits}
-    assert tops["Show Seed"] < tops["Show Passphrase"] < tops["Export Seed to SD Card"]
-    assert tops["Export Seed to SD Card"] < tops["Derive an Extended Public Key"]
+    assert "Show Seed" not in tops
+    assert tops["Show/Export"] < tops["Derive an Extended Public Key"]
     assert tops["Derive an Extended Public Key"] < tops["Create a Copy of This Seed with a Different Passphrase"]
     assert tops["Create a Copy of This Seed with a Different Passphrase"] < tops["Derive a BIP85 Child Seed"]
+    app._act("show-export")
+    assert app.screen == "show-export"
+    app.render()
+    tops = {hit["label"]: hit["box"][1] for hit in app.hits}
+    assert tops["Show Seed"] < tops["Show Passphrase"] < tops["Export Seed to SD Card"]
     app._act("export-seed")
     assert app.screen == "seed-backup"
     app.render()
@@ -369,7 +385,7 @@ def test_export_seed_writes_words_that_load_from_the_card():
     body = read_text(app.filename)
     assert body == ABANDON
     assert "secret" not in body
-    assert app.screen == "key"
+    assert app.screen == "show-export"
 
     write_text("spaced.txt", "  " + ABANDON.replace(" ", "\n"))
     fresh = App()

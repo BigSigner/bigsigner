@@ -500,6 +500,7 @@ class App:
             "warning": self._warning,
             "keys": self._keys,
             "key": self._key,
+            "show-export": self._show_export,
             "derive-type": self._derive_type,
             "bip85": self._bip85,
             "seed-backup": self._seed_backup,
@@ -1174,6 +1175,7 @@ class App:
         "add-sd": lambda self: self._open_sd("key"),
         "sd-up": _act_sd_up,
         "export-address": lambda self: self._open_address_export(),
+        "show-export": lambda self: self._open_show_export(),
         "export-seed": lambda self: self._open_seed_export(),
         "seed-backup-continue": lambda self: self._continue_seed_export(),
         "export-key": lambda self: self._open_export("stored"),
@@ -2597,12 +2599,7 @@ class App:
                     frame.text(note, MARGIN, y - offset, size=TITLE_SIZE, fill=MUTED)
                 y += self._text_height(frame, note, TITLE_SIZE)
                 copy = "Create a Copy of This Seed with a Passphrase"
-            y = self._flow_button(frame, y, "Show Seed", "show-seed", paint, offset)
-            if key.passphrase:
-                y = self._flow_button(frame, y, "Show Passphrase", "show-passphrase", paint, offset)
-            y = self._flow_button(
-                frame, y, "Export Seed\nto SD Card", "export-seed", paint, offset, "Export Seed to SD Card",
-            )
+            y = self._flow_button(frame, y, "Show/Export", "show-export", paint, offset)
             y = self._flow_button(frame, y, "Derive an Extended Public Key", "derive-menu", paint, offset)
             y = self._flow_button(frame, y, copy, "copy-passphrase", paint, offset)
             return self._flow_button(
@@ -2625,6 +2622,24 @@ class App:
         y += 20
         y = self._flow_button(frame, y, "Show Full Details", "show-qr", paint, offset)
         return self._flow_button(frame, y, "Export to SD Card", "export-key", paint, offset)
+
+    def _open_show_export(self):
+        _record, key = self._stored_key()
+        if key is None or not key.has_seed:
+            self.set_error("This seed is no longer loaded.")
+            return
+        self.go("show-export")
+
+    def _show_export(self, frame: Frame):
+        _record, key = self._stored_key()
+        frame.header("Show/Export", "back")
+        if key is None or not key.has_seed:
+            frame.text("This seed is no longer loaded.", MARGIN, HEADER + 24, size=TITLE_SIZE)
+            return
+        y = frame.button(HEADER + 24, "Show Seed", "show-seed")
+        if key.passphrase:
+            y = frame.button(y, "Show Passphrase", "show-passphrase")
+        frame.button(y, "Export Seed to SD Card", "export-seed")
 
     def _flow_text(self, frame: Frame, y: int, value: str, paint: bool, offset: int, size: int, fill=INK, mono: bool = False) -> int:
         if paint:

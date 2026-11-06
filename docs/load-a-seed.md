@@ -22,7 +22,7 @@ The fingerprint is the first four bytes of the HASH160 of the master public key.
 
 ## Export the words
 
-Export Seed to SD Card is under Show Seed. The next screen warns that a file is not a complete backup: keep a physical copy on paper or metal as well, and wipe the card thoroughly before it is used in anything connected to the internet. Deleting the file is not enough. Continue then writes a text file of the words separated by spaces. There is no separate standard file format for a BIP39 seed. The passphrase is not included. Load from SD Card reads that file, trims the surrounding space, and accepts the same words with extra spaces, newlines, or commas.
+Show/Export is under the note about the passphrase. It opens Show Seed, Show Passphrase when a passphrase is set, and Export Seed to SD Card. The next screen warns that a file is not a complete backup: keep a physical copy on paper or metal as well, and wipe the card thoroughly before it is used in anything connected to the internet. Deleting the file is not enough. Continue then writes a text file of the words separated by spaces. There is no separate standard file format for a BIP39 seed. The passphrase is not included. Load from SD Card reads that file, trims the surrounding space, and accepts the same words with extra spaces, newlines, or commas.
 
 ## Derive a key
 

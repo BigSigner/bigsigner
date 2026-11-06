@@ -306,11 +306,9 @@ def check_menu_and_keys(panel: Panel):
 def check_seed_key(panel: Panel):
     print("Seed Key", flush=True)
     snap = panel.pull()
-    show = require_hit(snap, "Show Seed")
-    export = require_hit(snap, "Export Seed to SD Card")
+    show = require_hit(snap, "Show/Export")
     derive = require_hit(snap, "Derive an Extended Public Key")
-    assert show["box"][3] <= export["box"][1]
-    assert export["box"][3] <= derive["box"][1]
+    assert show["box"][3] <= derive["box"][1]
     assert require_text(snap, "Seed Key")["box"][3] <= HEADER
     panel.shot("seed-key")
     panel.tap("Derive an Extended Public Key")
