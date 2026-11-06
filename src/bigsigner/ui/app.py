@@ -356,6 +356,7 @@ class App:
         self.psbt_inputs_open = False
         self.psbt_change_open = True
         self.psbt_more_open = False
+        self.psbt_txid_open = False
         self.psbt_found = {}
         self.psbt_search_from = {}
         self.psbt_search = None
@@ -368,6 +369,7 @@ class App:
         self.psbt_qr_part = 0
         self.input_qr_index = 0
         self.input_qr_format = 0
+        self.input_explorer = 0
         self._input_qr_images = {}
         self._psbt_qr_at = None
         self._psbt_qr_parts_cache = []
@@ -1304,6 +1306,7 @@ class App:
         "psbt-toggle-inputs": lambda self: self._toggle_psbt_inputs(),
         "psbt-toggle-change": lambda self: self._toggle_psbt_change(),
         "psbt-toggle-more": lambda self: self._toggle_psbt_more(),
+        "psbt-toggle-txid": lambda self: self._toggle_psbt_txid(),
         "psbt-sign": lambda self: self._sign_reviewed_psbt(),
         "psbt-show-qr": lambda self: self._open_psbt_qr(),
         "psbt-export": lambda self: self._open_psbt_export(),
@@ -1313,6 +1316,8 @@ class App:
         "psbt-qr-prev": lambda self: self._step_psbt_qr(-1),
         "input-qr-next": lambda self: self._step_input_qr(1),
         "input-qr-prev": lambda self: self._step_input_qr(-1),
+        "input-explorer-next": lambda self: self._step_input_explorer(1),
+        "input-explorer-prev": lambda self: self._step_input_explorer(-1),
         "psbt-op-next": lambda self: self._step_psbt_op(1),
         "psbt-op-prev": lambda self: self._step_psbt_op(-1),
         "review-sample": _act_review_sample,
@@ -5582,6 +5587,22 @@ class App:
         frame.draw.text((x, text_y), label, font=face, fill=INK)
         frame.mark(label, frame.draw.textbbox((x, text_y), label, font=face))
 
+    def _choice_control(self, frame: Frame, y: int, name: str, previous: str, following: str):
+        """A named choice in the same row shape as Brightness, sitting above it."""
+        side = 64
+        height = 52
+        left = (MARGIN, y, MARGIN + side, y + height)
+        right = (WIDTH - MARGIN - side, y, WIDTH - MARGIN, y + height)
+        self._brightness_button(frame, left, "<", True, previous)
+        self._brightness_button(frame, right, ">", True, following)
+        face = font(TITLE_SIZE)
+        text_width = frame.draw.textlength(name, font=face)
+        text_left, text_top, _text_right, text_bottom = frame.draw.textbbox((0, 0), name, font=face)
+        text_y = y + (height - (text_bottom - text_top)) / 2 - text_top
+        x = (WIDTH - text_width) / 2 - text_left
+        frame.draw.text((x, text_y), name, font=face, fill=INK)
+        frame.mark(name, frame.draw.textbbox((x, text_y), name, font=face))
+
     def _brightness_button(self, frame: Frame, box, label: str, enabled: bool, action: str):
         fill = BLUE if enabled else (186, 190, 196)
         text = WHITE if enabled else (132, 136, 142)
@@ -7049,6 +7070,7 @@ class App:
         self.psbt_inputs_open = self.psbt_view["inputs_open"]
         self.psbt_change_open = bool(self.psbt_view["change_outputs"])
         self.psbt_more_open = False
+        self.psbt_txid_open = False
         self.psbt_found = {}
         self.psbt_search_from = {}
         self.psbt_search = None
@@ -7113,12 +7135,17 @@ class App:
     def _open_input_qr(self, index: int):
         self.input_qr_index = index
         self.input_qr_format = 0
+        self.input_explorer = 0
         self._input_qr_images = {}
         self.go("psbt-input-qr")
 
     def _step_input_qr(self, delta: int):
         self.input_qr_format = (self.input_qr_format + delta) % 3
-        self._input_qr_images = {}
+
+    def _step_input_explorer(self, delta: int):
+        from ..psbt_view import EXPLORER_NETWORKS
+
+        self.input_explorer = (self.input_explorer + delta) % len(EXPLORER_NETWORKS)
 
     def _toggle_psbt_outputs(self):
         self.psbt_outputs_open = not self.psbt_outputs_open
@@ -7131,6 +7158,9 @@ class App:
 
     def _toggle_psbt_more(self):
         self.psbt_more_open = not self.psbt_more_open
+
+    def _toggle_psbt_txid(self):
+        self.psbt_txid_open = not self.psbt_txid_open
 
     def _begin_psbt_search(self, text: str):
         index, _, start = text.partition("-")

@@ -113,13 +113,18 @@ def test_warnings_name_op_return_fee_locktime_and_rbf():
     assert f"0x{view['inputs'][0]['sequence']:08X}" == "0xFFFFFFFE"
     txid = view["inputs"][0]["txid"]
     assert input_qr_text("main", txid, 0, "raw") == f"{txid}:0"
+    assert view["txid"] == disabled.tx.txid().hex()
+    assert view["txid_rows"] == [view["txid"][index : index + 16] for index in range(0, 64, 16)]
     shown = _psbt(session)
     shown.inputs[0].txid = bytes(range(32))
     displayed = bytes(range(32)).hex()
     assert describe_psbt(session, 0, shown)["inputs"][0]["txid"] == displayed
     assert f"{displayed}:0" in psbt_yaml(shown)
     assert input_qr_text("main", txid, 0, "mempool") == f"https://mempool.space/tx/{txid}:0"
+    assert input_qr_text("main", txid, 0, "mempool", "signet") == f"https://mempool.space/tx/{txid}:0"
     assert input_qr_text("test", txid, 1, "blockstream") == f"https://blockstream.info/testnet/tx/{txid}#output:1"
+    assert input_qr_text("regtest", txid, 1, "mempool", "testnet4") == f"https://mempool.space/testnet4/tx/{txid}:1"
+    assert input_qr_text("test", txid, 1, "blockstream", "signet") == f"https://blockstream.info/signet/tx/{txid}#output:1"
     assert view["inputs_open"] is True
 
     blocks = _psbt(session, sequence=1)
@@ -218,6 +223,76 @@ def test_signed_psbt_qr_parts_and_a_binary_file_round_trip():
         assert read_bytes("signed.psbt") == raw
     finally:
         unmount_memory()
+
+
+def _box_top(items, text):
+    matches = [item for item in items if item.get("text") == text or item.get("label") == text]
+    assert matches, text
+    return min(item["box"][1] for item in matches)
+
+
+def test_transaction_id_starts_closed_and_change_sits_above_inputs():
+    session = _native()
+    app = App()
+    app.session = session
+    app.wallet_index = 0
+    psbt = _psbt(session)
+    _pay_this_wallet(psbt, session, branch=1, index=1)
+    app._accept_psbt_text(base64.b64encode(psbt.serialize()).decode(), "file")
+    assert app.screen == "psbt-yaml"
+    assert app.psbt_txid_open is False
+    app.psbt_change_open = False
+    app.render()
+    assert any(hit["label"] == "Transaction Id" for hit in app.hits)
+    rows = app.psbt_view["txid_rows"]
+    assert rows[0] not in [item["text"] for item in app.texts]
+    app._act("psbt-toggle-txid")
+    app.render()
+    assert [item["text"] for item in app.texts if item["text"] in rows] == rows
+
+    app.psbt_txid_open = False
+    app.scroll["psbt-yaml"] = 10**9
+    app.render()
+    change_top = _box_top(app.texts, "1 Change Output")
+    input_top = _box_top(app.hits, "1 Input")
+    assert change_top < input_top
+
+
+def _marked_top(items, text):
+    matches = [item for item in items if item.get("text") == text or item.get("label") == text]
+    assert matches, text
+    return min(item["box"][1] for item in matches)
+
+
+def test_a_test_network_link_chooses_testnet_testnet4_or_signet():
+    session = _native()
+    app = App()
+    app.session = session
+    app.wallet_index = 0
+    app._accept_psbt_text(base64.b64encode(_psbt(session).serialize()).decode(), "file")
+    app.session.network = "test"
+    app._open_input_qr(0)
+    app.input_qr_format = 1
+    app.render()
+    assert _marked_top(app.texts, "Testnet") < _marked_top(app.texts, "Brightness")
+    assert _marked_top(app.texts, "Brightness") < _marked_top(app.texts, "Mempool.space")
+    assert any(url.startswith("https://mempool.space/testnet/tx/") for url in app._input_qr_images)
+    app._act("input-explorer-next")
+    app.render()
+    assert any(item["text"] == "Testnet4" for item in app.texts)
+    assert any("/testnet4/tx/" in url for url in app._input_qr_images)
+    app._act("input-explorer-next")
+    app.input_qr_format = 2
+    app.render()
+    assert any(item["text"] == "Signet" for item in app.texts)
+    assert any(url.startswith("https://blockstream.info/signet/tx/") for url in app._input_qr_images)
+    app.input_qr_format = 0
+    app.render()
+    assert not any(item["text"] == "Signet" for item in app.texts)
+    app.session.network = "main"
+    app.input_qr_format = 1
+    app.render()
+    assert not any(item["text"] in ("Testnet", "Testnet4", "Signet") for item in app.texts)
 
 
 def test_the_signing_screen_offers_a_signed_qr_and_an_sd_file():

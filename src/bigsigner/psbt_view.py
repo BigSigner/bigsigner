@@ -192,21 +192,31 @@ def sequence_text(sequence: int) -> str:
     return f"0x{int(sequence):08X}"
 
 
-def input_qr_text(network: str, txid: str, vout: int, kind: str) -> str:
+# Paths both mempool.space and blockstream.info publish. Neither site has regtest.
+EXPLORER_NETWORKS = (
+    ("testnet", "Testnet"),
+    ("testnet4", "Testnet4"),
+    ("signet", "Signet"),
+)
+
+
+def input_qr_text(network: str, txid: str, vout: int, kind: str, explorer: str = "testnet") -> str:
     """A QR payload for one previous output.
 
     Mempool.space accepts ``txid:vout`` in the transaction URL and highlights
     that output. Blockstream.info uses ``#output:`` for the same output.
+    Testnet and regtest choose among the public networks both sites publish.
     """
     point = f"{txid}:{int(vout)}"
     if kind == "raw":
         return point
-    test = network == "test"
+    prefix = ""
+    if network in ("test", "regtest"):
+        slug = explorer if explorer in {item[0] for item in EXPLORER_NETWORKS} else "testnet"
+        prefix = f"/{slug}"
     if kind == "mempool":
-        host = "https://mempool.space/testnet" if test else "https://mempool.space"
-        return f"{host}/tx/{point}"
-    host = "https://blockstream.info/testnet" if test else "https://blockstream.info"
-    return f"{host}/tx/{txid}#output:{int(vout)}"
+        return f"https://mempool.space{prefix}/tx/{point}"
+    return f"https://blockstream.info{prefix}/tx/{txid}#output:{int(vout)}"
 
 
 def txid_rows(txid: str) -> list[str]:
@@ -238,9 +248,12 @@ def describe_psbt(session, wallet_index: int, psbt: PSBT) -> dict:
     locktime = int(transaction.locktime or 0)
     warnings = _warnings(inputs, outputs, change_outputs, fee, locktime)
     relative = [item["index"] for item in inputs if item["relative"]]
+    txid = transaction.txid().hex()
     return {
         "wallet_name": session.wallet_short_name_of(wallet),
         "account_line": account_line(wallet.fingerprints, wallet.accounts),
+        "txid": txid,
+        "txid_rows": txid_rows(txid),
         "locktime": locktime,
         "banner": _banner(locktime),
         "more_info": _more_info(locktime),

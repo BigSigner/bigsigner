@@ -102,7 +102,7 @@ def _hex_left(frame) -> int:
 def paint_input_qr(app, frame):
     from .app import QR_BRIGHTNESS_DEFAULT, _qr_image, _qr_light
 
-    from ..psbt_view import input_qr_text
+    from ..psbt_view import EXPLORER_NETWORKS, input_qr_text
 
     card = _input_card_for_qr(app)
     names = ("Raw", "Mempool.space", "Blockstream.info")
@@ -112,12 +112,15 @@ def paint_input_qr(app, frame):
         frame.text("This input is no longer loaded.", MARGIN, HEADER + 24, size=TITLE_SIZE)
         return
     kind = kinds[app.input_qr_format % 3]
-    text = input_qr_text(app.session.network, card["txid"], card["vout"], kind)
+    slug, label = EXPLORER_NETWORKS[app.input_explorer % len(EXPLORER_NETWORKS)]
+    text = input_qr_text(app.session.network, card["txid"], card["vout"], kind, slug)
     image = app._input_qr_images.get(text)
     if image is None:
         image = _qr_image(text, QR_BOX, light=_qr_light(QR_BRIGHTNESS_DEFAULT))
         app._input_qr_images[text] = image
     _paste_qr(frame, image)
+    if app.session.network in ("test", "regtest") and kind != "raw":
+        app._choice_control(frame, _explorer_y(), label, "input-explorer-prev", "input-explorer-next")
     app._brightness_control(frame, _brightness_y())
     app._format_switcher(frame, names[app.input_qr_format % 3], "input-qr-prev", "input-qr-next")
 
@@ -179,6 +182,10 @@ def _brightness_y() -> int:
     return _FORMAT_TOP - _CONTROL_GAP - _BRIGHTNESS_HEIGHT
 
 
+def _explorer_y() -> int:
+    return _brightness_y() - _CONTROL_GAP - _BRIGHTNESS_HEIGHT
+
+
 def _paste_qr(frame, image) -> int:
     left = (WIDTH - image.width) // 2
     top = HEADER + MARGIN
@@ -191,6 +198,10 @@ def _body(app, frame, view, paint: bool, offset: int) -> int:
     y = _centered_flow(frame, "Spending from Wallet:", y, paint, offset, TITLE_SIZE, INK)
     y = _name_center(frame, view["wallet_name"], y, paint, offset, TITLE_SIZE, INK)
     y = _wrapped_center(frame, view["account_line"], y, paint, offset, TITLE_SIZE, INK)
+    y = _chevron(frame, y, paint, offset, "Transaction Id", app.psbt_txid_open, "psbt-toggle-txid")
+    if app.psbt_txid_open:
+        for row in view["txid_rows"]:
+            y = _centered_flow(frame, row, y, paint, offset, TXID_SIZE, INK, mono=True)
     if view["banner"]:
         y = _wrapped(app, frame, view["banner"], y + 8, paint, offset, TITLE_SIZE, MUTED)
     if view["more_info"]:
@@ -238,16 +249,6 @@ def _body(app, frame, view, paint: bool, offset: int) -> int:
     if view["relative_line"]:
         y = _wrapped(app, frame, view["relative_line"], y, paint, offset, TITLE_SIZE, WARNING)
     y += 8
-    y = _chevron(frame, y, paint, offset, _count_label("Input", len(view["inputs"])), app.psbt_inputs_open, "psbt-toggle-inputs")
-    if app.psbt_inputs_open:
-        for card in view["inputs"]:
-            y = _place_card(
-                app, frame, y, paint, offset, ("input", _input_shape(view, card)),
-                lambda do_paint, off, start=y, item=card: _input_card(
-                    app, frame, start, do_paint, off, item,
-                ),
-            )
-    y += 8
     change_outputs = view["change_outputs"]
     if not change_outputs:
         y = _section_label(frame, y, paint, offset, "0 Change Outputs")
@@ -264,6 +265,16 @@ def _body(app, frame, view, paint: bool, offset: int) -> int:
                         app, frame, start, do_paint, off, item,
                     ),
                 )
+    y += 8
+    y = _chevron(frame, y, paint, offset, _count_label("Input", len(view["inputs"])), app.psbt_inputs_open, "psbt-toggle-inputs")
+    if app.psbt_inputs_open:
+        for card in view["inputs"]:
+            y = _place_card(
+                app, frame, y, paint, offset, ("input", _input_shape(view, card)),
+                lambda do_paint, off, start=y, item=card: _input_card(
+                    app, frame, start, do_paint, off, item,
+                ),
+            )
     y += 12
     y = app._flow_button(frame, y, "Sign Transaction", "psbt-sign", paint, offset)
     return y
