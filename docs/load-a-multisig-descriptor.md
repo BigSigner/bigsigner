@@ -49,7 +49,7 @@ The order of the fingerprints is a separate fact from that identity. The descrip
 
 ## Short name
 
-Messages name a wallet briefly. A single-signature wallet is the fingerprint's name plus Native-Segwit or Taproot, for example `Wild Crimson Whale 0A Native-Segwit`. A multisig wallet is the threshold, the number of keys, and the fingerprint hex in the wallet's own order, for example `2-of-3 73c5da0a,80dfd80b,aabbccdd`. The long animal names are not repeated for every cosigner.
+Messages name a wallet briefly. A single-signature wallet is the fingerprint's name plus the type in brackets, for example `Wild Crimson Whale 0A (Native-Segwit)` or `Wild Crimson Whale 0A (Taproot)`. A multisig wallet is the threshold, the number of keys, and the fingerprint hex in the wallet's own order, for example `2-of-3 73c5da0a,80dfd80b,aabbccdd`. The long animal names are not repeated for every cosigner.
 
 ## Importing a descriptor
 

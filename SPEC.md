@@ -236,7 +236,7 @@ When it's a seed, or a seed + passphrase, Show/Export sits under the passphrase 
 
 And finally there should be a red Delete Seed button on a seed, and a red Delete Key button on an external key. Either button warns the user before deleting.
 Key deletion might cause some wallets to become unusable - because one of their key expressions will no longer be derivable for any account index. For example, if the key expression in a wallet's descriptor depends on a fingerprint with a seed and the seed is deleted, or if it depends on a fingerprint which has multiple Xpub key expressions and we delete all of them.
-If the key deletion would make a wallet unusable, we should warn the user that the wallet will also be deleted. When exactly one wallet is named, the warning uses its short name in quotes, for example Wallet "Grateful Ivory Impala 0A Native-Segwit".
+If the key deletion would make a wallet unusable, we should warn the user that the wallet will also be deleted. When exactly one wallet is named, the warning uses its short name in quotes, for example Wallet "Grateful Ivory Impala 0A (Native-Segwit)".
 If a wallet will simply be affected by the key deletion (i.e. some account index will no longer be derivable), we warn about that as well, again quoting that wallet's short name when only one wallet is affected.
 
 ### Scan QR Code screen (for seed or xpub key expression)

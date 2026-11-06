@@ -507,7 +507,7 @@ class Session:
         """A short label for messages. Multisig uses hex, not the long animal name."""
         if role != MULTISIG_NATIVE:
             kind = "Taproot" if role == SINGLESIG_TAPROOT else "Native-Segwit"
-            return f"{animal_name(fingerprints[0])} {kind}"
+            return f"{animal_name(fingerprints[0])} ({kind})"
         hexes = ",".join(fingerprint.hex() for fingerprint in fingerprints)
         return f"{int(threshold)}-of-{len(fingerprints)} {hexes}"
 

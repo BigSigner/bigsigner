@@ -318,7 +318,16 @@ def test_each_psbt_refusal_names_the_unsupported_case():
     tap_path = [86 | 0x80000000, path[1], path[2], 0, 0]
     named.inputs[0].bip32_derivations.clear()
     named.inputs[0].bip32_derivations[child.key] = DerivationPath(fingerprint, tap_path)
-    _raises(session, named, "does not belong")
+    try:
+        check_loaded_psbt(session, 0, named)
+    except ReviewError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("wallet")
+    assert message.startswith("This transaction does not belong to wallet ")
+    assert " It belongs to wallet " in message
+    assert "(Native-Segwit)" in message
+    assert "(Taproot)" in message
     foreign = _psbt(session)
     foreign.outputs[0].bip32_derivations[child.key] = DerivationPath(fingerprint, tap_path)
     _raises(session, foreign, "derived address does not match the PSBT")

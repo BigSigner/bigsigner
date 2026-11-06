@@ -91,7 +91,7 @@ def test_single_sig_script_types_stay_distinct():
     native = session.plan_wallet_import(_single(expression(ABANDON, "m/84h/0h/3h")))
     assert taproot["existing"] is None
     assert native["existing"] is session.wallets[0]
-    assert session.wallet_short_name_of(session.wallets[0]).endswith("Native-Segwit")
+    assert session.wallet_short_name_of(session.wallets[0]).endswith("(Native-Segwit)")
     assert session.wallet_short_name_of(session.wallets[0]).startswith(
         session.fingerprints[root_of(ABANDON).my_fingerprint].nickname
     )
@@ -413,7 +413,7 @@ def test_an_already_loaded_wallet_names_the_default_account():
     app.accept_qr(text)
     assert app.screen == "wallet-import-note"
     assert app._wallet_import_message() == (
-        'Wallet "Grateful Ivory Impala 0A Native-Segwit" was already loaded. '
+        'Wallet "Grateful Ivory Impala 0A (Native-Segwit)" was already loaded. '
         "This descriptor points to account-index 0 (default)."
     )
 
@@ -426,7 +426,7 @@ def test_an_already_loaded_wallet_marks_a_nonzero_account_non_default():
     app.scan_kind = "descriptor"
     app.accept_qr(text)
     assert app._wallet_import_message() == (
-        'Wallet "Grateful Ivory Impala 0A Native-Segwit" was already loaded. '
+        'Wallet "Grateful Ivory Impala 0A (Native-Segwit)" was already loaded. '
         "This descriptor points to account-index 3 (non-default)."
     )
 

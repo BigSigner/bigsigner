@@ -194,7 +194,7 @@ def _known_wallet(session, wallet, parsed: list[dict]):
                 current = session.wallet_short_name_of(wallet)
                 name = session.wallet_short_name_of(other)
                 raise ReviewError(
-                    f"This transaction does not belong to {current}. It belongs to {name}."
+                    f"This transaction does not belong to wallet {current}. It belongs to wallet {name}."
                 )
             raise ReviewError(_UNRECOGNIZED)
         if row["fingerprint"] not in wallet.fingerprints:
@@ -206,7 +206,7 @@ def _known_wallet(session, wallet, parsed: list[dict]):
             current = session.wallet_short_name_of(wallet)
             name = session.wallet_short_name_of(other)
             raise ReviewError(
-                f"This transaction does not belong to {current}. It belongs to {name}."
+                f"This transaction does not belong to wallet {current}. It belongs to wallet {name}."
             )
         raise ReviewError(_UNRECOGNIZED)
 
@@ -420,7 +420,7 @@ def _other_wallet_message(session, wallet, rows: list[dict]) -> str | None:
         return None
     current = session.wallet_short_name_of(wallet)
     name = session.wallet_short_name_of(other)
-    return f"This transaction does not belong to {current}. It belongs to {name}."
+    return f"This transaction does not belong to wallet {current}. It belongs to wallet {name}."
 
 
 def _yaml(value, indent: int = 0) -> str:
