@@ -2341,7 +2341,7 @@ class App:
         logo_top = HEADER + 24
         frame.image.paste(mark, ((WIDTH - mark.width) // 2, logo_top), mark)
         version = f"Version {__version__}"
-        version_size = 24
+        version_size = 28
         version_y = logo_top + mark.height + 12
         face = font(version_size)
         version_width = frame.draw.textlength(version, font=face)

@@ -195,13 +195,13 @@ def test_the_sd_card_screen_shows_the_logo_above_the_text():
     assert image.getpixel((WIDTH // 2, HEADER + 60))[0] > 180
     assert image.getpixel((MARGIN + 8, HEADER + 220))[:3] == PAPER
     version = f"Version {__version__}"
-    face = font(24)
+    face = font(28)
     version_width = int(ImageDraw.Draw(image).textlength(version, font=face))
     version_left = (WIDTH - version_width) // 2
     version_y = HEADER + 24 + logo(WIDTH - 48, 180).height + 12
     ink = [
         image.getpixel((x, y))[:3]
-        for y in range(version_y, version_y + 24)
+        for y in range(version_y, version_y + 28)
         for x in range(version_left, version_left + version_width)
         if image.getpixel((x, y))[:3] != PAPER
     ]
