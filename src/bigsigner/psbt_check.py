@@ -11,7 +11,7 @@ from embit.transaction import SIGHASH
 
 from .paths import HARDENED, SINGLESIG_NATIVE, SINGLESIG_TAPROOT, coin_type, format_path
 from .psbt_load import UNREADABLE, psbt_bytes
-from .psbt_review import ReviewError
+from .psbt_review import ReviewError, _tx_weight
 from .session import SessionError, _descriptor, _public_for
 
 UNSUPPORTED = "unsupported by this hardware wallet"
@@ -20,6 +20,8 @@ SEQUENCE_FINAL = 0xFFFFFFFF
 # OP_RETURN output are added together. The amount is not limited: an
 # unspendable output has a dust threshold of zero.
 DATACARRIER_MAX_BYTES = 100_000
+# Bitcoin Core's maximum standard transaction weight. 400000 WU is 100000 vB.
+MAX_STANDARD_TX_WEIGHT = 400_000
 # Bitcoin Core 31 dust thresholds at 3 sat/vB. An output below its threshold
 # is not relayed. The limit follows the receiving script, not the sender.
 NATIVE_DUST_SATS = 294
@@ -60,6 +62,10 @@ def check_loaded_psbt(session, wallet_index: int, text: str) -> PSBT:
     if output_total > sum(amounts):
         raise ReviewError(f"Outputs that add up to more than the inputs are {UNSUPPORTED}.")
     wallet = session._wallet(wallet_index)
+    if _tx_weight(transaction, wallet) > MAX_STANDARD_TX_WEIGHT:
+        raise ReviewError(
+            f"A transaction over {MAX_STANDARD_TX_WEIGHT} weight units (100000 vB) is {UNSUPPORTED}."
+        )
     parsed = [_input_paths(session, wallet, psbt.inputs[index]) for index in range(len(transaction.vin))]
     _same_prefix(parsed)
     _known_wallet(session, wallet, parsed)

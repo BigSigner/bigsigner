@@ -284,7 +284,8 @@ def _op_return_payload(script: Script) -> bytes:
     return data[2:] if len(data) > 2 else b""
 
 
-def _estimate_vsize(transaction: Transaction, inputs, outputs, wallet) -> int:
+def _tx_weight(transaction: Transaction, wallet) -> int:
+    """Weight of the transaction once this wallet has added its signatures."""
     clone = Transaction(
         version=transaction.version,
         locktime=transaction.locktime,
@@ -294,20 +295,23 @@ def _estimate_vsize(transaction: Transaction, inputs, outputs, wallet) -> int:
         ],
         vout=list(transaction.vout),
     )
-    for vin, item in zip(clone.vin, inputs):
+    for vin in clone.vin:
         if wallet.role == "singlesig_taproot":
             vin.witness = Witness([b"\x00" * 64])
         elif wallet.role == "singlesig_native":
             vin.witness = Witness([b"\x00" * 72, b"\x00" * 33])
         else:
             vin.witness = Witness([b"\x00" * 72] * wallet.threshold + [b"\x00" * 35])
-        del item
     total = len(clone.serialize())
     for vin in clone.vin:
         vin.witness = Witness([])
     base = len(clone.serialize())
-    weight = base * 3 + total
-    return max(1, (weight + 3) // 4)
+    return base * 3 + total
+
+
+def _estimate_vsize(transaction: Transaction, inputs, outputs, wallet) -> int:
+    del inputs, outputs
+    return max(1, (_tx_weight(transaction, wallet) + 3) // 4)
 
 
 def _net(network: str):

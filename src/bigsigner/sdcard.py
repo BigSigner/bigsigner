@@ -87,6 +87,12 @@ def write_text(relative: str, text: str) -> None:
     _write_memory(relative, text)
 
 
+def write_bytes(relative: str, data: bytes) -> None:
+    """Replace one file with these bytes, or create it. The path must stay on the card."""
+    _require_card()
+    _write_memory(relative, data)
+
+
 def child_path(directory: str, name: str) -> str:
     if not directory:
         return name
@@ -238,7 +244,7 @@ def _read_memory(relative: str, raw: bool = False) -> str:
     return text if raw else text.strip()
 
 
-def _write_memory(relative: str, text: str) -> None:
+def _write_memory(relative: str, text: str | bytes) -> None:
     global _memory_dirty
     path = _memory_path(relative)
     if not path or path in _memory["dirs"]:

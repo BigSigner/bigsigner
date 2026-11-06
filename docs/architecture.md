@@ -39,12 +39,14 @@ Wallets are descriptors built from those keys. Changing the network drops wallet
 | `seedqr.py` | Standard and compact SeedQR. |
 | `entropy.py` | Dice, coin, and camera entropy, following SeedSigner. |
 | `psbt_load.py` | Read a PSBT from base64, base43, the BIP 174 binary file, Specter parts, UR, or BBQr. |
-| `psbt_check.py` | Refuse a PSBT this signer will not sign, then describe it as YAML. |
+| `psbt_check.py` | Refuse a PSBT this signer will not sign. |
+| `psbt_view.py` | The Transaction Signing text: amounts, warnings, outputs, fee, locktime, and inputs. |
+| `psbt_qr.py` | QR parts for a signed PSBT: Animated UR, Static UR, base64, Specter Animated, and BBQr. |
 | `psbt_review.py` | Check a PSBT against one loaded wallet, then sign with a seed that is in memory. |
 | `sdcard.py` | The SD card kept in memory. The browser page and the tests mount that card. |
 | `licenses.py` | Notices shown from About → Licenses. |
 
-Bitcoin operations go through embit 0.8.0, the release SeedSigner pins. Pillow draws the screen. `qr.py` builds the codes the device displays: through libqrencode when the image has it (milliseconds on a Pi Zero), otherwise through the pure-Python qrcode package (seconds). Each payload is built once and cached.
+Bitcoin operations go through embit 0.8.0, the release SeedSigner pins. Pillow draws the screen. `qr.py` builds the codes the device displays: through libqrencode when the image has it (milliseconds on a Pi Zero), otherwise through the pure-Python qrcode package (seconds). Each payload is built once and cached. A QR drawn for another device's camera has a Brightness control. It scales every pixel on that screen, including the title bar and the buttons, so the panel does not blind the camera. Black stays black.
 
 ## Screens
 

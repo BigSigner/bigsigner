@@ -214,7 +214,7 @@ def test_a_specter_sequence_counts_the_parts_and_a_large_psbt_is_refused():
     assert app.screen == "psbt-yaml"
     app.render()
     assert "Transaction Signing" in _texts(app)
-    assert "transaction_version: 2" in " ".join(_texts(app))
+    assert "Spending from Wallet:" in _texts(app)
 
     blob = b"psbt\xff" + b"\x00" * 100_001
     try:

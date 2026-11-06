@@ -12,6 +12,26 @@ class BbqrError(ValueError):
     pass
 
 
+def encode_bbqr(data: bytes, *, chunk: int = 100) -> list[str]:
+    """BBQr parts for a PSBT. The payload is raw deflate, then base32, file type P."""
+    compressor = zlib.compressobj(level=9, wbits=-10)
+    raw = compressor.compress(data) + compressor.flush()
+    pieces = [raw[index : index + chunk] for index in range(0, len(raw), chunk)] or [b""]
+    if len(pieces) > 1295:
+        raise BbqrError("This PSBT needs too many BBQr parts.")
+    count = _base36(len(pieces))
+    parts = []
+    for index, piece in enumerate(pieces):
+        encoded = base64.b32encode(piece).decode("ascii").rstrip("=")
+        parts.append(f"B$ZP{count}{_base36(index)}{encoded}")
+    return parts
+
+
+def _base36(value: int) -> str:
+    alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    return alphabet[value // 36] + alphabet[value % 36]
+
+
 def split_bbqr(text: str) -> tuple[str, str, int, int, str]:
     """Return encoding, file type, part count, part index, and the payload characters."""
     body = "".join(text.split()).upper()

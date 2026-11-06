@@ -20,6 +20,8 @@ from ..parse import ParseError
 from ..paths import HARDENED, MULTISIG_NATIVE, SINGLESIG_NATIVE, SINGLESIG_TAPROOT, coin_type, format_path
 from ..psbt_check import check_loaded_psbt, psbt_yaml
 from ..psbt_load import TOO_LARGE, UNREADABLE, SpecterParts, explain_not_psbt, is_binary_psbt, psbt_bytes, psbt_text
+from ..psbt_qr import psbt_qr_parts
+from ..psbt_view import SEARCH_WINDOW, describe_psbt, search_address
 from ..psbt_review import ReviewError, review_psbt, sign_with
 from ..qr import qr_matrix
 from ..session import (
@@ -45,11 +47,12 @@ from ..message_sign import (
     starts_with_signmessage_command,
 )
 from ..scan import QrSequence, import_scanned, read_address
-from ..sdcard import SdError, child_path, file_exists, list_folder, parent_path, read_bytes, read_text, write_text
+from ..sdcard import SdError, child_path, file_exists, list_folder, parent_path, read_bytes, read_text, write_bytes, write_text
 from ..licenses import NOTICES
 from ..seedqr import compact_bytes
 from ..slip132 import display_form, label_of
 from ..ur import descriptor_ur
+from .psbt_screen import paint_export_format, paint_input_qr, paint_opreturn, paint_qr, paint_share, paint_signing
 from .canvas import (
     BLUE,
     ELLIPSIS,
@@ -347,6 +350,32 @@ class App:
         self.qr_brightness = QR_BRIGHTNESS_DEFAULT
         self.descriptor_format = 0
         self.review = None
+        self.psbt_checked = None
+        self.psbt_view = None
+        self.psbt_outputs_open = True
+        self.psbt_inputs_open = False
+        self.psbt_change_open = True
+        self.psbt_more_open = False
+        self.psbt_found = {}
+        self.psbt_search_from = {}
+        self.psbt_search = None
+        self.psbt_search_shown = False
+        self.psbt_search_hit = None
+        self.psbt_op_index = 0
+        self.psbt_op_mode = "ascii"
+        self.signed_psbt = None
+        self.psbt_qr_format = 0
+        self.psbt_qr_part = 0
+        self.input_qr_index = 0
+        self.input_qr_format = 0
+        self._input_qr_images = {}
+        self._psbt_qr_at = None
+        self._psbt_qr_parts_cache = []
+        self._psbt_qr_images = {}
+        self._psbt_qr_key = None
+        self._psbt_heights = {}
+        self.export_binary = False
+        self.export_bytes = b""
         self.psbt_text = ""
         self.seed_length = 24
         self.seed_words = []
@@ -532,6 +561,11 @@ class App:
             "load-psbt": self._load_psbt,
             "psbt-error": self._psbt_error,
             "psbt-yaml": self._psbt_yaml,
+            "psbt-opreturn": self._psbt_opreturn,
+            "psbt-share": self._psbt_share,
+            "psbt-export-format": self._psbt_export_format,
+            "psbt-qr": self._psbt_qr,
+            "psbt-input-qr": self._psbt_input_qr,
             "message-source": self._message_source,
             "message-edit": self._message_edit,
             "message-review": self._message_review,
@@ -579,7 +613,11 @@ class App:
                 delays.append(max(0, self.boot_until - time.monotonic()))
         if self.qr_hint_until is not None and time.monotonic() < self.qr_hint_until:
             delays.append(max(0, self.qr_hint_until - time.monotonic()))
+        if self.screen == "psbt-qr" and len(self._psbt_qr_parts_cache) > 1:
+            delays.append(0.5)
         if self.address_search_pending is not None and self.address_search_shown:
+            delays.append(0.05)
+        if self.psbt_search is not None and self.psbt_search_shown:
             delays.append(0.05)
         if self._addresses_loading and self._addresses_loading_shown:
             delays.append(0)
@@ -612,6 +650,8 @@ class App:
         self._expire_notice()
         self._advance_boot()
         self._advance_address_search()
+        self._advance_psbt_search()
+        self._advance_psbt_qr()
         self._advance_addresses_open()
         frame = Frame()
         self._painters[self.screen](frame)
@@ -625,6 +665,8 @@ class App:
         self.texts = list(frame.marks)
         if self.address_search_pending is not None:
             self.address_search_shown = True
+        if self.psbt_search is not None:
+            self.psbt_search_shown = True
         if self._addresses_loading:
             self._addresses_loading_shown = True
         if self._shown_to_a_camera():
@@ -634,6 +676,8 @@ class App:
     def _touch_blocked(self) -> bool:
         """Loading is on screen, or this gesture began while it was."""
         if self._discard_gesture:
+            return True
+        if self.psbt_search is not None:
             return True
         return self._addresses_loading and self._addresses_loading_shown
 
@@ -1057,8 +1101,17 @@ class App:
         self.confirm = "show-passphrase"
 
     def _act_confirm_no(self):
+        kind = self.confirm
         self.confirm = None
         self._account_warning_action = None
+        if kind == "psbt-found" and self.psbt_search_hit:
+            index = self.psbt_search_hit["index"]
+            self.psbt_found[index] = self.psbt_search_hit
+            self.psbt_search_hit = None
+        elif kind == "psbt-miss" and self.psbt_search_hit:
+            index = self.psbt_search_hit["index"]
+            self.psbt_search_from[index] = self.psbt_search_hit["next"]
+            self.psbt_search_hit = None
 
     def _act_delete_key(self):
         self.confirm = "delete-key"
@@ -1247,6 +1300,21 @@ class App:
         "zoom-close": _act_zoom_close,
         "brightness-down": _act_brightness_down,
         "brightness-up": _act_brightness_up,
+        "psbt-toggle-outputs": lambda self: self._toggle_psbt_outputs(),
+        "psbt-toggle-inputs": lambda self: self._toggle_psbt_inputs(),
+        "psbt-toggle-change": lambda self: self._toggle_psbt_change(),
+        "psbt-toggle-more": lambda self: self._toggle_psbt_more(),
+        "psbt-sign": lambda self: self._sign_reviewed_psbt(),
+        "psbt-show-qr": lambda self: self._open_psbt_qr(),
+        "psbt-export": lambda self: self._open_psbt_export(),
+        "psbt-export-binary": lambda self: self._choose_psbt_export(True),
+        "psbt-export-base64": lambda self: self._choose_psbt_export(False),
+        "psbt-qr-next": lambda self: self._step_psbt_qr(1),
+        "psbt-qr-prev": lambda self: self._step_psbt_qr(-1),
+        "input-qr-next": lambda self: self._step_input_qr(1),
+        "input-qr-prev": lambda self: self._step_input_qr(-1),
+        "psbt-op-next": lambda self: self._step_psbt_op(1),
+        "psbt-op-prev": lambda self: self._step_psbt_op(-1),
         "review-sample": _act_review_sample,
         "addresses": _act_addresses,
         "address-receive": _act_address_receive,
@@ -1308,6 +1376,12 @@ class App:
             self._choose_export_file(action[len("sd-write:") :])
         elif action.startswith("export-format-"):
             self._choose_export_format(int(action[len("export-format-") :]))
+        elif action.startswith("psbt-search-"):
+            self._begin_psbt_search(action[len("psbt-search-") :])
+        elif action.startswith("psbt-opreturn-"):
+            self._open_psbt_opreturn(int(action[len("psbt-opreturn-") :]))
+        elif action.startswith("psbt-input-qr-"):
+            self._open_input_qr(int(action[len("psbt-input-qr-") :]))
         elif action.startswith("account-dec-"):
             if self._warn_before_account_change(action):
                 return
@@ -1699,6 +1773,7 @@ class App:
         self.go("seed-backup")
 
     def _continue_seed_export(self):
+        self.export_binary = False
         self.sd_mode = "export"
         self.sd_dir = ""
         self.scroll["sd"] = 0
@@ -1744,6 +1819,7 @@ class App:
         self.export_text = text
         self.export_return = self.screen
         self.export_back = list(self.back)
+        self.export_binary = False
         self.sd_mode = "export"
         self.sd_dir = ""
         self.scroll["sd"] = 0
@@ -1759,6 +1835,7 @@ class App:
             self.set_error(str(exc))
             return
         self.export_label = "Address"
+        self.export_binary = False
         self.export_text = address
         self.export_return = "address"
         self.export_back = list(self.back)
@@ -1775,6 +1852,7 @@ class App:
         if name == "Key Expression":
             payload = f"{payload}/<0;1>/*"
         self.export_label = name
+        self.export_binary = False
         self.export_text = payload
         self.sd_mode = "export"
         self.sd_dir = ""
@@ -1800,6 +1878,8 @@ class App:
         return _unused_filename(name, {entry["name"] for entry in entries})
 
     def _suggested_export_name(self) -> str:
+        if self.export_label == "PSBT":
+            return "transaction.psbt"
         if self.export_label == "Signature" and self.wallet_index < len(self.session.wallets):
             fingerprint = self.session.wallets[self.wallet_index].fingerprints[0].hex()
             return f"{fingerprint}-signature.txt"
@@ -1837,7 +1917,10 @@ class App:
 
     def _write_export(self):
         try:
-            write_text(self.export_path, self.export_text)
+            if self.export_binary:
+                write_bytes(self.export_path, self.export_bytes)
+            else:
+                write_text(self.export_path, self.export_text)
         except SdError as exc:
             self.set_error(str(exc))
             return
@@ -5718,6 +5801,15 @@ class App:
             return ACCOUNT_INDEX_WARNING
         if self.confirm == "message-more":
             return MESSAGE_MORE
+        if self.confirm == "psbt-found":
+            return "This address was found. Show it on the output?"
+        if self.confirm == "psbt-miss" and self.psbt_search_hit:
+            start = self.psbt_search_hit["next"]
+            end = start + SEARCH_WINDOW - 1
+            return (
+                "This address was not found. "
+                f"Continue the search in addresses {start}-{end}?"
+            )
         return "Delete this key?"
 
     def _confirm(self, frame: Frame):
@@ -5751,7 +5843,7 @@ class App:
         self._confirm_buttons(frame, box)
 
     def _confirm_buttons(self, frame: Frame, box):
-        if self.confirm == "message-more":
+        if self.confirm in ("message-more", "psbt-found", "psbt-miss"):
             height = BODY_SIZE + 36
             y = box[3] - 24 - height
             left = box[0] + 20
@@ -6848,6 +6940,8 @@ class App:
             return bool(self.message_signature)
         if self.screen == "seed-show":
             return SEED_FORMATS[self.seed_format] != "words"
+        if self.screen in ("psbt-qr", "psbt-input-qr"):
+            return True
         return self.screen == "qr" and self.qr_kind in ("key", "descriptor")
 
     def _message_wallet(self):
@@ -6947,7 +7041,19 @@ class App:
                 return
             self._show_psbt_error(message)
             return
+        self.psbt_checked = checked
+        self.psbt_view = describe_psbt(self.session, self.wallet_index, checked)
+        self._psbt_heights = {}
         self.psbt_yaml_text = psbt_yaml(checked)
+        self.psbt_outputs_open = True
+        self.psbt_inputs_open = self.psbt_view["inputs_open"]
+        self.psbt_change_open = bool(self.psbt_view["change_outputs"])
+        self.psbt_more_open = False
+        self.psbt_found = {}
+        self.psbt_search_from = {}
+        self.psbt_search = None
+        self.psbt_search_hit = None
+        self.signed_psbt = None
         self.scroll["psbt-yaml"] = 0
         if self.screen != "load-psbt":
             self._return_to_load_psbt()
@@ -6987,15 +7093,175 @@ class App:
         frame.button(button_top, "OK", "psbt-error-ok")
 
     def _psbt_yaml(self, frame: Frame):
-        frame.header("Transaction Signing", "back")
-        text = self.psbt_yaml_text or "This PSBT is no longer loaded."
-        end = HEADER + 16
-        for line in text.splitlines() or [""]:
-            end += self._text_height(frame, line, TITLE_SIZE, mono=True)
-        offset = self._scroll_offset("psbt-yaml", end, clearance=16)
-        y = HEADER + 16 - offset
-        for line in text.splitlines() or [""]:
-            y = frame.text(line, MARGIN, y, size=TITLE_SIZE, fill=INK, mono=True)
+        paint_signing(self, frame)
+
+    def _psbt_opreturn(self, frame: Frame):
+        paint_opreturn(self, frame)
+
+    def _psbt_share(self, frame: Frame):
+        paint_share(self, frame)
+
+    def _psbt_export_format(self, frame: Frame):
+        paint_export_format(self, frame)
+
+    def _psbt_qr(self, frame: Frame):
+        paint_qr(self, frame)
+
+    def _psbt_input_qr(self, frame: Frame):
+        paint_input_qr(self, frame)
+
+    def _open_input_qr(self, index: int):
+        self.input_qr_index = index
+        self.input_qr_format = 0
+        self._input_qr_images = {}
+        self.go("psbt-input-qr")
+
+    def _step_input_qr(self, delta: int):
+        self.input_qr_format = (self.input_qr_format + delta) % 3
+        self._input_qr_images = {}
+
+    def _toggle_psbt_outputs(self):
+        self.psbt_outputs_open = not self.psbt_outputs_open
+
+    def _toggle_psbt_inputs(self):
+        self.psbt_inputs_open = not self.psbt_inputs_open
+
+    def _toggle_psbt_change(self):
+        self.psbt_change_open = not self.psbt_change_open
+
+    def _toggle_psbt_more(self):
+        self.psbt_more_open = not self.psbt_more_open
+
+    def _begin_psbt_search(self, text: str):
+        index, _, start = text.partition("-")
+        if self.psbt_search is not None:
+            return
+        self.psbt_search = {"index": int(index), "start": int(start or 0)}
+        self.psbt_search_shown = False
+
+    def _advance_psbt_search(self):
+        if self.psbt_search is None or not self.psbt_search_shown:
+            return
+        if self.screen != "psbt-yaml" or not self.psbt_view:
+            self.psbt_search = None
+            self.psbt_search_shown = False
+            return
+        job = self.psbt_search
+        self.psbt_search = None
+        self.psbt_search_shown = False
+        card = next((item for item in self.psbt_view["outputs"] if item["index"] == job["index"]), None)
+        if card is None:
+            return
+        found = search_address(
+            self.session, self.wallet_index, card["address"], job["start"], SEARCH_WINDOW,
+        )
+        if found:
+            found["index"] = job["index"]
+            self.psbt_search_hit = found
+            self.confirm = "psbt-found"
+            return
+        self.psbt_search_hit = {"index": job["index"], "next": job["start"] + SEARCH_WINDOW}
+        self.confirm = "psbt-miss"
+
+    def _open_psbt_opreturn(self, index: int):
+        card = next((item for item in (self.psbt_view or {}).get("outputs", []) if item["index"] == index), None)
+        if card is None or card["kind"] != "op_return":
+            return
+        self.psbt_op_index = index
+        self.psbt_op_mode = "ascii" if card["ascii"] else "hex"
+        self.scroll["psbt-opreturn"] = 0
+        self.go("psbt-opreturn")
+
+    def _step_psbt_op(self, delta: int):
+        self.psbt_op_mode = "hex" if self.psbt_op_mode == "ascii" else "ascii"
+        self.scroll["psbt-opreturn"] = 0
+        del delta
+
+    def _sign_reviewed_psbt(self):
+        checked = self.psbt_checked
+        if checked is None or self.wallet_index >= len(self.session.wallets):
+            self.set_error("This transaction is no longer loaded.")
+            return
+        from embit.psbt import PSBT
+
+        signed = PSBT.parse(checked.serialize())
+        wallet = self.session.wallets[self.wallet_index]
+        try:
+            for fingerprint in wallet.fingerprints:
+                if self.session._seed_for(fingerprint) is None:
+                    continue
+                sign_with(self.session, self.wallet_index, signed, fingerprint)
+        except (ReviewError, SessionError) as exc:
+            self.set_error(str(exc))
+            return
+        self.signed_psbt = signed
+        self.psbt_qr_format = 0
+        self.psbt_qr_part = 0
+        self._psbt_qr_at = None
+        self._psbt_qr_key = None
+        self._psbt_qr_parts_cache = []
+        self._psbt_qr_images = {}
+        self.go("psbt-share")
+
+    def _open_psbt_qr(self):
+        if self.signed_psbt is None:
+            self.set_error("This transaction has not been signed.")
+            return
+        self.psbt_qr_part = 0
+        self._psbt_qr_at = None
+        self.scroll["psbt-qr"] = 0
+        self.go("psbt-qr")
+
+    def _open_psbt_export(self):
+        if self.signed_psbt is None:
+            self.set_error("This transaction has not been signed.")
+            return
+        self.go("psbt-export-format")
+
+    def _choose_psbt_export(self, binary: bool):
+        import base64
+
+        raw = self.signed_psbt.serialize()
+        self.export_label = "PSBT"
+        self.export_binary = binary
+        self.export_bytes = raw if binary else b""
+        self.export_text = "" if binary else base64.b64encode(raw).decode("ascii")
+        self.export_return = "psbt-share"
+        self.export_back = list(self.back)
+        self.sd_mode = "export"
+        self.sd_dir = ""
+        self.scroll["sd"] = 0
+        self.go("sd")
+
+    def _step_psbt_qr(self, delta: int):
+        self.psbt_qr_format = (self.psbt_qr_format + delta) % 5
+        self.psbt_qr_part = 0
+        self._psbt_qr_at = None
+        self._psbt_qr_key = None
+        self._psbt_qr_images = {}
+
+    def _psbt_qr_parts(self) -> list[str]:
+        if self.signed_psbt is None:
+            return []
+        kind = ("animated-ur", "ur", "base64", "specter", "bbqr")[self.psbt_qr_format]
+        key = (id(self.signed_psbt), kind)
+        if self._psbt_qr_key != key:
+            self._psbt_qr_parts_cache = psbt_qr_parts(self.signed_psbt.serialize(), kind)
+            self._psbt_qr_key = key
+            self._psbt_qr_images = {}
+        return self._psbt_qr_parts_cache
+
+    def _advance_psbt_qr(self):
+        parts = self._psbt_qr_parts_cache
+        if self.screen != "psbt-qr" or len(parts) < 2:
+            return
+        now = time.monotonic()
+        if self._psbt_qr_at is None:
+            self._psbt_qr_at = now
+            return
+        if now - self._psbt_qr_at >= 0.5:
+            self.psbt_qr_part = (self.psbt_qr_part + 1) % len(parts)
+            self._psbt_qr_at = now
 
     def _open_sign_message(self):
         wallet = self._message_wallet()
@@ -7439,6 +7705,7 @@ class App:
             self.set_error("This message has not been signed.")
             return
         self.export_label = "Signature"
+        self.export_binary = False
         self.export_text = self.message_signature
         self.export_return = self.screen
         self.export_back = list(self.back)
