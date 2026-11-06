@@ -45,7 +45,7 @@ def _funded(session):
     return receive
 
 
-def test_psbt_review_blocks_a_nonzero_op_return_and_warns_on_final_sequence():
+def test_psbt_review_allows_a_nonzero_op_return_and_warns_on_one():
     session = Session()
     receive = _funded(session)
     script = address_to_scriptpubkey(receive)
@@ -83,12 +83,8 @@ def test_psbt_review_blocks_a_nonzero_op_return_and_warns_on_final_sequence():
     assert reviewed["external_amount"] == 90_000
 
     tx.vout.append(TransactionOutput(1, data))
-    bad = PSBT(tx)
-    bad.inputs[0].witness_utxo = TransactionOutput(100_000, address_to_scriptpubkey(receive))
-    bad.inputs[0].bip32_derivations[child.key] = DerivationPath(fingerprint, path)
-    try:
-        review_psbt(session, 0, bad.serialize())
-    except ReviewError as exc:
-        assert "non-zero" in str(exc)
-    else:
-        raise AssertionError("A non-zero OP_RETURN was accepted.")
+    paid = PSBT(tx)
+    paid.inputs[0].witness_utxo = TransactionOutput(100_000, address_to_scriptpubkey(receive))
+    paid.inputs[0].bip32_derivations[child.key] = DerivationPath(fingerprint, path)
+    again = review_psbt(session, 0, paid.serialize())
+    assert any("OP_RETURN" in warning for warning in again["warnings"])

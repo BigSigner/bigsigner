@@ -36,8 +36,9 @@ def review_psbt(session, wallet_index: int, raw: str | bytes) -> dict:
     fee = sum(item["amount"] for item in inputs) - sum(item["amount"] for item in outputs)
     if fee < 0:
         raise ReviewError("The outputs are larger than the inputs.")
-    if any(item["op_return"] and item["amount"] != 0 for item in outputs):
-        raise ReviewError("An OP_RETURN output has a non-zero amount.")
+    from .psbt_check import _check_op_returns
+
+    _check_op_returns(psbt)
     vsize = _estimate_vsize(transaction, inputs, outputs, wallet)
     external = [item for item in outputs if not item["change"]]
     warnings = _warnings(transaction, inputs, outputs, external)

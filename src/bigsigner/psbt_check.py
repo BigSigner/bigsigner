@@ -16,6 +16,10 @@ from .session import SessionError, _descriptor, _public_for
 
 UNSUPPORTED = "unsupported by this hardware wallet"
 SEQUENCE_FINAL = 0xFFFFFFFF
+# Bitcoin Core 31's default -datacarriersize. The scripts of every standard
+# OP_RETURN output are added together. The amount is not limited: an
+# unspendable output has a dust threshold of zero.
+DATACARRIER_MAX_BYTES = 100_000
 
 
 def check_loaded_psbt(session, wallet_index: int, text: str) -> PSBT:
@@ -37,6 +41,7 @@ def check_loaded_psbt(session, wallet_index: int, text: str) -> PSBT:
         raise ReviewError(f"A transaction with no inputs is {UNSUPPORTED}.")
     if not transaction.vout:
         raise ReviewError(f"A transaction with no outputs is {UNSUPPORTED}.")
+    _check_op_returns(psbt)
     seen = set()
     for vin in transaction.vin:
         key = (bytes(vin.txid), vin.vout)
@@ -288,6 +293,59 @@ def _sequence(scope, vin):
     final = sequence in (0xFFFFFFFD, 0xFFFFFFFE)
     if not (blocks or time_lock or final):
         raise ReviewError(f"An input sequence outside the supported ranges is {UNSUPPORTED}.")
+
+
+def _check_op_returns(psbt: PSBT) -> None:
+    """Refuse an OP_RETURN output Bitcoin Core 31 would not relay.
+
+    A standard data output is OP_RETURN followed only by pushes. Any number of
+    them is allowed. Their scripts together must be at most 100000 bytes.
+    """
+    total = 0
+    for index, scope in enumerate(psbt.outputs):
+        vout = psbt.tx.vout[index]
+        script = scope.script_pubkey or vout.script_pubkey
+        if script is None:
+            continue
+        raw = bytes(script.data)
+        if not raw.startswith(b"\x6a"):
+            continue
+        if not _push_only(raw[1:]):
+            raise ReviewError(
+                f"An OP_RETURN output that is not followed only by data pushes is {UNSUPPORTED}."
+            )
+        total += len(raw)
+        if total > DATACARRIER_MAX_BYTES:
+            raise ReviewError(
+                f"OP_RETURN outputs larger than {DATACARRIER_MAX_BYTES} bytes together are {UNSUPPORTED}."
+            )
+
+
+def _push_only(data: bytes) -> bool:
+    """True when every opcode is a push, using Bitcoin Core's push range."""
+    index = 0
+    while index < len(data):
+        opcode = data[index]
+        index += 1
+        if opcode > 0x60:
+            return False
+        if opcode <= 0x4B:
+            index += opcode
+        elif opcode == 0x4C:
+            if index >= len(data):
+                return False
+            index += 1 + data[index]
+        elif opcode == 0x4D:
+            if index + 2 > len(data):
+                return False
+            index += 2 + int.from_bytes(data[index : index + 2], "little")
+        elif opcode == 0x4E:
+            if index + 4 > len(data):
+                return False
+            index += 4 + int.from_bytes(data[index : index + 4], "little")
+        if index > len(data):
+            return False
+    return True
 
 
 def _outputs(session, wallet, psbt: PSBT):

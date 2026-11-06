@@ -247,6 +247,20 @@ def test_each_psbt_refusal_names_the_unsupported_case():
     no_outputs.outputs.clear()
     _raises(session, no_outputs, "no outputs")
 
+    from embit.psbt import OutputScope
+    from embit.script import Script
+
+    def _with_scripts(*scripts):
+        psbt = _psbt(session, output=50_000)
+        for amount, raw in scripts:
+            psbt.outputs.append(OutputScope(vout=TransactionOutput(amount, Script(raw))))
+        return psbt
+
+    assert check_loaded_psbt(session, 0, _with_scripts((0, b"\x6a"), (5, b"\x6a\x02hi"))).tx.version == 2
+    _raises(session, _with_scripts((0, b"\x6a\xac")), "data pushes")
+    huge = b"\x6a\x4e" + (100_000).to_bytes(4, "little") + (b"\x00" * 100_000)
+    _raises(session, _with_scripts((0, huge)), "100000 bytes")
+
     duplicate = _psbt(session)
     duplicate.tx.vin.append(TransactionInput(b"\x11" * 32, 0, sequence=0xFFFFFFFD))
     duplicate.inputs.append(duplicate.inputs[0])

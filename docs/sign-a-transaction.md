@@ -28,7 +28,7 @@ You also get a warning when:
 - the fee is large compared with the amount being spent
 - the transaction contains an OP_RETURN output
 
-An OP_RETURN payload can be read as text or as hex. If an OP_RETURN output carries any bitcoin, signing is blocked, because that amount cannot be spent.
+An OP_RETURN payload can be read as text or as hex. Any number of OP_RETURN outputs is accepted, including one that carries bitcoin. That matches Bitcoin Core 31's default relay policy: an unspendable output is not dust. Each script must be OP_RETURN followed only by data pushes, and the scripts together must be at most 100000 bytes.
 
 ## Signing
 

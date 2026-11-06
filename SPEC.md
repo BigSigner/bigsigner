@@ -33,7 +33,7 @@ Dice and coin entropy follow SeedSigner: SHA-256 of the ASCII string, first 16 b
 
 Passphrases follow BIP39, including Unicode and NFKD. The UI calls them passphrases. A warning appears below the text field when a passphrase is outside ASCII 32–126, is longer than 100 characters, or has a leading or trailing space. The spaces are kept.
 
-An `OP_RETURN` output produces a transaction-level warning, and its payload can be shown as text or hex. A non-zero `OP_RETURN` amount blocks signing. Replace-by-fee warning appears when any input sequence is `0xFFFFFFFE` or `0xFFFFFFFF`. Locktime sentences use the raw number with "greater than". Relative locktime says "at least" and cites BIP68. Message signatures are base64. The About screen shows the BigSigner logo, the version, and an Licenses list for the bundled libraries and assets.
+An `OP_RETURN` output produces a transaction-level warning, and its payload can be shown as text or hex. Any number of them is allowed, including a non-zero amount, which is what Bitcoin Core 31 relays by default. Each one must be `OP_RETURN` followed only by data pushes, and their scripts together must be at most 100000 bytes. Replace-by-fee warning appears when any input sequence is `0xFFFFFFFE` or `0xFFFFFFFF`. Locktime sentences use the raw number with "greater than". Relative locktime says "at least" and cites BIP68. Message signatures are base64. The About screen shows the BigSigner logo, the version, and an Licenses list for the bundled libraries and assets.
 
 # Development process
 
