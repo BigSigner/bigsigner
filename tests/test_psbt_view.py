@@ -7,6 +7,7 @@ from embit.script import Script
 from embit.transaction import TransactionOutput
 
 from bigsigner.bbqr import encode_bbqr, join_bbqr, split_bbqr
+from bigsigner.psbt_check import psbt_yaml
 from bigsigner.psbt_qr import psbt_qr_parts, ur_parts_round_trip
 from bigsigner.psbt_view import (
     ALL_TO_WALLET,
@@ -112,6 +113,11 @@ def test_warnings_name_op_return_fee_locktime_and_rbf():
     assert f"0x{view['inputs'][0]['sequence']:08X}" == "0xFFFFFFFE"
     txid = view["inputs"][0]["txid"]
     assert input_qr_text("main", txid, 0, "raw") == f"{txid}:0"
+    shown = _psbt(session)
+    shown.inputs[0].txid = bytes(range(32))
+    displayed = bytes(range(32)).hex()
+    assert describe_psbt(session, 0, shown)["inputs"][0]["txid"] == displayed
+    assert f"{displayed}:0" in psbt_yaml(shown)
     assert input_qr_text("main", txid, 0, "mempool") == f"https://mempool.space/tx/{txid}:0"
     assert input_qr_text("test", txid, 1, "blockstream") == f"https://blockstream.info/testnet/tx/{txid}#output:1"
     assert view["inputs_open"] is True

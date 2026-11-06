@@ -110,7 +110,7 @@ def psbt_yaml(psbt: PSBT) -> str:
         vin = psbt.tx.vin[index]
         inputs.append(
             {
-                "previous_output": f"{vin.txid[::-1].hex()}:{vin.vout}",
+                "previous_output": f"{vin.txid.hex()}:{vin.vout}",
                 "amount_sats": _input_amount(psbt, index),
                 "sequence": _sequence_value(scope, vin),
                 "sighash": _sighash_name(scope.sighash_type),

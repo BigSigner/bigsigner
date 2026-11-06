@@ -404,7 +404,7 @@ def _input_card(psbt: PSBT, index: int) -> dict:
     sequence = int(scope.sequence if scope.sequence is not None else vin.sequence)
     amount = int(_input_amount(psbt, index) or 0)
     relative = _relative(sequence)
-    txid = vin.txid[::-1].hex()
+    txid = vin.txid.hex()
     return {
         "index": index,
         "txid": txid,
