@@ -193,8 +193,8 @@ Chimpanzee DD
 
 Below the name is a fingerprint icon followed by the fingerprint hex. A seed card adds one more line under the fingerprint: a seedling icon, then the seed's first word followed by "…". If that seed has a passphrase, the line continues with " + Passphrase" and the passphrase's number, for example "abandon… + Passphrase1". An external-key card adds two lines under the fingerprint hex: Native-Segwit or Taproot, then the account, for example "Native-Segwit" and "Account #0". The section title already says whether the key is singlesig or multisig.
 
-If the fingerprint has a seed or seed + passphrase in its list of keys (in this case the list in this case will only contain one key), we should show in a new row a symbol of a key followed by a small title "Generated from a 12/18/24 words seed".
-In the case of a seed + passphrase, it should say "Generated from a 12/18/24 words seed + passphrase" and that passphrase's number, for example "Generated from a 12 words seed + passphrase1".
+If the fingerprint has a seed or seed + passphrase in its list of keys (in this case the list in this case will only contain one key), we should show in a new row a symbol of a key followed by a small title "12/18/24 words seed".
+In the case of a seed + passphrase, it should say "12/18/24 Words Seed + Passphrase" and that passphrase's number, for example "12 Words Seed + Passphrase1".
 
 If some of the keys are SingleSig Xpubs, we should show in a new row a symbol of an eye (read only) followed by a small title "SingleSig Xpubs", and below it a list of the SingleSig Xpub keys displayed as:
 "<kind> Account <account>: <derivation path prefix>", e.g. "Native-Segwit Account 3: m/84h/0h/3h".

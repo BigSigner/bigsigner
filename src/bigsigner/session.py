@@ -717,8 +717,8 @@ class Session:
     def generated_from(self, key) -> str:
         count = len(key.mnemonic)
         if key.passphrase:
-            return f"Generated from a {count} words seed + passphrase{self.passphrase_index(key.passphrase)}."
-        return f"Generated from a {count} words seed."
+            return f"{count} Words Seed + Passphrase{self.passphrase_index(key.passphrase)}"
+        return f"{count} Words Seed"
 
     def _record(self, fingerprint):
         record = self.fingerprints.get(fingerprint)
