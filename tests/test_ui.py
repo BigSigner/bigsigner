@@ -405,7 +405,7 @@ def test_main_screens_save_screenshots():
     record.shot(app, "addresses-loading")
     record.shot(app, "addresses")
     record.click(app, "back")
-    record.click(app, "Show Descriptor")
+    record.click(app, "Show")
     record.shot(app, "qr")
     record.click(app, ">")
     record.shot(app, "qr-plain")

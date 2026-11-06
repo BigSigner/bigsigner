@@ -60,7 +60,7 @@ def test_descriptor_text_moves_up_when_the_qr_scrolls():
     app._act("derive-wallet")
     app.notice = ""
     app.render()
-    show = _one(app.hits, "Show Descriptor")
+    show = _one(app.hits, "Show")
     assert show["box"][1] < 790
     app._act("show-descriptor")
     app.qr_hint_until = 0
@@ -86,6 +86,6 @@ def test_wallet_buttons_stay_tappable_under_the_saved_notice():
     app._act("derive-wallet")
     app.render()
     snap = snapshot(app, 20, 1)
-    show = _one(snap["hits"], "Show Descriptor")
+    show = _one(snap["hits"], "Show")
     assert show["box"][1] < 790
     assert show["box"][3] > show["box"][1] + 20

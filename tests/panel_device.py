@@ -340,7 +340,7 @@ def check_wallet_and_addresses(panel: Panel):
     print("Wallet and Addresses", flush=True)
     snap = panel.pull()
     addresses = require_hit(snap, "Addresses")
-    descriptor = require_hit(snap, "Show Descriptor")
+    descriptor = require_hit(snap, "Show")
     assert addresses["box"][3] <= descriptor["box"][1]
     minus = require_text(snap, "-")
     plus = require_text(snap, "+")
@@ -368,7 +368,7 @@ def check_wallet_and_addresses(panel: Panel):
 def check_descriptor_scroll(panel: Panel):
     print("Descriptor QR", flush=True)
     opened = panel.latest["frame"]
-    panel.tap("Show Descriptor")
+    panel.tap("Show")
     ready = panel.wait(
         lambda item: any(text["text"].startswith("wpkh") for text in item["qr_texts"]),
         45,

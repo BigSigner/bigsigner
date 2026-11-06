@@ -59,8 +59,22 @@ def test_show_descriptor_opens_a_qr_with_the_text_below_it():
     app._act("derive-native")
     app._act("derive-wallet")
     app.notice = ""
-    app.render()
-    assert any(hit["label"] == "Show Descriptor" for hit in app.hits)
+    image = app.render()
+    show = next(hit for hit in app.hits if hit["label"] == "Show")
+    export = next(hit for hit in app.hits if hit["label"] == "Export")
+    assert show["box"][1] == export["box"][1]
+    assert show["box"][2] < export["box"][0]
+
+    def ink_top(box):
+        left, top, right, bottom = box
+        for yy in range(top, bottom):
+            for xx in range(left + 8, right - 8):
+                if image.getpixel((xx, yy))[:3] == (255, 255, 255):
+                    return yy
+        raise AssertionError(box)
+
+    assert abs(ink_top(show["box"]) - ink_top(export["box"])) <= 1
+    assert "Descriptor:" in [item["text"] for item in app.texts]
     assert not any(hit["label"] == "Show descriptor QR" for hit in app.hits)
     app._act("show-descriptor")
     assert app.screen == "qr"

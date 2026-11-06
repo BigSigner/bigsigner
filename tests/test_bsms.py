@@ -159,11 +159,11 @@ def test_exporting_a_wallet_writes_a_bsms_file():
     app.render()
     labels = [
         hit["label"]
-        for hit in sorted(app.hits, key=lambda hit: hit["box"][1])
+        for hit in sorted(app.hits, key=lambda hit: (hit["box"][1], hit["box"][0]))
         if hit["action"] in ("addresses", "show-descriptor", "export-wallet", "delete-wallet")
     ]
-    assert labels == ["Addresses", "Show Descriptor", "Export Descriptor to SD Card", "Delete Wallet"]
-    _tap(app, "Export Descriptor to SD Card")
+    assert labels == ["Addresses", "Show", "Export", "Delete Wallet"]
+    _tap(app, "Export")
     assert app.screen == "sd"
     _tap(app, "New File")
     assert app.filename == "2-of-2-native-segwit.bsms"

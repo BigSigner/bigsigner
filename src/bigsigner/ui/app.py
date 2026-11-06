@@ -3487,10 +3487,7 @@ class App:
             y = self._flow_button(frame, y, "Loading\u2026", "addresses", paint, offset, enabled=False)
         else:
             y = self._flow_button(frame, y, "Addresses", "addresses", paint, offset)
-        y = self._flow_button(frame, y, "Show Descriptor", "show-descriptor", paint, offset)
-        y = self._flow_button(
-            frame, y, "Export Descriptor\nto SD Card", "export-wallet", paint, offset, "Export Descriptor to SD Card",
-        )
+        y = self._descriptor_row(frame, y, paint, offset)
         can_sign_tx = any(self.session._seed_for(fingerprint) is not None for fingerprint in wallet.fingerprints)
         y = self._flow_button(
             frame, y, "Sign Transaction", "sign-transaction", paint, offset, enabled=can_sign_tx,
@@ -3510,6 +3507,29 @@ class App:
             )
             y = self._flow_note(frame, y, ADDRESS_SIGN_ONLY, paint, offset, size=TITLE_SIZE)
         return y, open_field, open_fp
+
+    def _descriptor_row(self, frame: Frame, y: int, paint: bool, offset: int) -> int:
+        """A centered Descriptor: label, then Show and Export on one row."""
+        label = "Descriptor:"
+        face = font(TITLE_SIZE)
+        _left, _top, _right, ink_bottom = frame.draw.textbbox((0, 0), label, font=face)
+        if paint:
+            shown = y - offset
+            if HEADER <= shown < HEIGHT:
+                width = frame.draw.textlength(label, font=face)
+                x = (WIDTH - width) / 2
+                frame.draw.text((x, shown), label, font=face, fill=MUTED)
+                frame.mark(label, frame.draw.textbbox((x, shown), label, font=face))
+        y += ink_bottom + 8
+        height = frame.button_height("Show")
+        top = y - offset
+        gap = 12
+        width = (WIDTH - 2 * MARGIN - gap) // 2
+        if paint and top + height > HEADER and top < HEIGHT:
+            text_delta = frame._button_metrics("Show", False)[4]
+            frame.button_box((MARGIN, top, MARGIN + width, top + height), "Show", "show-descriptor", text_delta=text_delta)
+            frame.button_box((MARGIN + width + gap, top, WIDTH - MARGIN, top + height), "Export", "export-wallet", text_delta=text_delta)
+        return y + height + 12
 
     def _wallet_key_card(self, frame: Frame, wallet, fingerprint: bytes, y: int, paint: bool, offset: int) -> int:
         """One key, its fingerprint, and its account, in a white card."""
