@@ -110,7 +110,7 @@ def _read_suffix(suffix: str) -> str:
         return "receive_only"
     if suffix in ("/1/*", "/1"):
         return "change_only"
-    raise ParseError("The key expression uses an unsupported address suffix.")
+    raise ParseError("The key expression uses an address suffix that is not supported.")
 
 
 def parse_key_expression(text: str, network: str) -> ParsedKey:

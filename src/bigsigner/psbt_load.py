@@ -47,12 +47,12 @@ class SpecterParts:
 
     def add(self, index: int, count: int, chunk: str) -> str | None:
         if count < 1 or count > PSBT_MAX_PARTS or index < 1 or index > count:
-            raise SessionError("This QR sequence is unsupported by this hardware wallet.")
+            raise SessionError("This QR sequence is not supported by this hardware wallet.")
         if self.count not in (0, count):
-            raise SessionError("This QR sequence is unsupported by this hardware wallet.")
+            raise SessionError("This QR sequence is not supported by this hardware wallet.")
         previous = self.parts.get(index)
         if previous is not None and previous != chunk:
-            raise SessionError("This QR sequence is unsupported by this hardware wallet.")
+            raise SessionError("This QR sequence is not supported by this hardware wallet.")
         self.count = count
         self.parts[index] = chunk
         if len(self.parts) < count:

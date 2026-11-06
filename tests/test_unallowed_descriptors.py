@@ -65,7 +65,7 @@ UNALLOWED = [
     ("wrong checksum", f"wpkh({NATIVE})#qqqqqqqq", "checksum does not match"),
     ("zpub in a multisig", _zpub_in_multisig(), "does not match"),
     ("depth mismatch", _depth_mismatch(), "depth or last step"),
-    ("address suffix", f"wpkh({NATIVE.replace('/<0;1>/*', '/2/*')})", "unsupported address suffix"),
+    ("address suffix", f"wpkh({NATIVE.replace('/<0;1>/*', '/2/*')})", "address suffix that is not supported"),
     ("bare key expression", NATIVE, "key expression, not a wallet descriptor"),
 ]
 

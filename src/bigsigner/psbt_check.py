@@ -1,7 +1,7 @@
 """Stop before signing when a PSBT asks for something this signer will not do.
 
 The checks run in the order a person listed them. Each refusal says the case is
-unsupported by this hardware wallet, and names the wallets or accounts when
+not supported by this hardware wallet, and names the wallets or accounts when
 that is what distinguishes it.
 """
 
@@ -14,13 +14,13 @@ from .psbt_load import UNREADABLE, psbt_bytes
 from .psbt_review import ReviewError, _tx_weight
 from .session import SessionError, _descriptor, _public_for
 
-UNSUPPORTED = "unsupported by this hardware wallet"
+NOT_SUPPORTED = "not supported by this hardware wallet"
 
 
 def require_psbt_version(psbt) -> None:
     """Version 0 may be omitted. Version 2 is BIP 370. Nothing else is signed."""
     if psbt.version not in (None, 0, 2):
-        raise ReviewError(f"A PSBT version other than 0 or 2 is {UNSUPPORTED}.")
+        raise ReviewError(f"A PSBT version other than 0 or 2 is {NOT_SUPPORTED}.")
 
 
 def refuse_v0_required_locktime(psbt) -> None:
@@ -31,14 +31,14 @@ def refuse_v0_required_locktime(psbt) -> None:
         for key in scope.unknown:
             if key[:1] in (b"\x11", b"\x12"):
                 raise ReviewError(
-                    f"A per-input required locktime on a version 0 PSBT is {UNSUPPORTED}."
+                    f"A per-input required locktime on a version 0 PSBT is {NOT_SUPPORTED}."
                 )
 
 
 def refuse_modifiable(psbt) -> None:
     """PSBT_GLOBAL_TX_MODIFIABLE means someone may still add inputs or outputs."""
     if any(key[:1] == b"\x06" for key in psbt.unknown):
-        raise ReviewError(f"A modifiable transaction is {UNSUPPORTED}.")
+        raise ReviewError(f"A modifiable transaction is {NOT_SUPPORTED}.")
 
 
 SEQUENCE_FINAL = 0xFFFFFFFF
@@ -71,29 +71,29 @@ def check_loaded_psbt(session, wallet_index: int, text: str) -> PSBT:
     refuse_modifiable(psbt)
     transaction = psbt.tx
     if transaction is None or transaction.version not in (2, 3):
-        raise ReviewError(f"A transaction version other than 2 or 3 is {UNSUPPORTED}.")
+        raise ReviewError(f"A transaction version other than 2 or 3 is {NOT_SUPPORTED}.")
     if not transaction.vin:
-        raise ReviewError(f"A transaction with no inputs is {UNSUPPORTED}.")
+        raise ReviewError(f"A transaction with no inputs is {NOT_SUPPORTED}.")
     if not transaction.vout:
-        raise ReviewError(f"A transaction with no outputs is {UNSUPPORTED}.")
+        raise ReviewError(f"A transaction with no outputs is {NOT_SUPPORTED}.")
     _check_op_returns(psbt)
     _check_output_scripts(psbt)
     seen = set()
     for vin in transaction.vin:
         key = (bytes(vin.txid), vin.vout)
         if key in seen:
-            raise ReviewError(f"Two inputs that spend the same output are {UNSUPPORTED}.")
+            raise ReviewError(f"Two inputs that spend the same output are {NOT_SUPPORTED}.")
         seen.add(key)
     amounts = [_input_amount(psbt, index) for index in range(len(transaction.vin))]
     if any(amount is None for amount in amounts):
-        raise ReviewError(f"An input without an amount is {UNSUPPORTED}.")
+        raise ReviewError(f"An input without an amount is {NOT_SUPPORTED}.")
     output_total = sum(int(vout.value) for vout in transaction.vout)
     if output_total > sum(amounts):
-        raise ReviewError(f"Outputs that add up to more than the inputs are {UNSUPPORTED}.")
+        raise ReviewError(f"Outputs that add up to more than the inputs are {NOT_SUPPORTED}.")
     wallet = session._wallet(wallet_index)
     if _tx_weight(transaction, wallet) > MAX_STANDARD_TX_WEIGHT:
         raise ReviewError(
-            f"A transaction over {MAX_STANDARD_TX_WEIGHT} weight units (100000 vB) is {UNSUPPORTED}."
+            f"A transaction over {MAX_STANDARD_TX_WEIGHT} weight units (100000 vB) is {NOT_SUPPORTED}."
         )
     parsed = [_input_paths(session, wallet, psbt.inputs[index]) for index in range(len(transaction.vin))]
     _same_prefix(parsed)
@@ -107,7 +107,7 @@ def check_loaded_psbt(session, wallet_index: int, text: str) -> PSBT:
     _outputs(session, wallet, psbt)
     if _all_inputs_signed_by_wallet(session, wallet, psbt):
         raise ReviewError(
-            f"A transaction whose inputs are already signed by this wallet is {UNSUPPORTED}."
+            f"A transaction whose inputs are already signed by this wallet is {NOT_SUPPORTED}."
         )
     return psbt
 
@@ -168,7 +168,7 @@ def _input_paths(session, wallet, scope) -> dict:
     derivations = _derivations(scope)
     if not derivations:
         raise ReviewError(
-            f"An input without a master fingerprint and derivation path is {UNSUPPORTED}."
+            f"An input without a master fingerprint and derivation path is {NOT_SUPPORTED}."
         )
     rows = []
     for fingerprint, path in derivations:
@@ -182,12 +182,12 @@ def _input_paths(session, wallet, scope) -> dict:
         raise ReviewError(_other_wallet_message(session, wallet, rows) or _UNRECOGNIZED)
     if any(row["out_of_range"] and row["role"] == wallet.role for row in ours):
         raise ReviewError(
-            f"An input derivation path that this wallet would not derive is {UNSUPPORTED}."
+            f"An input derivation path that this wallet would not derive is {NOT_SUPPORTED}."
         )
     return {"rows": ours, "prefix": ours[0]["prefix"]}
 
 
-_UNRECOGNIZED = f"An unrecognized derivation path is {UNSUPPORTED}."
+_UNRECOGNIZED = f"An unrecognized derivation path is {NOT_SUPPORTED}."
 
 
 def _parse_path(path: list[int]) -> dict:
@@ -227,7 +227,7 @@ def _same_prefix(parsed: list[dict]):
     prefixes = {tuple(row["prefix"] for row in item["rows"]) for item in parsed}
     if len(prefixes) != 1:
         raise ReviewError(
-            f"A transaction that spends from more than one account or wallet is {UNSUPPORTED}."
+            f"A transaction that spends from more than one account or wallet is {NOT_SUPPORTED}."
         )
 
 
@@ -237,7 +237,7 @@ def _known_wallet(session, wallet, parsed: list[dict]):
     for row in item["rows"]:
         if row["role"] == "multisig_native" and len(row["prefix"]) >= 4 and row["prefix"][3] != (2 | HARDENED):
             raise ReviewError(
-                f"An input derivation path that this wallet would not derive is {UNSUPPORTED}."
+                f"An input derivation path that this wallet would not derive is {NOT_SUPPORTED}."
             )
         if row["coin"] != network_coin or row["role"] != wallet.role:
             other = _matching_wallet(session, item, skip=wallet)
@@ -289,7 +289,7 @@ def _matches_psbt(session, wallet, scope, item: dict):
     script = None if utxo is None else utxo.script_pubkey
     if script is not None and script != derived_script:
         raise ReviewError(
-            f"An input whose derived address does not match the PSBT is {UNSUPPORTED}."
+            f"An input whose derived address does not match the PSBT is {NOT_SUPPORTED}."
         )
     for pubkey, derivation in _derivation_items(scope):
         fingerprint = derivation.fingerprint
@@ -300,7 +300,7 @@ def _matches_psbt(session, wallet, scope, item: dict):
         expected = _child_key(session, wallet, fingerprint, row)
         if not _same_key(pubkey, expected, wallet.role == SINGLESIG_TAPROOT):
             raise ReviewError(
-                f"An input whose public key does not match its derivation path is {UNSUPPORTED}."
+                f"An input whose public key does not match its derivation path is {NOT_SUPPORTED}."
             )
 
 
@@ -309,7 +309,7 @@ def _scripts(wallet, scope, session, item: dict):
     if scope.redeem_script is not None or (
         wallet.role != "multisig_native" and scope.witness_script is not None
     ):
-        raise ReviewError(f"An unexpected redeem script or witness script is {UNSUPPORTED}.")
+        raise ReviewError(f"An unexpected redeem script or witness script is {NOT_SUPPORTED}.")
     if wallet.role == "multisig_native" and scope.witness_script is not None:
         # The witness program is the SHA256 of the witness script. A different
         # script would already have failed the address check above.
@@ -322,21 +322,21 @@ def _sighash(wallet, scope):
         return
     if wallet.role == SINGLESIG_TAPROOT:
         if sighash != SIGHASH.DEFAULT:
-            raise ReviewError(f"A signature hash other than SIGHASH_DEFAULT is {UNSUPPORTED}.")
+            raise ReviewError(f"A signature hash other than SIGHASH_DEFAULT is {NOT_SUPPORTED}.")
         return
     if sighash != SIGHASH.ALL:
-        raise ReviewError(f"A signature hash other than SIGHASH_ALL is {UNSUPPORTED}.")
+        raise ReviewError(f"A signature hash other than SIGHASH_ALL is {NOT_SUPPORTED}.")
 
 
 def _sequence(scope, vin):
     sequence = _sequence_value(scope, vin)
     if sequence == SEQUENCE_FINAL:
-        raise ReviewError(f"An input with sequence 0xFFFFFFFF is {UNSUPPORTED}.")
+        raise ReviewError(f"An input with sequence 0xFFFFFFFF is {NOT_SUPPORTED}.")
     blocks = sequence <= 0xFFFF
     time_lock = 0x00400000 <= sequence <= 0x0040FFFF
     final = sequence in (0xFFFFFFFD, 0xFFFFFFFE)
     if not (blocks or time_lock or final):
-        raise ReviewError(f"An input sequence outside the supported ranges is {UNSUPPORTED}.")
+        raise ReviewError(f"An input sequence outside the supported ranges is {NOT_SUPPORTED}.")
 
 
 def _check_op_returns(psbt: PSBT) -> None:
@@ -356,12 +356,12 @@ def _check_op_returns(psbt: PSBT) -> None:
             continue
         if not _push_only(raw[1:]):
             raise ReviewError(
-                f"An OP_RETURN output that is not followed only by data pushes is {UNSUPPORTED}."
+                f"An OP_RETURN output that is not followed only by data pushes is {NOT_SUPPORTED}."
             )
         total += len(raw)
         if total > DATACARRIER_MAX_BYTES:
             raise ReviewError(
-                f"OP_RETURN outputs larger than {DATACARRIER_MAX_BYTES} bytes together are {UNSUPPORTED}."
+                f"OP_RETURN outputs larger than {DATACARRIER_MAX_BYTES} bytes together are {NOT_SUPPORTED}."
             )
 
 
@@ -382,20 +382,20 @@ def _check_output_scripts(psbt: PSBT) -> None:
             continue
         if kind == "native" and int(amount) < NATIVE_DUST_SATS:
             raise ReviewError(
-                f"A Native-Segwit SingleSig output below {NATIVE_DUST_SATS} sats is {UNSUPPORTED}."
+                f"A Native-Segwit SingleSig output below {NATIVE_DUST_SATS} sats is {NOT_SUPPORTED}."
             )
         if kind == "taproot" and int(amount) < WITNESS_SCRIPT_DUST_SATS:
             raise ReviewError(
-                f"A Taproot output below {WITNESS_SCRIPT_DUST_SATS} sats is {UNSUPPORTED}."
+                f"A Taproot output below {WITNESS_SCRIPT_DUST_SATS} sats is {NOT_SUPPORTED}."
             )
         if kind == "multisig" and int(amount) < WITNESS_SCRIPT_DUST_SATS:
             raise ReviewError(
-                f"A Native-Segwit MultiSig output below {WITNESS_SCRIPT_DUST_SATS} sats is {UNSUPPORTED}."
+                f"A Native-Segwit MultiSig output below {WITNESS_SCRIPT_DUST_SATS} sats is {NOT_SUPPORTED}."
             )
         if kind is None:
             raise ReviewError(
                 "An output script other than Native-Segwit SingleSig, Taproot, "
-                f"Native-Segwit MultiSig, or OP_RETURN is {UNSUPPORTED}."
+                f"Native-Segwit MultiSig, or OP_RETURN is {NOT_SUPPORTED}."
             )
 
 
@@ -507,12 +507,12 @@ def _outputs(session, wallet, psbt: PSBT):
             continue
         if owner is wallet:
             raise ReviewError(
-                f"A change output whose derived address does not match the PSBT is {UNSUPPORTED}."
+                f"A change output whose derived address does not match the PSBT is {NOT_SUPPORTED}."
             )
         name = session.wallet_short_name_of(owner)
         raise ReviewError(
             f"An output matches {name}, but the derived address does not match the PSBT. "
-            f"That is {UNSUPPORTED}."
+            f"That is {NOT_SUPPORTED}."
         )
 
 

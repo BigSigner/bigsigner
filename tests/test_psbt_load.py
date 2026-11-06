@@ -6,7 +6,7 @@ from embit.psbt import DerivationPath, PSBT
 from embit.script import Script, address_to_scriptpubkey
 from embit.transaction import SIGHASH, Transaction, TransactionInput, TransactionOutput
 
-from bigsigner.psbt_check import UNSUPPORTED, check_loaded_psbt
+from bigsigner.psbt_check import NOT_SUPPORTED, check_loaded_psbt
 from bigsigner.psbt_load import TOO_LARGE, UNREADABLE, is_binary_psbt, psbt_bytes
 from bigsigner.psbt_review import ReviewError
 from bigsigner.seedqr import compact_bytes
@@ -76,7 +76,7 @@ def _raises(session, psbt, snippet):
     except ReviewError as exc:
         assert snippet in str(exc)
         assert "Bad Transaction" not in str(exc)
-        assert UNSUPPORTED in str(exc) or "does not belong" in str(exc) or "spends from account" in str(exc)
+        assert NOT_SUPPORTED in str(exc) or "does not belong" in str(exc) or "spends from account" in str(exc)
     else:
         raise AssertionError(snippet)
 
