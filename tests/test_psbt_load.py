@@ -242,6 +242,11 @@ def test_each_psbt_refusal_names_the_unsupported_case():
     empty.inputs.clear()
     _raises(session, empty, "no inputs")
 
+    no_outputs = _psbt(session)
+    no_outputs.tx.vout.clear()
+    no_outputs.outputs.clear()
+    _raises(session, no_outputs, "no outputs")
+
     duplicate = _psbt(session)
     duplicate.tx.vin.append(TransactionInput(b"\x11" * 32, 0, sequence=0xFFFFFFFD))
     duplicate.inputs.append(duplicate.inputs[0])

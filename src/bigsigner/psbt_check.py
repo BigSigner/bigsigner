@@ -35,6 +35,8 @@ def check_loaded_psbt(session, wallet_index: int, text: str) -> PSBT:
         raise ReviewError(f"A transaction version other than 2 or 3 is {UNSUPPORTED}.")
     if not transaction.vin:
         raise ReviewError(f"A transaction with no inputs is {UNSUPPORTED}.")
+    if not transaction.vout:
+        raise ReviewError(f"A transaction with no outputs is {UNSUPPORTED}.")
     seen = set()
     for vin in transaction.vin:
         key = (bytes(vin.txid), vin.vout)
