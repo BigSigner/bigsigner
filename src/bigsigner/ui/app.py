@@ -5713,9 +5713,10 @@ class App:
         width = (right - left - gap) // 2
         cancel = (left, y, left + width, y + height)
         confirm = (left + width + gap, y, right, y + height)
-        self._dialog_button(frame, cancel, "Cancel", "confirm-no", (132, 138, 148))
+        no, yes = ("No", "Yes") if self.confirm == "create-wallet" else ("Cancel", "Confirm")
+        self._dialog_button(frame, cancel, no, "confirm-no", (132, 138, 148))
         color = RED if self.confirm in ("delete-key", "delete-wallet", "replace-file") else BLUE
-        self._dialog_button(frame, confirm, "Confirm", "confirm-yes", color)
+        self._dialog_button(frame, confirm, yes, "confirm-yes", color)
 
     def _dialog_button(self, frame: Frame, box, text: str, action: str, color):
         frame.draw.rounded_rectangle(box, radius=14, fill=color)

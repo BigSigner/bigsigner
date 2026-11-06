@@ -391,8 +391,8 @@ def test_a_new_seed_can_create_a_singlesig_wallet():
     assert app.screen == "key"
     assert app.confirm == "create-wallet"
     app.render()
-    assert any(hit["label"] == "Confirm" for hit in app.hits)
-    assert any(hit["label"] == "Cancel" for hit in app.hits)
+    assert any(hit["label"] == "Yes" for hit in app.hits)
+    assert any(hit["label"] == "No" for hit in app.hits)
     app._act("confirm-no")
     assert app.confirm is None
     assert app.screen == "key"
