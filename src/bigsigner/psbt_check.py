@@ -20,6 +20,10 @@ SEQUENCE_FINAL = 0xFFFFFFFF
 # OP_RETURN output are added together. The amount is not limited: an
 # unspendable output has a dust threshold of zero.
 DATACARRIER_MAX_BYTES = 100_000
+# Bitcoin Core 31 dust thresholds at 3 sat/vB. An output below its threshold
+# is not relayed. The limit follows the receiving script, not the sender.
+NATIVE_DUST_SATS = 294
+WITNESS_SCRIPT_DUST_SATS = 330
 
 
 def check_loaded_psbt(session, wallet_index: int, text: str) -> PSBT:
@@ -42,6 +46,7 @@ def check_loaded_psbt(session, wallet_index: int, text: str) -> PSBT:
     if not transaction.vout:
         raise ReviewError(f"A transaction with no outputs is {UNSUPPORTED}.")
     _check_op_returns(psbt)
+    _check_output_scripts(psbt)
     seen = set()
     for vin in transaction.vin:
         key = (bytes(vin.txid), vin.vout)
@@ -319,6 +324,52 @@ def _check_op_returns(psbt: PSBT) -> None:
             raise ReviewError(
                 f"OP_RETURN outputs larger than {DATACARRIER_MAX_BYTES} bytes together are {UNSUPPORTED}."
             )
+
+
+def _check_output_scripts(psbt: PSBT) -> None:
+    """Refuse an output this signer will not pay.
+
+    A spendable output must be Native-Segwit SingleSig, Taproot, or
+    Native-Segwit MultiSig, and at least the Bitcoin Core dust threshold.
+    An OP_RETURN output is the other accepted kind, at any amount.
+    """
+    for index, scope in enumerate(psbt.outputs):
+        vout = psbt.tx.vout[index]
+        script = scope.script_pubkey or vout.script_pubkey
+        raw = b"" if script is None else bytes(script.data)
+        kind = _output_kind(raw)
+        amount = scope.value if scope.value is not None else vout.value
+        if kind == "op_return":
+            continue
+        if kind == "native" and int(amount) < NATIVE_DUST_SATS:
+            raise ReviewError(
+                f"A Native-Segwit SingleSig output below {NATIVE_DUST_SATS} sats is {UNSUPPORTED}."
+            )
+        if kind == "taproot" and int(amount) < WITNESS_SCRIPT_DUST_SATS:
+            raise ReviewError(
+                f"A Taproot output below {WITNESS_SCRIPT_DUST_SATS} sats is {UNSUPPORTED}."
+            )
+        if kind == "multisig" and int(amount) < WITNESS_SCRIPT_DUST_SATS:
+            raise ReviewError(
+                f"A Native-Segwit MultiSig output below {WITNESS_SCRIPT_DUST_SATS} sats is {UNSUPPORTED}."
+            )
+        if kind is None:
+            raise ReviewError(
+                "An output script other than Native-Segwit SingleSig, Taproot, "
+                f"Native-Segwit MultiSig, or OP_RETURN is {UNSUPPORTED}."
+            )
+
+
+def _output_kind(raw: bytes) -> str | None:
+    if raw.startswith(b"\x6a") and _push_only(raw[1:]):
+        return "op_return"
+    if len(raw) == 22 and raw[:2] == b"\x00\x14":
+        return "native"
+    if len(raw) == 34 and raw[:2] == b"\x51\x20":
+        return "taproot"
+    if len(raw) == 34 and raw[:2] == b"\x00\x20":
+        return "multisig"
+    return None
 
 
 def _push_only(data: bytes) -> bool:

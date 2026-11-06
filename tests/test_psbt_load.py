@@ -261,6 +261,16 @@ def test_each_psbt_refusal_names_the_unsupported_case():
     huge = b"\x6a\x4e" + (100_000).to_bytes(4, "little") + (b"\x00" * 100_000)
     _raises(session, _with_scripts((0, huge)), "100000 bytes")
 
+    assert check_loaded_psbt(session, 0, _psbt(session, output=294)).tx.version == 2
+    _raises(session, _psbt(session, output=293), "below 294 sats")
+    taproot = b"\x51\x20" + (b"\x11" * 32)
+    multisig = b"\x00\x20" + (b"\x22" * 32)
+    assert check_loaded_psbt(session, 0, _with_scripts((330, taproot), (330, multisig))).tx.version == 2
+    _raises(session, _with_scripts((329, taproot)), "Taproot output below 330")
+    _raises(session, _with_scripts((329, multisig)), "Native-Segwit MultiSig output below 330")
+    legacy = b"\x76\xa9\x14" + (b"\x33" * 20) + b"\x88\xac"
+    _raises(session, _with_scripts((100_000, legacy)), "other than Native-Segwit SingleSig")
+
     duplicate = _psbt(session)
     duplicate.tx.vin.append(TransactionInput(b"\x11" * 32, 0, sequence=0xFFFFFFFD))
     duplicate.inputs.append(duplicate.inputs[0])

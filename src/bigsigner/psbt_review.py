@@ -36,9 +36,10 @@ def review_psbt(session, wallet_index: int, raw: str | bytes) -> dict:
     fee = sum(item["amount"] for item in inputs) - sum(item["amount"] for item in outputs)
     if fee < 0:
         raise ReviewError("The outputs are larger than the inputs.")
-    from .psbt_check import _check_op_returns
+    from .psbt_check import _check_op_returns, _check_output_scripts
 
     _check_op_returns(psbt)
+    _check_output_scripts(psbt)
     vsize = _estimate_vsize(transaction, inputs, outputs, wallet)
     external = [item for item in outputs if not item["change"]]
     warnings = _warnings(transaction, inputs, outputs, external)
