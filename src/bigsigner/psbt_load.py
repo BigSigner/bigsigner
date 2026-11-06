@@ -1,8 +1,8 @@
 """Read a PSBT from the QR and file formats SeedSigner and Specter-DIY scan.
 
 A single code or file may be base64 (the usual text form), Electrum's base43,
-or a binary PSBT whose text form still begins with the PSBT magic. A sequence
-may be:
+or a binary PSBT. BIP 174 defines that file as the ASCII characters ``psbt``
+followed by the byte ``0xff``. A sequence may be:
 
 - Specter-DIY ``pMofN <base64 chunk>``
 - a Blockchain Commons ``ur:crypto-psbt`` or legacy ``ur:bytes`` sequence
@@ -60,20 +60,36 @@ class SpecterParts:
         return "".join(self.parts[number] for number in range(1, count + 1))
 
 
-def psbt_bytes(text: str) -> bytes:
+def is_binary_psbt(data: bytes) -> bool:
+    """True when these bytes are a BIP 174 PSBT file.
+
+    The magic is the ASCII characters ``psbt`` followed by ``0xff``.
+    """
+    return isinstance(data, (bytes, bytearray)) and bytes(data).startswith(_MAGIC)
+
+
+def psbt_bytes(text: str | bytes) -> bytes:
     """The decoded PSBT, or an error when the text is not one or is too large."""
-    compact = "".join(str(text).split())
-    raw = _decode_base64(compact)
-    if raw is None:
-        raw = _decode_base43(compact)
-    if raw is None or not raw.startswith(_MAGIC):
-        raise SessionError(UNREADABLE)
+    if isinstance(text, (bytes, bytearray)) and is_binary_psbt(text):
+        raw = bytes(text)
+    else:
+        if isinstance(text, (bytes, bytearray)):
+            try:
+                text = bytes(text).decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise SessionError(UNREADABLE) from exc
+        compact = "".join(str(text).split())
+        raw = _decode_base64(compact)
+        if raw is None:
+            raw = _decode_base43(compact)
+        if raw is None or not raw.startswith(_MAGIC):
+            raise SessionError(UNREADABLE)
     if len(raw) > PSBT_MAX_BYTES:
         raise SessionError(TOO_LARGE)
     return raw
 
 
-def psbt_text(text: str) -> str:
+def psbt_text(text: str | bytes) -> str:
     """Base64 of a PSBT, which is the form the rest of the app stores."""
     return base64.b64encode(psbt_bytes(text)).decode("ascii")
 

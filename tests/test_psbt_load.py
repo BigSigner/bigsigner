@@ -7,7 +7,7 @@ from embit.script import Script, address_to_scriptpubkey
 from embit.transaction import SIGHASH, Transaction, TransactionInput, TransactionOutput
 
 from bigsigner.psbt_check import UNSUPPORTED, check_loaded_psbt
-from bigsigner.psbt_load import TOO_LARGE, psbt_bytes
+from bigsigner.psbt_load import TOO_LARGE, UNREADABLE, is_binary_psbt, psbt_bytes
 from bigsigner.psbt_review import ReviewError
 from bigsigner.seedqr import compact_bytes
 from bigsigner.session import Session, _account_path, _derive_public
@@ -140,6 +140,58 @@ def test_a_file_or_qr_that_is_not_a_psbt_names_what_it_is():
         _tap(app, "note.txt")
         assert app.screen == "load-psbt"
         assert app.notice == "This is a seed, not a PSBT."
+    finally:
+        unmount_memory()
+
+
+def test_a_binary_psbt_file_is_the_bip174_form_and_loads_from_the_sd_card():
+    from bigsigner.sdcard import mount_memory, unmount_memory
+
+    session = _native()
+    raw = _psbt(session).serialize()
+    assert raw.startswith(b"psbt\xff")
+    assert is_binary_psbt(raw)
+    assert psbt_bytes(raw) == raw
+    assert not is_binary_psbt(b"psbt")
+    assert not is_binary_psbt(b"psbt\x00")
+    try:
+        psbt_bytes(b"psbt\x00not-a-psbt")
+    except Exception as exc:
+        assert str(exc) == UNREADABLE
+    else:
+        raise AssertionError("letters")
+    try:
+        psbt_bytes(b"psbt\xff" + b"\x00" * 100_001)
+    except Exception as exc:
+        assert str(exc) == TOO_LARGE
+    else:
+        raise AssertionError("size")
+
+    app = App()
+    app.session = session
+    app.wallet_index = 0
+    app.screen = "load-psbt"
+    encoded = base64.b64encode(raw).decode("ascii")
+    mount_memory({"files": {
+        "wallet.psbt": {"base64": encoded},
+        "wallet.txt": encoded,
+        "note.bin": {"base64": base64.b64encode(b"\x00\x01\xff").decode("ascii")},
+    }})
+    try:
+        _tap(app, "Load from SD Card")
+        _tap(app, "wallet.psbt")
+        assert app.screen == "psbt-yaml"
+        assert app.notice == ""
+        app.back_one()
+        assert app.screen == "load-psbt"
+        _tap(app, "Load from SD Card")
+        _tap(app, "wallet.txt")
+        assert app.screen == "psbt-yaml"
+        app.back_one()
+        _tap(app, "Load from SD Card")
+        _tap(app, "note.bin")
+        assert app.screen == "load-psbt"
+        assert app.notice == "That file is not text."
     finally:
         unmount_memory()
 

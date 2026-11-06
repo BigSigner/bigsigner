@@ -19,7 +19,7 @@ from ..rpc import split_line
 from ..parse import ParseError
 from ..paths import HARDENED, MULTISIG_NATIVE, SINGLESIG_NATIVE, SINGLESIG_TAPROOT, coin_type, format_path
 from ..psbt_check import check_loaded_psbt, psbt_yaml
-from ..psbt_load import TOO_LARGE, UNREADABLE, SpecterParts, explain_not_psbt, psbt_bytes, psbt_text
+from ..psbt_load import TOO_LARGE, UNREADABLE, SpecterParts, explain_not_psbt, is_binary_psbt, psbt_bytes, psbt_text
 from ..psbt_review import ReviewError, review_psbt, sign_with
 from ..qr import qr_matrix
 from ..session import (
@@ -45,7 +45,7 @@ from ..message_sign import (
     starts_with_signmessage_command,
 )
 from ..scan import QrSequence, import_scanned, read_address
-from ..sdcard import SdError, child_path, file_exists, list_folder, parent_path, read_text, write_text
+from ..sdcard import SdError, child_path, file_exists, list_folder, parent_path, read_bytes, read_text, write_text
 from ..licenses import NOTICES
 from ..seedqr import compact_bytes
 from ..slip132 import display_form, label_of
@@ -1625,6 +1625,9 @@ class App:
         self.go("sd")
 
     def _read_sd_file(self, relative: str):
+        if self.sd_expect == "psbt":
+            self._read_psbt_file(relative)
+            return
         try:
             text = read_text(relative, raw=self.sd_expect in ("message", "address-message"))
         except SdError as exc:
@@ -1639,10 +1642,6 @@ class App:
                 self.set_error(str(exc))
                 self._return_to_address_message()
                 return
-            if self.sd_expect == "psbt":
-                self.set_error(str(exc))
-                self._return_to_load_psbt()
-                return
             self._show_load_error(str(exc), self.sd_expect)
             return
         if self.sd_expect == "address":
@@ -1654,10 +1653,29 @@ class App:
         if self.sd_expect == "address-message":
             self._begin_address_message(text)
             return
-        if self.sd_expect == "psbt":
-            self._accept_psbt_text(text, "file")
-            return
         self._import_payload(text, self.sd_expect, "file")
+
+    def _read_psbt_file(self, relative: str):
+        try:
+            data = read_bytes(relative)
+        except SdError as exc:
+            self.set_error(str(exc))
+            self._return_to_load_psbt()
+            return
+        if is_binary_psbt(data):
+            self._accept_psbt_text(data, "file")
+            return
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            self.set_error("That file is not text.")
+            self._return_to_load_psbt()
+            return
+        if "\x00" in text:
+            self.set_error("That file is not text.")
+            self._return_to_load_psbt()
+            return
+        self._accept_psbt_text(text.strip(), "file")
 
     def _open_export(self, source: str):
         self.qr_source = source
@@ -6908,13 +6926,13 @@ class App:
             return payload
         return text
 
-    def _accept_psbt_text(self, text: str, source: str):
+    def _accept_psbt_text(self, text: str | bytes, source: str):
         try:
             psbt_bytes(text)
             checked = check_loaded_psbt(self.session, self.wallet_index, psbt_text(text))
         except SessionError as exc:
             message = str(exc)
-            if message == UNREADABLE:
+            if message == UNREADABLE and isinstance(text, str):
                 message = explain_not_psbt(text, source, self.session.network)
                 if message.startswith("This is a transaction"):
                     message = UNREADABLE

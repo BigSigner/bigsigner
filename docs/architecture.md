@@ -38,7 +38,7 @@ Wallets are descriptors built from those keys. Changing the network drops wallet
 | `scan.py` | One scanned or loaded string: mnemonic, SeedQR, key expression, or descriptor. |
 | `seedqr.py` | Standard and compact SeedQR. |
 | `entropy.py` | Dice, coin, and camera entropy, following SeedSigner. |
-| `psbt_load.py` | Read a PSBT from base64, base43, Specter parts, UR, or BBQr. |
+| `psbt_load.py` | Read a PSBT from base64, base43, the BIP 174 binary file, Specter parts, UR, or BBQr. |
 | `psbt_check.py` | Refuse a PSBT this signer will not sign, then describe it as YAML. |
 | `psbt_review.py` | Check a PSBT against one loaded wallet, then sign with a seed that is in memory. |
 | `sdcard.py` | The SD card kept in memory. The browser page and the tests mount that card. |

@@ -68,6 +68,12 @@ def read_text(relative: str, *, raw: bool = False) -> str:
     return _read_memory(relative, raw=raw)
 
 
+def read_bytes(relative: str) -> bytes:
+    """The file's bytes, including a non-text file. A file above 256000 bytes is refused."""
+    _require_card()
+    return _file_bytes(relative)
+
+
 def file_exists(relative: str) -> bool:
     """True when that path is a file on the card. A missing file is False."""
     _require_card()
@@ -210,7 +216,7 @@ def _child_name(path: str, prefix: str) -> str:
     return rest
 
 
-def _read_memory(relative: str, raw: bool = False) -> str:
+def _file_bytes(relative: str) -> bytes:
     path = _memory_path(relative)
     if not path or path in _memory["dirs"] or path not in _memory["files"]:
         raise SdError("That is not a file.")
@@ -218,6 +224,11 @@ def _read_memory(relative: str, raw: bool = False) -> str:
     data = stored if isinstance(stored, bytes) else stored.encode("utf-8")
     if len(data) > 256_000:
         raise SdError("That file is too large.")
+    return data
+
+
+def _read_memory(relative: str, raw: bool = False) -> str:
+    data = _file_bytes(relative)
     if b"\x00" in data:
         raise SdError("That file is not text.")
     try:
