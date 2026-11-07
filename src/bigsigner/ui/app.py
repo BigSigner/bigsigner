@@ -1423,6 +1423,7 @@ class App:
         "psbt-export": lambda self: self._open_psbt_export(),
         "psbt-export-binary": lambda self: self._choose_psbt_export(True),
         "psbt-export-base64": lambda self: self._choose_psbt_export(False),
+        "psbt-back-wallet": lambda self: self._back_signed_to_wallet(),
         "psbt-qr-next": lambda self: self._step_psbt_qr(1),
         "psbt-qr-prev": lambda self: self._step_psbt_qr(-1),
         "input-qr-next": lambda self: self._step_input_qr(1),
@@ -7688,6 +7689,17 @@ class App:
         self._psbt_qr_parts_cache = []
         self._psbt_qr_images = {}
         self.go("psbt-share")
+
+    def _back_signed_to_wallet(self):
+        """Leave the signed-PSBT flow and open the spending wallet alone."""
+        if self.wallet_index >= len(self.session.wallets):
+            self.back = []
+            self.screen = "wallets"
+            self.menu = False
+            self.add_menu = False
+            self.open_dropdown = None
+            return
+        self._show_wallet(self.wallet_index)
 
     def _open_psbt_qr(self):
         if self.signed_psbt is None:

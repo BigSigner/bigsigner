@@ -465,6 +465,31 @@ def test_the_signing_screen_offers_a_signed_qr_and_an_sd_file():
     assert "Animated UR" in [item["text"] for item in app.texts]
 
 
+def test_back_to_wallet_leaves_the_signed_psbt_flow():
+    session = _native()
+    app = App()
+    app.session = session
+    app.wallet_index = 0
+    app._accept_psbt_text(base64.b64encode(_psbt(session).serialize()).decode(), "file")
+    app.scroll["psbt-yaml"] = 10**9
+    app.render()
+    app._act("psbt-sign")
+    app.render()
+    app.render()
+    assert app.screen == "psbt-share"
+    app.render()
+    labels = [hit["label"] for hit in app.hits]
+    assert "Show QR Code" in labels
+    assert "Export to SD Card" in labels
+    assert "Back to Wallet" in labels
+    back = next(hit for hit in app.hits if hit["action"] == "psbt-back-wallet")
+    assert back["box"][1] > 600
+    app.back = ["wallet", "load-psbt", "psbt-yaml"]
+    app._act("psbt-back-wallet")
+    assert app.screen == "wallet"
+    assert app.back == ["wallets"]
+
+
 def test_a_press_during_searching_addresses_does_not_click_after():
     """Stale taps after search are ignored; one deliberate tap after the gap works."""
     import time

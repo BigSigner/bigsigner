@@ -284,6 +284,8 @@ def paint_share(app, frame):
         return
     y = frame.button(HEADER + 24, "Show QR Code", "psbt-show-qr")
     frame.button(y, "Export to SD Card", "psbt-export")
+    back_h = frame.button_height("Back to Wallet")
+    frame.button(HEIGHT - 16 - back_h, "Back to Wallet", "psbt-back-wallet")
 
 
 def paint_export_format(app, frame):
