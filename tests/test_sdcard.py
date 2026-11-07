@@ -84,7 +84,8 @@ def test_a_file_that_is_not_a_key_opens_an_error_screen():
     assert app.screen == "keys"
 
 
-def test_a_missing_card_is_reported():
+def test_a_missing_card_is_reported(monkeypatch, tmp_path):
+    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path / "missing"))
     app = App()
     app.screen = "sd"
     app.render()
@@ -97,6 +98,64 @@ def test_reading_outside_the_card_is_refused():
     mount_memory({"files": {}})
     with pytest.raises(SdError, match="outside"):
         read_text("../secret.txt")
+
+
+def test_disk_card_lists_and_loads_a_seed(monkeypatch, tmp_path):
+    seeds = tmp_path / "seeds"
+    seeds.mkdir()
+    (seeds / "abandon.txt").write_text(f"\n  {ABANDON}\n", encoding="utf-8")
+    (seeds / "nested").mkdir()
+    (seeds / "nested" / "note.txt").write_text("hello\n", encoding="utf-8")
+    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+
+    assert list_folder("") == [{"name": "seeds", "kind": "dir"}]
+    assert list_folder("seeds") == [
+        {"name": "nested", "kind": "dir"},
+        {"name": "abandon.txt", "kind": "file"},
+    ]
+
+    app = App()
+    app.screen = "keys"
+    _tap(app, "plus")
+    _tap(app, "Load from SD Card")
+    assert app.screen == "sd"
+    _tap(app, "seeds/")
+    assert app.sd_dir == "seeds"
+    _tap(app, "abandon.txt")
+    assert app.screen == "key"
+    assert app.notice == "The seed was added successfully."
+    saved = next(iter(app.session.fingerprints.values()))
+    assert " ".join(saved.keys[0].mnemonic) == ABANDON
+
+
+def test_disk_card_writes_and_refuses_escape(monkeypatch, tmp_path):
+    from bigsigner.sdcard import read_bytes, write_bytes
+
+    keep = tmp_path / "keep"
+    keep.mkdir()
+    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+
+    write_text("keep/note.txt", "hello")
+    assert read_text("keep/note.txt") == "hello"
+    assert (keep / "note.txt").read_text(encoding="utf-8") == "hello"
+    write_bytes("keep/data.bin", b"psbt\xff")
+    assert read_bytes("keep/data.bin") == b"psbt\xff"
+    assert file_exists("keep/note.txt")
+    assert not file_exists("missing.txt")
+    with pytest.raises(SdError, match="outside"):
+        read_text("../secret.txt")
+    with pytest.raises(SdError, match="outside"):
+        write_text("../secret.txt", "nope")
+
+
+def test_memory_card_overrides_disk_path(monkeypatch, tmp_path):
+    (tmp_path / "disk.txt").write_text("from-disk\n", encoding="utf-8")
+    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+    mount_memory({"files": {"memory.txt": "from-memory\n"}})
+    names = {entry["name"] for entry in list_folder("")}
+    assert names == {"memory.txt"}
+    assert "disk.txt" not in names
+    assert read_text("memory.txt") == "from-memory"
 
 
 def test_a_singlesig_descriptor_from_keys_asks_before_loading_both():
