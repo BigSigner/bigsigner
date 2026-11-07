@@ -588,8 +588,7 @@ def _output_shape(app, card):
     amount = len(format_btc(card["amount"]))
     if owned:
         return ("owned", len(card["address"]), owned["name"], owned["account_line"], owned["place"], amount)
-    searching = bool(app.psbt_search and app.psbt_search["index"] == card["index"])
-    return ("external", len(card["address"]), searching, amount)
+    return ("external", len(card["address"]), amount)
 
 
 def _input_shape(view, card):
@@ -619,13 +618,8 @@ def _output_card(app, frame, y, paint, offset, card) -> int:
             cursor += 12
             cursor = _centered_flow(frame, "External Address", cursor, paint, offset, TITLE_SIZE, INK)
             cursor += 12
-            searching = app.psbt_search and app.psbt_search["index"] == card["index"]
-            if searching:
-                label, enabled = "Searching\u2026", False
-            else:
-                label, enabled = "Search for Address in Loaded Wallets", True
             cursor = _card_button(
-                frame, cursor, label, f"psbt-search-{card['index']}-0", paint, offset, enabled=enabled,
+                frame, cursor, "Search for Address in Loaded Wallets", f"psbt-search-{card['index']}-0", paint, offset,
             )
             cursor += 12
     if card["kind"] != "op_return":
@@ -673,13 +667,8 @@ def _output_card_text(app, frame, start, offset, card, height):
             cursor += 12
             cursor = _centered_flow(frame, "External Address", cursor, True, offset, TITLE_SIZE, INK)
             cursor += 12
-            searching = app.psbt_search and app.psbt_search["index"] == card["index"]
-            if searching:
-                label, enabled = "Searching\u2026", False
-            else:
-                label, enabled = "Search for Address in Loaded Wallets", True
             cursor = _card_button(
-                frame, cursor, label, f"psbt-search-{card['index']}-0", True, offset, enabled=enabled,
+                frame, cursor, "Search for Address in Loaded Wallets", f"psbt-search-{card['index']}-0", True, offset,
             )
             cursor += 12
         cursor = _btc_amount(frame, cursor, True, offset, card["amount"], INK)
