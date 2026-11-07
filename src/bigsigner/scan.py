@@ -22,6 +22,7 @@ _KIND_NAME = {
     "descriptor": "a wallet descriptor",
     "key": "a key expression",
     "transaction": "a transaction",
+    "binary-psbt": "a binary PSBT",
     "legacy-address": "a legacy address",
     "wrapped-address": "a wrapped SegWit address",
 }

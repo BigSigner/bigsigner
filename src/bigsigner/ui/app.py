@@ -46,7 +46,7 @@ from ..message_sign import (
     signing_secret,
     starts_with_signmessage_command,
 )
-from ..scan import QrSequence, import_scanned, read_address
+from ..scan import QrSequence, import_scanned, read_address, wrong_type_message
 from ..sdcard import SdError, child_path, file_exists, list_folder, parent_path, read_bytes, read_text, write_bytes, write_text
 from ..licenses import NOTICES
 from ..seedqr import compact_bytes
@@ -1824,18 +1824,36 @@ class App:
         try:
             text = read_text(relative, raw=self.sd_expect in ("message", "address-message"))
         except SdError as exc:
+            message = str(exc)
+            if message == "That file is not text." and self.sd_expect in (
+                "key",
+                "descriptor",
+                "address",
+                "message",
+            ):
+                try:
+                    data = read_bytes(relative)
+                except SdError:
+                    data = b""
+                if is_binary_psbt(data):
+                    message = wrong_type_message(
+                        "binary-psbt",
+                        self.sd_expect,
+                        "file",
+                        self.session.network,
+                    )
             if self.sd_expect == "address":
-                self.set_error(str(exc))
+                self.set_error(message)
                 return
             if self.sd_expect == "message":
-                self.set_error(str(exc))
+                self.set_error(message)
                 self._return_to_message_source()
                 return
             if self.sd_expect == "address-message":
-                self.set_error(str(exc))
+                self.set_error(message)
                 self._return_to_address_message()
                 return
-            self._show_load_error(str(exc), self.sd_expect)
+            self._show_load_error(message, self.sd_expect)
             return
         if self.sd_expect == "address":
             self._verify_loaded_address(text, "file")

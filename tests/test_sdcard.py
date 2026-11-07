@@ -1,3 +1,5 @@
+import base64
+
 import pytest
 
 from bigsigner.sdcard import (
@@ -79,6 +81,30 @@ def test_a_file_that_is_not_a_key_opens_an_error_screen():
     assert app.screen == "load-error"
     assert app.load_error == "That file is not a seed, key expression or wallet descriptor."
     assert app.notice == ""
+    assert not app.session.fingerprints
+    _tap(app, "OK")
+    assert app.screen == "keys"
+
+
+def test_a_binary_psbt_loaded_as_a_seed_names_the_type():
+    mount_memory(
+        {
+            "files": {
+                "wallet.psbt": {
+                    "base64": base64.b64encode(b"psbt\xff" + b"\x00\x01").decode("ascii"),
+                }
+            }
+        }
+    )
+    app = App()
+    app.screen = "keys"
+    _tap(app, "plus")
+    _tap(app, "Load from SD Card")
+    _tap(app, "wallet.psbt")
+    assert app.screen == "load-error"
+    assert app.load_error == (
+        "This is a binary PSBT, not a seed, a key expression, or a wallet descriptor."
+    )
     assert not app.session.fingerprints
     _tap(app, "OK")
     assert app.screen == "keys"
