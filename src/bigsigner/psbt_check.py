@@ -52,6 +52,9 @@ DATACARRIER_MAX_BYTES = 100_000
 MAX_STANDARD_TX_WEIGHT = 400_000
 # Bitcoin Core 31 dust thresholds at 3 sat/vB. An output below its threshold
 # is not relayed. The limit follows the receiving script, not the sender.
+# Legacy P2PKH is 546. P2SH, including wrapped Segwit, is 540.
+LEGACY_DUST_SATS = 546
+P2SH_DUST_SATS = 540
 NATIVE_DUST_SATS = 294
 WITNESS_SCRIPT_DUST_SATS = 330
 
@@ -553,9 +556,12 @@ def _check_op_returns(psbt: PSBT) -> None:
 def _check_output_scripts(psbt: PSBT) -> None:
     """Refuse an output this signer will not pay.
 
-    A spendable output must be Native-Segwit SingleSig, Taproot, or
-    Native-Segwit MultiSig, and at least the Bitcoin Core dust threshold.
-    An OP_RETURN output is the other accepted kind, at any amount.
+    A spendable output must be P2PKH, P2SH, P2WPKH, P2WSH, or P2TR, and at
+    least the Bitcoin Core dust threshold. A P2WSH output is any 32-byte
+    witness program, not necessarily a multisig. An OP_RETURN output is the
+    other accepted kind, at any amount.
+    Inputs stay limited to the wallet types this signer can sign. Legacy
+    outputs do not have that limit: malleability is a problem for legacy inputs.
     """
     for index, scope in enumerate(psbt.outputs):
         vout = psbt.tx.vout[index]
@@ -565,6 +571,14 @@ def _check_output_scripts(psbt: PSBT) -> None:
         amount = scope.value if scope.value is not None else vout.value
         if kind == "op_return":
             continue
+        if kind == "p2pkh" and int(amount) < LEGACY_DUST_SATS:
+            raise ReviewError(
+                f"A legacy output below {LEGACY_DUST_SATS} sats is {NOT_SUPPORTED}."
+            )
+        if kind == "p2sh" and int(amount) < P2SH_DUST_SATS:
+            raise ReviewError(
+                f"A P2SH output below {P2SH_DUST_SATS} sats is {NOT_SUPPORTED}."
+            )
         if kind == "native" and int(amount) < NATIVE_DUST_SATS:
             raise ReviewError(
                 f"A Native-Segwit SingleSig output below {NATIVE_DUST_SATS} sats is {NOT_SUPPORTED}."
@@ -573,26 +587,31 @@ def _check_output_scripts(psbt: PSBT) -> None:
             raise ReviewError(
                 f"A Taproot output below {WITNESS_SCRIPT_DUST_SATS} sats is {NOT_SUPPORTED}."
             )
-        if kind == "multisig" and int(amount) < WITNESS_SCRIPT_DUST_SATS:
+        if kind == "p2wsh" and int(amount) < WITNESS_SCRIPT_DUST_SATS:
             raise ReviewError(
-                f"A Native-Segwit MultiSig output below {WITNESS_SCRIPT_DUST_SATS} sats is {NOT_SUPPORTED}."
+                f"A P2WSH output below {WITNESS_SCRIPT_DUST_SATS} sats is {NOT_SUPPORTED}."
             )
         if kind is None:
             raise ReviewError(
-                "An output script other than Native-Segwit SingleSig, Taproot, "
-                f"Native-Segwit MultiSig, or OP_RETURN is {NOT_SUPPORTED}."
+                "An output script other than OP_RETURN, P2PKH, P2SH, "
+                "P2WPKH, P2WSH, "
+                f"or P2TR is {NOT_SUPPORTED}."
             )
 
 
 def _output_kind(raw: bytes) -> str | None:
     if raw.startswith(b"\x6a") and _push_only(raw[1:]):
         return "op_return"
+    if len(raw) == 25 and raw[:3] == b"\x76\xa9\x14" and raw[-2:] == b"\x88\xac":
+        return "p2pkh"
+    if len(raw) == 23 and raw[:2] == b"\xa9\x14" and raw[-1:] == b"\x87":
+        return "p2sh"
     if len(raw) == 22 and raw[:2] == b"\x00\x14":
         return "native"
     if len(raw) == 34 and raw[:2] == b"\x51\x20":
         return "taproot"
     if len(raw) == 34 and raw[:2] == b"\x00\x20":
-        return "multisig"
+        return "p2wsh"
     return None
 
 

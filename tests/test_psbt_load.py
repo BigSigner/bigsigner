@@ -290,9 +290,14 @@ def test_each_psbt_refusal_names_the_unsupported_case():
     multisig = b"\x00\x20" + (b"\x22" * 32)
     assert check_loaded_psbt(session, 0, _with_scripts((330, taproot), (330, multisig))).tx.version == 2
     _raises(session, _with_scripts((329, taproot)), "Taproot output below 330")
-    _raises(session, _with_scripts((329, multisig)), "Native-Segwit MultiSig output below 330")
+    _raises(session, _with_scripts((329, multisig)), "P2WSH output below 330")
     legacy = b"\x76\xa9\x14" + (b"\x33" * 20) + b"\x88\xac"
-    _raises(session, _with_scripts((100_000, legacy)), "other than Native-Segwit SingleSig")
+    wrapped = b"\xa9\x14" + (b"\x44" * 20) + b"\x87"
+    assert check_loaded_psbt(session, 0, _with_scripts((546, legacy), (540, wrapped))).tx.version == 2
+    _raises(session, _with_scripts((545, legacy)), "legacy output below 546")
+    _raises(session, _with_scripts((539, wrapped)), "P2SH output below 540")
+    p2pk = bytes([33]) + (b"\x02" + b"\x11" * 32) + b"\xac"
+    _raises(session, _with_scripts((100_000, p2pk)), "other than OP_RETURN, P2PKH, P2SH")
 
     duplicate = _psbt(session)
     duplicate.tx.vin.append(TransactionInput(b"\x11" * 32, 0, sequence=0xFFFFFFFD))

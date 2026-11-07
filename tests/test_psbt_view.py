@@ -210,6 +210,47 @@ def _pay_this_wallet(psbt, session, branch, index, amount=None):
     scope.bip32_derivations[child.key] = DerivationPath(fingerprint, path)
 
 
+def test_a_legacy_address_and_a_wrapped_segwit_address_are_shown():
+    from embit.ec import PublicKey
+    from embit.script import p2pkh, p2sh, p2wpkh
+
+    from bigsigner.psbt_check import check_loaded_psbt
+    from bigsigner.ui.app import _address_rows
+
+    session = _native()
+    pubkey = PublicKey.parse(bytes.fromhex("0330d54fd0dd420a6e5f8d3624f5f3482cae350f79d5f0753bf5beef9c2d91af3c"))
+    legacy = p2pkh(pubkey)
+    wrapped = p2sh(p2wpkh(pubkey))
+    psbt = _psbt(session, amount=100_000, output=20_000)
+    scope = psbt.outputs[0]
+    scope.script_pubkey = legacy
+    scope.vout.script_pubkey = legacy
+    scope.value = 20_000
+    scope.vout.value = 20_000
+    psbt.outputs.append(OutputScope(vout=TransactionOutput(20_000, wrapped)))
+    loaded = check_loaded_psbt(session, 0, psbt)
+    view = describe_psbt(session, 0, loaded)
+    legacy_address = legacy.address()
+    wrapped_address = wrapped.address()
+    assert legacy_address.startswith("1")
+    assert wrapped_address.startswith("3")
+    assert {card["address"] for card in view["outputs"]} == {legacy_address, wrapped_address}
+
+    app = App()
+    app.session = session
+    app.wallet_index = 0
+    app._accept_psbt_text(loaded.serialize(), "file")
+    seen = set()
+    for _ in range(16):
+        app.render()
+        seen.update(item["text"] for item in app.texts)
+        app.scroll["psbt-yaml"] = app.scroll.get("psbt-yaml", 0) + 180
+    for address in (legacy_address, wrapped_address):
+        groups = [group for row in _address_rows(address) for group in row if group.strip()]
+        assert groups[0].startswith(address[0])
+        assert all(group in seen for group in groups)
+
+
 def test_change_is_its_own_section_and_a_receive_address_is_warned():
     session = _native()
     hidden = _psbt(session)
