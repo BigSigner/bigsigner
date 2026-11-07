@@ -35,15 +35,13 @@ Screenshots go to
 
 ### Live panel on the Raspberry Pi
 
-`seedsigner stop` frees the panel, then this script *is* the panel process for a
-while (framebuffer + touch). Only one process may own touch. By default the
-script ends on its own and runs `seedsigner start`, so the normal app comes
-back and the glass stays tappable. That hand-off is on the device; it has
-nothing to do with the desktop `.venv`.
+`seedsigner stop` frees the panel, then this script *is* the panel process
+(framebuffer + touch). Only one process may own touch. After the auto-scroll it
+prints that the test finished and leaves Transaction Signing interactive so you
+can tap and scroll. Ctrl-C quits and runs `seedsigner start` (a fresh normal
+app). That is on the device; it has nothing to do with the desktop `.venv`.
 
 The demo loads the Abandon test mnemonic only. Do not sign with a real seed.
-After the hand-off you get a fresh boot of the normal app (not the demo's
-Transaction Signing screen).
 
 `docs/scripts/rsync-to-seedsigner.sh` (in the sibling `bigsigner-os` repo) copies
 the app to `/mnt/data/seedsigner` but **excludes** `tests/`. Sync the app, copy
@@ -63,16 +61,13 @@ rsync -avz \
   ~/private_workspace/bigsigner/tests/vectors \
   root@seedsigner.local:/mnt/data/seedsigner/tests/
 
-# Free the framebuffer, then run the demo (it hands the panel back itself).
+# Free the framebuffer, then run the demo.
 docs/scripts/ssh-seedsigner.sh \
   'seedsigner stop; killall python3 2>/dev/null || true; sleep 1'
 docs/scripts/ssh-seedsigner.sh \
   'cd /mnt/data/seedsigner && PYTHONPATH=src:tests PYTHONUNBUFFERED=1 \
-   python3 tests/panel_show_hundred_psbt.py --stay'
+   python3 tests/panel_show_hundred_psbt.py'
 ```
-
-To keep Transaction Signing after the scroll (tap and drag that screen), pass
-`--stay`. Ctrl-C when finished, then `seedsigner start`.
 
 Watch `dmesg | grep bigsigner` for progress and slow-frame lines while it loads.
 

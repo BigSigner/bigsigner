@@ -3,13 +3,11 @@
 
 Stops nothing by itself. On the device, stop the normal service first, then run
 this. It shows progress, Transaction Signing, and a short auto-scroll back to
-the top, then starts the normal app again so the panel stays tappable. Pass
-``--stay`` to keep this process on Transaction Signing instead (Ctrl-C to quit,
-then ``seedsigner start``).
+the top, then keeps owning touch so you can tap and scroll manually. Ctrl-C
+quits and runs ``seedsigner start`` (a fresh normal app).
 
-This script is a stand-in for the panel process. When it exits without starting
-the normal app, nothing is drawing or reading touch. That is unrelated to the
-desktop ``.venv``; see ``tests/vectors/README.md``.
+This script is a stand-in for the panel process while it runs. That is unrelated
+to the desktop ``.venv``; see ``tests/vectors/README.md``.
 
 Do not sign with a real seed; this uses the Abandon test mnemonic only.
 """
@@ -61,7 +59,7 @@ def _start_normal_app() -> None:
     subprocess.run(["seedsigner", "start"], check=False)
 
 
-def run(psbt_path: Path | None = None, *, stay: bool = False) -> None:
+def run(psbt_path: Path | None = None) -> None:
     path = VECTOR if psbt_path is None else psbt_path
     if not path.is_file():
         raise SystemExit(f"missing PSBT: {path}")
@@ -79,7 +77,6 @@ def run(psbt_path: Path | None = None, *, stay: bool = False) -> None:
     frames = 0
     painted_at = 0.0
     pending = False
-    hand_back = not stay
 
     def _write(image):
         band = app.dirty if image.size == (width, height) else None
@@ -147,11 +144,12 @@ def run(psbt_path: Path | None = None, *, stay: bool = False) -> None:
             f"scroll={app.scroll.get('psbt-yaml', 0)}\n",
             encoding="ascii",
         )
-        if not stay:
-            _kmsg("auto-scroll done; handing panel back")
-            return
-        _kmsg("auto-scroll done; at top; --stay")
-        hand_back = False
+        done = (
+            "test finished; tap and scroll manually. "
+            "Ctrl-C restarts the app from scratch."
+        )
+        _kmsg(done)
+        print(done, flush=True)
         if touch is None and rpc_fd is None:
             return
         x_range = ranges[0] if ranges else (0, width - 1)
@@ -190,17 +188,11 @@ def run(psbt_path: Path | None = None, *, stay: bool = False) -> None:
         os.close(fb)
         if rpc is not None:
             os.close(rpc[0])
-        if hand_back:
-            _start_normal_app()
+        _start_normal_app()
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--stay",
-        action="store_true",
-        help="keep Transaction Signing interactive instead of starting the normal app",
-    )
     parser.add_argument(
         "psbt",
         nargs="?",
@@ -209,7 +201,7 @@ def main(argv: list[str] | None = None) -> None:
         help="PSBT path (default: tests/vectors/native_segwit_100_in_100_out.psbt)",
     )
     args = parser.parse_args(argv)
-    run(args.psbt, stay=args.stay)
+    run(args.psbt)
 
 
 if __name__ == "__main__":

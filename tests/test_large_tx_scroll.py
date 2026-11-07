@@ -11,8 +11,7 @@ PYTHONPATH=src:tests .venv/bin/pytest tests/test_large_tx_scroll.py -k hundred -
 ```
 
 To drive the same PSBT on the Raspberry Pi panel, use
-``tests/panel_show_hundred_psbt.py`` (optional ``--stay``). Steps are in
-``tests/vectors/README.md``.
+``tests/panel_show_hundred_psbt.py``. Steps are in ``tests/vectors/README.md``.
 """
 
 import time
