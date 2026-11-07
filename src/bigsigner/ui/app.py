@@ -387,6 +387,7 @@ class App:
         self._psbt_qr_images = {}
         self._psbt_qr_key = None
         self._psbt_heights = {}
+        self._psbt_sheet = None
         self.export_binary = False
         self.export_bytes = b""
         self.psbt_text = ""
@@ -668,6 +669,8 @@ class App:
             self._pass_picture = None
         if self.screen != "address":
             self._address_sheet = None
+        if self.screen != "psbt-yaml":
+            self._psbt_sheet = None
         self._expire_notice()
         self._advance_boot()
         self._advance_address_search()
@@ -682,6 +685,8 @@ class App:
             self._toast(frame)
         if self.confirm:
             self._confirm(frame)
+        if self.psbt_search is not None:
+            self._psbt_search_popup(frame)
         self.hits = frame.hits
         self.texts = list(frame.marks)
         if self.address_search_pending is not None:
@@ -923,7 +928,13 @@ class App:
         return None
 
     def _scroll_allowed(self) -> bool:
-        return not self.menu and not self.add_menu and self.confirm is None and self.open_dropdown is None
+        return (
+            not self.menu
+            and not self.add_menu
+            and self.confirm is None
+            and self.open_dropdown is None
+            and self.psbt_search is None
+        )
 
     def _scroll_offset(self, screen: str, content_end: int, clearance: int = 96) -> int:
         """How far the content is shifted up. The title stays put."""
@@ -2798,7 +2809,8 @@ class App:
     ) -> int:
         height = frame.button_height(label)
         top = y - offset
-        if paint and top + height > HEADER and top < HEIGHT:
+        clip_top = getattr(frame, "clip_top", HEADER)
+        if paint and top + height > clip_top and top < HEIGHT:
             frame.button(top, label, action, label=hit_label, enabled=enabled)
         return y + height + 12
 
@@ -4417,7 +4429,8 @@ class App:
             widths = [frame.draw.textlength(group, font=face) for group in groups]
             total = sum(widths) + space * (len(groups) - 1)
             x = (WIDTH - total) / 2
-            if paint and y + line_h > HEADER and y < bottom:
+            clip_top = getattr(frame, "clip_top", HEADER)
+            if paint and y + line_h > clip_top and y < bottom:
                 for index, (group, group_width) in enumerate(zip(groups, widths)):
                     color = MUTED if (row_index * 4 + index) % 2 else INK
                     frame.draw.text((x, y), group, font=face, fill=color)
@@ -4432,7 +4445,8 @@ class App:
         face = font(size, mono=True)
         width = frame.draw.textlength(text, font=face)
         bottom = getattr(frame, "clip_bottom", HEIGHT)
-        if y >= HEADER and y < bottom:
+        clip_top = getattr(frame, "clip_top", HEADER)
+        if y >= clip_top and y < bottom:
             x = (WIDTH - width) / 2
             frame.draw.text((x, y), text, font=face, fill=fill)
             frame.mark(text, frame.draw.textbbox((x, y), text, font=face))
@@ -5877,6 +5891,29 @@ class App:
         number = indexes[0] if indexes else 0
         return f"Address found in account #{number}"
 
+    def _psbt_search_popup(self, frame: Frame):
+        """Dimmed status while a range of addresses is being searched. No buttons."""
+        start = int(self.psbt_search["start"])
+        end = start + SEARCH_WINDOW - 1
+        message = f"Searching addresses {start}-{end}"
+        overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 110))
+        base = frame.image.convert("RGBA")
+        frame.image = Image.alpha_composite(base, overlay).convert("RGB")
+        frame.draw = ImageDraw.Draw(frame.image)
+        face = font(BODY_SIZE)
+        lines = wrap(frame.draw, message, face, WIDTH - 88) or [""]
+        line_h = BODY_SIZE + 8
+        text_h = line_h * len(lines)
+        box_top = 268
+        box_bottom = box_top + 24 + text_h + 24
+        box = (24, box_top, WIDTH - 24, box_bottom)
+        frame.draw.rounded_rectangle(box, radius=18, fill=WHITE, outline=LINE)
+        y = box_top + 24
+        for line in lines:
+            frame.draw.text((44, y), line, font=face, fill=INK)
+            frame.mark(line, frame.draw.textbbox((44, y), line, font=face))
+            y += line_h
+
     def _confirm(self, frame: Frame):
         overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 110))
         base = frame.image.convert("RGBA")
@@ -7139,6 +7176,7 @@ class App:
         self.psbt_checked = checked
         self.psbt_view = describe_psbt(self.session, self.wallet_index, checked)
         self._psbt_heights = {}
+        self._psbt_sheet = None
         self.psbt_yaml_text = psbt_yaml(checked)
         self.psbt_outputs_open = True
         self.psbt_inputs_open = self.psbt_view["inputs_open"]
@@ -7295,18 +7333,23 @@ class App:
 
     def _toggle_psbt_outputs(self):
         self.psbt_outputs_open = not self.psbt_outputs_open
+        self._psbt_sheet = None
 
     def _toggle_psbt_inputs(self):
         self.psbt_inputs_open = not self.psbt_inputs_open
+        self._psbt_sheet = None
 
     def _toggle_psbt_change(self):
         self.psbt_change_open = not self.psbt_change_open
+        self._psbt_sheet = None
 
     def _toggle_psbt_more(self):
         self.psbt_more_open = not self.psbt_more_open
+        self._psbt_sheet = None
 
     def _toggle_psbt_txid(self):
         self.psbt_txid_open = not self.psbt_txid_open
+        self._psbt_sheet = None
 
     def _begin_psbt_search(self, text: str):
         index, _, start = text.partition("-")
@@ -7406,6 +7449,7 @@ class App:
             self.psbt_loaded = loaded.serialize()
         self.psbt_view = describe_psbt(self.session, self.wallet_index, self.psbt_checked)
         self._psbt_heights = {}
+        self._psbt_sheet = None
         self.psbt_found.pop(hit["index"], None)
         if self.psbt_view["change_outputs"]:
             self.psbt_change_open = True

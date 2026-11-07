@@ -3,6 +3,7 @@
 from ..psbt_view import format_btc, hex_lines, is_ascii
 from .canvas import (
     BLUE,
+    Frame,
     HEADER,
     HEIGHT,
     INK,
@@ -30,18 +31,156 @@ _BRIGHTNESS_HEIGHT = 52
 _FORMAT_TOP = HEIGHT - 88
 _CONTROL_GAP = 12
 _TONE = {"red": RED, "yellow": WARNING, "grey": MUTED}
+# Keep a few screen-tall tiles around the scroll position. A full sheet of
+# open inputs would be tens of megabytes on this panel.
+_PSBT_TILE = HEIGHT
+_PSBT_TILE_PAD = 1
+
+
+def _clip_top(frame) -> int:
+    """Title bar on a normal frame; 0 when painting a scroll tile strip."""
+    return getattr(frame, "clip_top", HEADER)
 
 
 def paint_signing(app, frame):
     view = app.psbt_view
-    frame.header("Transaction Signing", "back")
     if not view:
+        frame.header("Transaction Signing", "back")
         frame.text("This transaction is no longer loaded.", MARGIN, HEADER + 24, size=TITLE_SIZE)
         return
-    end = _body(app, frame, view, paint=False, offset=0)
-    offset = app._scroll_offset("psbt-yaml", end, clearance=16)
-    _body(app, frame, view, paint=True, offset=offset)
+    key = _signing_sheet_key(app)
+    sheet = app._psbt_sheet
+    reused = sheet is not None and sheet["key"] == key
+    if not reused:
+        sheet = _new_signing_sheet(app, view, key)
+        app._psbt_sheet = sheet
+    offset = app._scroll_offset("psbt-yaml", sheet["end"], clearance=16)
+    covered = _signing_tiles_cover(sheet, offset)
+    _ensure_signing_tiles(app, sheet, view, offset)
+    _blit_signing_tiles(frame, sheet, offset)
     frame.header("Transaction Signing", "back")
+    # The body is already drawn. A drag only copies the visible slice.
+    if reused and covered and app._press is not None:
+        app.dirty = (HEADER, HEIGHT)
+
+
+def _signing_sheet_key(app):
+    view = app.psbt_view
+    return (
+        id(view),
+        app.psbt_outputs_open,
+        app.psbt_inputs_open,
+        app.psbt_change_open,
+        app.psbt_more_open,
+        app.psbt_txid_open,
+        app.psbt_continue,
+        tuple(
+            (signer["fingerprint"], signer["signed"], signer.get("note") or "")
+            for signer in (view or {}).get("signers", ())
+        ),
+        (view or {}).get("signature_note") or "",
+    )
+
+
+def _new_signing_sheet(app, view, key) -> dict:
+    probe = Frame()
+    end = _body(app, probe, view, paint=False, offset=0)
+    return {"key": key, "end": max(end, HEIGHT), "tiles": {}}
+
+
+def _signing_tiles_cover(sheet, offset: int) -> bool:
+    first = max(0, (offset // _PSBT_TILE) - _PSBT_TILE_PAD) * _PSBT_TILE
+    last = min(sheet["end"], offset + HEIGHT + _PSBT_TILE * _PSBT_TILE_PAD)
+    y = first
+    while y < last:
+        if y not in sheet["tiles"]:
+            return False
+        y += _PSBT_TILE
+    return True
+
+
+def _ensure_signing_tiles(app, sheet, view, offset: int) -> None:
+    first = max(0, (offset // _PSBT_TILE) - _PSBT_TILE_PAD) * _PSBT_TILE
+    last = min(sheet["end"], offset + HEIGHT + _PSBT_TILE * _PSBT_TILE_PAD)
+    needed = []
+    y = first
+    while y < last:
+        needed.append(y)
+        y += _PSBT_TILE
+    keep = set(needed)
+    for tile_y in list(sheet["tiles"]):
+        if tile_y not in keep:
+            del sheet["tiles"][tile_y]
+    for tile_y in needed:
+        if tile_y in sheet["tiles"]:
+            continue
+        tile = Frame()
+        # Fill the whole strip. The live screen keeps clip_top at HEADER so the
+        # title bar is not painted over; a tile has no title bar of its own.
+        tile.clip_top = 0
+        _body(app, tile, view, paint=True, offset=tile_y)
+        height = min(_PSBT_TILE, max(0, sheet["end"] - tile_y))
+        if height <= 0:
+            continue
+        image = tile.image.crop((0, 0, WIDTH, height))
+        hits = []
+        for hit in tile.hits:
+            box = hit["box"]
+            hits.append(
+                {
+                    "box": (box[0], box[1] + tile_y, box[2], box[3] + tile_y),
+                    "action": hit["action"],
+                    "label": hit.get("label", ""),
+                }
+            )
+        marks = []
+        for mark in tile.marks:
+            box = mark["box"]
+            marks.append(
+                {
+                    "text": mark["text"],
+                    "box": [box[0], box[1] + tile_y, box[2], box[3] + tile_y],
+                }
+            )
+        sheet["tiles"][tile_y] = {"image": image, "hits": hits, "marks": marks}
+
+
+def _blit_signing_tiles(frame, sheet, offset: int) -> None:
+    bottom = offset + HEIGHT
+    seen_hits = set()
+    for tile_y, tile in sheet["tiles"].items():
+        image = tile["image"]
+        tile_bottom = tile_y + image.height
+        if tile_bottom <= offset or tile_y >= bottom:
+            continue
+        src_top = max(0, offset - tile_y)
+        dst_top = max(0, tile_y - offset)
+        src_bottom = min(image.height, bottom - tile_y)
+        if src_bottom <= src_top:
+            continue
+        frame.image.paste(
+            image.crop((0, src_top, WIDTH, src_bottom)),
+            (0, dst_top),
+        )
+        for hit in tile["hits"]:
+            box = hit["box"]
+            top = box[1] - offset
+            bot = box[3] - offset
+            if bot <= HEADER or top >= HEIGHT:
+                continue
+            key = (hit["action"], int(box[0]), int(box[1]), int(box[2]), int(box[3]))
+            if key in seen_hits:
+                continue
+            seen_hits.add(key)
+            frame.hit((box[0], top, box[2], bot), hit["action"], hit.get("label", ""))
+        for mark in tile["marks"]:
+            box = mark["box"]
+            top = box[1] - offset
+            bot = box[3] - offset
+            if bot > HEADER and top < HEIGHT:
+                frame.marks.append(
+                    {"text": mark["text"], "box": [box[0], int(top), box[2], int(bot)]}
+                )
 
 
 def paint_opreturn(app, frame):
@@ -312,7 +451,7 @@ def _place_card(app, frame, y, paint, offset, key, draw) -> int:
         span = draw(False, 0) - y
         app._psbt_heights[key] = span
     top = y - offset
-    if paint and top < HEIGHT and top + span > HEADER:
+    if paint and top < HEIGHT and top + span > _clip_top(frame):
         draw(True, offset)
     return y + span
 
@@ -506,7 +645,7 @@ def _card_button(frame, y, label, action, paint, offset, enabled=True) -> int:
     height = frame.button_height(label)
     top = y - offset
     box = (MARGIN + 16, top, WIDTH - MARGIN - 16, top + height)
-    if paint and top + height > HEADER and top < HEIGHT:
+    if paint and top + height > _clip_top(frame) and top < HEIGHT:
         color = BLUE if enabled else (186, 190, 196)
         text = WHITE if enabled else (132, 136, 142)
         frame.draw.rounded_rectangle(box, radius=14, fill=color)
@@ -534,7 +673,7 @@ def _address_flow(app, frame, address, y, paint, offset) -> int:
 def _chevron(frame, y, paint, offset, title, open_now, action) -> int:
     height = TITLE_SIZE + 20
     top = y - offset
-    if paint and top + height > HEADER and top < HEIGHT:
+    if paint and top + height > _clip_top(frame) and top < HEIGHT:
         text_y = top + 4
         _left, ink_top, _right, ink_bottom = frame.draw.textbbox((0, 0), title, font=font(TITLE_SIZE))
         _section_chevron(frame, open_now, MARGIN + 16, text_y + (ink_top + ink_bottom - 1) / 2)
@@ -546,7 +685,7 @@ def _chevron(frame, y, paint, offset, title, open_now, action) -> int:
 def _section_label(frame, y, paint, offset, title) -> int:
     height = TITLE_SIZE + 20
     top = y - offset
-    if paint and top + height > HEADER and top < HEIGHT:
+    if paint and top + height > _clip_top(frame) and top < HEIGHT:
         frame.text(title, MARGIN + 40, top + 4, size=TITLE_SIZE)
     return y + height + 8
 
@@ -601,7 +740,7 @@ def _zero_amount_line(frame, y, paint, offset) -> int:
     x = MARGIN + 16
     if paint:
         yy = y - offset
-        if HEADER <= yy < HEIGHT:
+        if _clip_top(frame) <= yy < HEIGHT:
             frame.draw.text((x, yy), label, font=face, fill=MUTED)
             frame.draw.text((x + frame.draw.textlength(label, font=face), yy), value, font=face, fill=INK)
             frame.mark(label + value, frame.draw.textbbox((x, yy), label + value, font=face))
@@ -642,7 +781,7 @@ def _sequence_line(frame, y, paint, offset, sequence: int) -> int:
     x = MARGIN + 16
     if paint:
         yy = y - offset
-        if HEADER <= yy < HEIGHT:
+        if _clip_top(frame) <= yy < HEIGHT:
             frame.draw.text((x, yy), label, font=face, fill=MUTED)
             label_w = frame.draw.textlength(label, font=face)
             frame.draw.text((x + label_w, yy), value, font=mono, fill=INK)
@@ -657,7 +796,7 @@ def _card_text(frame, text, y, paint, offset, size, fill) -> int:
     if paint:
         for index, line in enumerate(lines):
             yy = y - offset + index * (size + 8)
-            if HEADER <= yy < HEIGHT:
+            if _clip_top(frame) <= yy < HEIGHT:
                 frame.draw.text((x, yy), line, font=face, fill=fill)
                 frame.mark(line, frame.draw.textbbox((x, yy), line, font=face))
     return y + len(lines) * (size + 8)

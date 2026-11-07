@@ -473,7 +473,8 @@ def _search_hidden_address(record, app):
     record.shot(app, "search-before")
     app._act("psbt-search-0-0")
     record.shot(app, "search-0-49")
-    assert "Searching" in _joined(app)
+    assert "Searching addresses 0-49" in _joined(app)
+    assert not any(hit["label"] in ("Cancel", "OK") for hit in app.hits)
     record.shot(app, "search-miss")
     assert app.confirm == "psbt-miss"
     assert "50-99" in app._confirm_message()
@@ -481,6 +482,7 @@ def _search_hidden_address(record, app):
     assert any(hit["label"] == "OK" for hit in app.hits)
     app._act("confirm-yes")
     record.shot(app, "search-50-99")
+    assert "Searching addresses 50-99" in _joined(app)
     record.shot(app, "search-found")
     assert app.confirm == "psbt-found"
     assert app._confirm_message() == "Address found in Receive addresses"

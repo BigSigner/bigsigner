@@ -49,6 +49,10 @@ SEQUENCE_FINAL = 0xFFFFFFFF
 DATACARRIER_MAX_BYTES = 100_000
 # Bitcoin Core's maximum standard transaction weight. 400000 WU is 100000 vB.
 MAX_STANDARD_TX_WEIGHT = 400_000
+# Hard caps so Transaction Signing can keep a short window of pre-rendered
+# tiles in RAM. A larger PSBT is refused before the per-input checks run.
+MAX_PSBT_INPUTS = 100
+MAX_PSBT_OUTPUTS = 100
 # Bitcoin Core 31 dust thresholds at 3 sat/vB. An output below its threshold
 # is not relayed. The limit follows the receiving script, not the sender.
 # Legacy P2PKH is 546. P2SH, including wrapped Segwit, is 540.
@@ -92,6 +96,14 @@ def check_loaded_psbt(session, wallet_index: int, text: str, progress=None) -> P
         raise ReviewError(f"A transaction with no inputs is {NOT_SUPPORTED}.")
     if not transaction.vout:
         raise ReviewError(f"A transaction with no outputs is {NOT_SUPPORTED}.")
+    if input_count > MAX_PSBT_INPUTS:
+        raise ReviewError(
+            f"A transaction with more than {MAX_PSBT_INPUTS} inputs is {NOT_SUPPORTED}."
+        )
+    if output_count > MAX_PSBT_OUTPUTS:
+        raise ReviewError(
+            f"A transaction with more than {MAX_PSBT_OUTPUTS} outputs is {NOT_SUPPORTED}."
+        )
     _check_op_returns(psbt)
     _check_output_scripts(psbt)
     seen = set()

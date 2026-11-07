@@ -13,6 +13,9 @@ from .ui_dump import append_snapshot
 
 # Seconds between frames while a finger drags a list.
 DRAG_INTERVAL = 0.15
+# Transaction Signing and Address keep a pre-rendered sheet or tiles, so a
+# drag can refresh more often without rebuilding the whole page.
+DRAG_INTERVAL_SHEET = 0.05
 
 
 def _kmsg(message: str):
@@ -116,7 +119,7 @@ def run_panel():
         # The gesture ends when the lift event arrives.
         delays = []
         if pending:
-            delays.append(DRAG_INTERVAL)
+            delays.append(_drag_interval(app))
         if app.qr_strip_due():
             delays.append(0)
         if app.finger_down():
@@ -160,7 +163,7 @@ def run_panel():
                 app.pointer_down(x, y)
             elif phase in ("move", "hold"):
                 if app.pointer_move(x, y):
-                    if time.monotonic() - painted_at >= DRAG_INTERVAL:
+                    if time.monotonic() - painted_at >= _drag_interval(app):
                         blit()
                     else:
                         pending = True
@@ -169,6 +172,16 @@ def run_panel():
                 blit()
     finally:
         camera.close()
+
+
+def _drag_interval(app: App) -> float:
+    if app.screen == "psbt-yaml" and getattr(app, "_psbt_sheet", None) is not None:
+        return DRAG_INTERVAL_SHEET
+    if app.screen == "address" and getattr(app, "_address_sheet", None) is not None:
+        return DRAG_INTERVAL_SHEET
+    if app.screen == "addresses" and getattr(app, "_address_pages", None):
+        return DRAG_INTERVAL_SHEET
+    return DRAG_INTERVAL
 
 
 def _with_camera(app: App, camera: LiveCamera):

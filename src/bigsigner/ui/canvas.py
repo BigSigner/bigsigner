@@ -374,9 +374,12 @@ class Frame:
     def text(self, value: str, x: int, y: int, size=BODY_SIZE, fill=INK, mono=False, width=None):
         face = font(size, mono=mono)
         lines = wrap(self.draw, value, face, width or WIDTH - x - MARGIN)
+        clip_top = getattr(self, "clip_top", HEADER)
+        clip_bottom = getattr(self, "clip_bottom", HEIGHT)
         for line in lines:
             # A scrolled line that starts under the title bar would be sliced in half.
-            if HEADER <= y < getattr(self, "clip_bottom", HEIGHT):
+            # Tile paints set clip_top to 0 so a strip is filled edge to edge.
+            if clip_top <= y < clip_bottom:
                 self.draw.text((x, y), line, font=face, fill=fill)
                 self.mark(line, self.draw.textbbox((x, y), line, font=face))
             y += size + 8
