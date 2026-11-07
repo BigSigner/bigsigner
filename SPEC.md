@@ -25,6 +25,8 @@ Where this section disagrees with the rest of the document, this section wins.
 
 The screen is portrait 480×800. Supported wallets are singlesig native segwit (`m/84h/<coin>h/<account>h`), singlesig taproot key-path (`m/86h/<coin>h/<account>h`), and native-segwit multisig (`m/48h/<coin>h/<account>h/2h`). The coin type is `0h` on mainnet and `1h` on testnet and regtest.
 
+A multisig wallet has at least 2 keys and at most 15 keys. The largest threshold form is m-of-15. A descriptor or a selection with more than 15 participants is refused.
+
 A multisig address uses the same `/<branch>/<index>` suffix on every key. Accounts may differ, for example `.../0h/2h/0/5`, `.../7h/2h/0/5`, and `.../30h/2h/0/5`. Every input in one transaction must use the same account tuple. Inside one input, the branch and address index must match across keys. A mismatch of the extended key's stored depth or last child number with its origin path rejects the whole key expression, descriptor, or transaction.
 
 `zpub` and `vpub` are accepted only for singlesig native segwit, and only when the network setting matches. `Zpub` and `Vpub` are accepted only for multisig native segwit, with the same network check. They are converted to `xpub` or `tpub` before they are compared with stored keys. Exports stay `xpub` or `tpub`. Regtest has no extended-key prefix of its own: it uses the testnet prefixes (`tpub`, and `vpub` / `Vpub` for the SLIP-132 forms). The key screen can display the SLIP-132 form for comparison with a Trezor.
@@ -129,7 +131,7 @@ Wallets will be created from wallet descriptors that match one of the following 
 - `wpkh([{fingerprint1}/84h/0h/{account1}h]{xpub1}/<0;1>/*)#{checksum}`
 - `tr([{fingerprint}/86h/0h/0h]{xpub1}/<0;1>/*)#{checksum}`
 - `wsh(sortedmulti({m},[{fingerprint1}/48h/0h/{account1}h/2h]{xpub1}/<0;1>/*,[{fingerprint2}/48h/0h/{account2}h/2h]{xpub2}/<0;1>/*, ...))#{checksum}`
-where the parts in the `{}` brackets differ between each possible descriptor.
+where the parts in the `{}` brackets differ between each possible descriptor. A multisig descriptor has between 2 and 15 key expressions; m-of-15 is the maximum.
 There could be other minor variations, such as the `<0;1>` part being presented just as `0`, or the `h` being `'`. Research the different variations that wallets use for wallet-descriptors, standard and non-standard.
 
 Wallets will not represent only the descriptor that created them, but a range of account(s).
@@ -319,7 +321,7 @@ Like mentioned before, small common variations of the format should be allowed, 
 A BSMS 1.0 file is accepted when it has the version line, one descriptor, a path line for the same receive and change branches, and a first address. The descriptor must be singlesig native SegWit, singlesig Taproot, or native-segwit multisig, and its derivation paths must match that script type and the path line. The first address must be the address the descriptor derives. Any other version, script type, path, or address is refused.
 Unexpected derivation paths, or unexpected script-types for known derivation paths, should not be allowed.
 The checksum should be verified whenever we scan a wallet descriptor. Also support formats where the checksum is not present.
-A `wsh(sortedmulti(...))` descriptor must only contain native-segwit multisig key expressions (`m/48h/0h/{account}h/2h`). Custom derivation paths are not supported.
+A `wsh(sortedmulti(...))` descriptor must only contain native-segwit multisig key expressions (`m/48h/0h/{account}h/2h`). Custom derivation paths are not supported. It must list between 2 and 15 keys; m-of-15 is the maximum.
 
 A bare key expression is not a wallet descriptor on this screen. It is reported as a key expression, not a wallet descriptor. On the Bitcoin Keys screen, a singlesig key expression can still be wrapped as a wallet when the user creates one from that key.
 
@@ -347,7 +349,7 @@ In the plus button menu, "Select from Existing SingleSig Key" opens a screen tit
 
 In the plus button menu, "Select from Existing MultiSig Keys" shuold do the following:
 - The screen is titled Native-Segwit Multisig. Let the user choose "m" (for the m-of-n).
-- List seeds and native-segwit multisig key expressions, sorted by fingerprint nickname. A single-signature key is not listed, because it cannot be a cosigner. Above the fingerprint name, a seed shows a grey key icon and Seed. An external key shows a grey eye icon and External Key, or External Keys (N accounts) when that fingerprint has several accounts. That line uses the fingerprint row's size. Show the fingerprint nicknames and fingerprints, with a checkbox next to each. The fingerprint line has a fingerprint icon and begins with "Fingerprint: ". User needs to select at least m keys.
+- List seeds and native-segwit multisig key expressions, sorted by fingerprint nickname. A single-signature key is not listed, because it cannot be a cosigner. Above the fingerprint name, a seed shows a grey key icon and Seed. An external key shows a grey eye icon and External Key, or External Keys (N accounts) when that fingerprint has several accounts. That line uses the fingerprint row's size. Show the fingerprint nicknames and fingerprints, with a checkbox next to each. The fingerprint line has a fingerprint icon and begins with "Fingerprint: ". User needs to select at least m keys, and at most 15 keys (m-of-15 is the maximum). Selecting a 16th key is refused with an error.
 - Create the wallet from the wallet descriptor range of the selected fingerprints. The descriptor lists those keys in the byte order of their first receive public keys. If that threshold and those keys are already a wallet, the button is Go to Wallet and opens it.
 
 ### Wallet screen

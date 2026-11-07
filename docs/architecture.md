@@ -30,7 +30,7 @@ Wallets are descriptors built from those keys. Changing the network drops wallet
 | Module | Role |
 | --- | --- |
 | `names.py` | Fingerprint name. See [fingerprint-names.md](fingerprint-names.md). |
-| `parse.py` | Key expressions and wallet descriptors. |
+| `parse.py` | Key expressions and wallet descriptors. A multisig `wsh(sortedmulti(...))` accepts 2 through 15 keys (`MAX_MULTISIG_KEYS`); m-of-15 is the maximum. |
 | `paths.py` | The three supported derivation templates and the network coin type. |
 | `slip132.py` | `zpub`, `Zpub`, `vpub`, and `Vpub`, converted to `xpub` or `tpub` before comparison. |
 | `bsms.py` | A BSMS 1.0 file, reduced to its descriptor. |

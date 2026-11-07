@@ -6,7 +6,7 @@ A native SegWit multisig wallet is imported as an output descriptor of this form
 wsh(sortedmulti(2,[fingerprint/48h/0h/0h/2h]xpub.../<0;1>/*,[fingerprint/48h/0h/7h/2h]xpub.../<0;1>/*))#checksum
 ```
 
-`2` is how many signatures are required. Each key has its own account. In the example, one cosigner uses account 0 and the other uses account 7. That is allowed. Every address still uses the same receive or change step and the same address index on every key. Receive index 5 of that example is `.../0h/2h/0/5` for the first key and `.../7h/2h/0/5` for the second.
+`2` is how many signatures are required. Each key has its own account. In the example, one cosigner uses account 0 and the other uses account 7. That is allowed. A wallet has between 2 and 15 keys; m-of-15 is the maximum. Every address still uses the same receive or change step and the same address index on every key. Receive index 5 of that example is `.../0h/2h/0/5` for the first key and `.../7h/2h/0/5` for the second.
 
 On testnet the coin type is `1h`, not `0h`.
 
@@ -28,7 +28,7 @@ BigSigner refuses the descriptor when any of these are true:
 - The same fingerprint appears twice. One fingerprint can hold only one account index, so two accounts of the same key would collapse into one and the addresses would be wrong. That descriptor is refused.
 - A loaded seed with that fingerprint does not derive the same extended key.
 - A different extended key is already stored for the same fingerprint and path.
-- There are fewer than 2 keys, more than 15, or the threshold is outside 1 through the number of keys.
+- There are fewer than 2 keys, more than 15 keys (m-of-15 is the maximum), or the threshold is outside 1 through the number of keys.
 
 ## The same wallet, written differently
 

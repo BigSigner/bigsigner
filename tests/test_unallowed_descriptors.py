@@ -61,7 +61,7 @@ UNALLOWED = [
     ("threshold above the key count", _multisig(MULTI, OTHER, threshold=3), "threshold or number of keys"),
     ("threshold zero", _multisig(MULTI, OTHER, threshold=0), "threshold or number of keys"),
     ("one multisig key", _multisig(MULTI, threshold=1), "threshold or number of keys"),
-    ("more than 15 keys", _sixteen_keys(), "threshold or number of keys"),
+    ("more than 15 keys", _sixteen_keys(), "at most 15 keys"),
     ("wrong checksum", f"wpkh({NATIVE})#qqqqqqqq", "checksum does not match"),
     ("zpub in a multisig", _zpub_in_multisig(), "does not match"),
     ("depth mismatch", _depth_mismatch(), "depth or last step"),

@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw
 from .. import __version__
 from ..entropy import mnemonic_from_camera, mnemonic_from_coins, mnemonic_from_dice
 from ..rpc import split_line
-from ..parse import ParseError
+from ..parse import MAX_MULTISIG_KEYS, ParseError
 from ..paths import HARDENED, MULTISIG_NATIVE, SINGLESIG_NATIVE, SINGLESIG_TAPROOT, coin_type, format_path
 from ..psbt_check import check_loaded_psbt, iter_check_loaded_psbt, psbt_yaml
 from ..psbt_load import TOO_LARGE, UNREADABLE, SpecterParts, explain_not_psbt, is_binary_psbt, psbt_bytes, psbt_text
@@ -1482,6 +1482,8 @@ class App:
             fingerprint = bytes.fromhex(action[len("toggle-ms-") :])
             if fingerprint in self.multisig_selected:
                 self.multisig_selected.remove(fingerprint)
+            elif len(self.multisig_selected) >= MAX_MULTISIG_KEYS:
+                self.set_error(f"A multisig wallet can have at most {MAX_MULTISIG_KEYS} keys.")
             else:
                 self.multisig_selected.add(fingerprint)
             self._clamp_multisig_threshold()
@@ -3638,6 +3640,9 @@ class App:
         selected = [fingerprint for fingerprint in candidates if fingerprint in self.multisig_selected]
         if len(selected) < 2:
             self.set_error("A multisig needs at least two keys.")
+            return
+        if len(selected) > MAX_MULTISIG_KEYS:
+            self.set_error(f"A multisig wallet can have at most {MAX_MULTISIG_KEYS} keys.")
             return
         if len(selected) < self.multisig_m:
             self.set_error(f"Select at least {self.multisig_m} keys.")

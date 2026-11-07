@@ -675,6 +675,27 @@ def test_multisig_threshold_follows_the_selected_keys():
     assert app.screen == "multisig"
 
 
+def test_multisig_selection_stops_at_fifteen_keys(monkeypatch):
+    from bigsigner.parse import MAX_MULTISIG_KEYS
+
+    fingerprints = [bytes([index, 0, 0, 0]) for index in range(MAX_MULTISIG_KEYS + 1)]
+    app = App()
+    app.screen = "multisig"
+    app.multisig_selected = set(fingerprints[:MAX_MULTISIG_KEYS])
+    assert len(app.multisig_selected) == MAX_MULTISIG_KEYS
+    app._act(f"toggle-ms-{fingerprints[MAX_MULTISIG_KEYS].hex()}")
+    assert len(app.multisig_selected) == MAX_MULTISIG_KEYS
+    assert app.notice == f"A multisig wallet can have at most {MAX_MULTISIG_KEYS} keys."
+    assert app.notice_error is True
+
+    monkeypatch.setattr(app, "_multisig_candidates", lambda: list(fingerprints))
+    app.multisig_selected = set(fingerprints)
+    app.multisig_m = 2
+    app.notice = ""
+    app._create_selected_multisig()
+    assert app.notice == f"A multisig wallet can have at most {MAX_MULTISIG_KEYS} keys."
+
+
 def _two_seed_multisig():
     app = App()
     added = [app.session.add_mnemonic(ABANDON, passphrase=str(number)) for number in range(2)]

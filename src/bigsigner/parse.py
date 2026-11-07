@@ -22,6 +22,10 @@ class ParseError(ValueError):
     pass
 
 
+# Native-Segwit sortedmulti wallets: at least 2 keys, at most 15 (m-of-15).
+MAX_MULTISIG_KEYS = 15
+
+
 class ParsedKey:
     def __init__(self, fingerprint, path, xpub, account, role, branch_note):
         self.fingerprint = fingerprint
@@ -168,7 +172,11 @@ def _parse_multisig(body: str, network: str, warnings: list[str]) -> ParsedWalle
         raise ParseError("The multisig threshold is missing.")
     threshold = int(threshold_text)
     parts = _split_top_level(rest)
-    if not 1 <= threshold <= len(parts) or len(parts) < 2 or len(parts) > 15:
+    if len(parts) < 2:
+        raise ParseError("The multisig threshold or number of keys is not supported.")
+    if len(parts) > MAX_MULTISIG_KEYS:
+        raise ParseError(f"A multisig wallet can have at most {MAX_MULTISIG_KEYS} keys.")
+    if not 1 <= threshold <= len(parts):
         raise ParseError("The multisig threshold or number of keys is not supported.")
     keys = []
     for part in parts:
