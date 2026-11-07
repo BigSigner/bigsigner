@@ -546,6 +546,7 @@ function applyRename(path, kind, name) {
   }
   const next = joinPath(parentOf(path), name);
   if (next === path) {
+    setSdError("");
     renderSd();
     return;
   }
