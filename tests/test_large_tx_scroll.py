@@ -54,6 +54,10 @@ VECTORS = Path(__file__).resolve().parent / "vectors"
 MEDIUM_VECTOR = VECTORS / "native_segwit_100_in_1_external_1_change.psbt"
 HUNDRED_VECTOR = VECTORS / "native_segwit_100_in_100_out.psbt"
 COMBINED_WARNINGS_VECTOR = VECTORS / "native_segwit_combined_warnings.psbt"
+# Change address #120 has no derivation in the PSBT. Search windows are 50
+# addresses wide, so 0–49 and 50–99 miss and 100–149 finds it.
+HIDDEN_CHANGE_INDEX = 120
+HIDDEN_CHANGE_VECTOR = VECTORS / "native_segwit_hidden_change_120.psbt"
 # Sequences for the combined-warnings vector: RBF-enabled, RBF-disabled,
 # block relative locktimes, and time relative locktimes (including the max).
 COMBINED_SEQUENCES = (
@@ -227,6 +231,34 @@ def _combined_warnings(session):
     return psbt
 
 
+def _hidden_change(session):
+    """Abandon spends to an external address and to its own change address #120.
+
+    The change output is only a script pubkey. No derivation is stored, so the
+    signing screen treats it as external until Search for Address in Loaded
+    Wallets reaches indexes 100–149.
+    """
+    fingerprint, child, path = _child(session, branch=0, index=0)
+    script = address_to_scriptpubkey(session.addresses(0, 0, 0, 1)[0])
+    destination = address_to_scriptpubkey(EXTERNAL_P2WPKH)
+    change = address_to_scriptpubkey(session.addresses(0, 1, HIDDEN_CHANGE_INDEX, 1)[0])
+    tx = Transaction(
+        version=2,
+        vin=[TransactionInput(b"\x31" * 32, 0, sequence=0xFFFFFFFD)],
+        vout=[
+            TransactionOutput(50_000, destination),
+            TransactionOutput(40_000, change),
+        ],
+    )
+    psbt = PSBT(tx)
+    inp = psbt.inputs[0]
+    inp.witness_utxo = TransactionOutput(100_000, script)
+    inp.bip32_derivations[child.key] = DerivationPath(fingerprint, path)
+    inp.sighash_type = SIGHASH.ALL
+    assert not psbt.outputs[1].bip32_derivations
+    return psbt
+
+
 def write_psbt_vectors(folder: Path | None = None) -> list[Path]:
     """Write the committed PSBT binaries. Returns the paths that were written."""
     folder = VECTORS if folder is None else folder
@@ -237,6 +269,7 @@ def write_psbt_vectors(folder: Path | None = None) -> list[Path]:
         (folder / MEDIUM_VECTOR.name, _native_medium(session)),
         (folder / HUNDRED_VECTOR.name, _native_bulk(session, COUNT)),
         (folder / COMBINED_WARNINGS_VECTOR.name, _combined_warnings(session)),
+        (folder / HIDDEN_CHANGE_VECTOR.name, _hidden_change(session)),
     ):
         path.write_bytes(psbt.serialize())
         written.append(path)
@@ -287,9 +320,31 @@ def test_the_committed_psbt_vectors_match_the_builders():
     assert MEDIUM_VECTOR.is_file(), f"missing {MEDIUM_VECTOR}"
     assert HUNDRED_VECTOR.is_file(), f"missing {HUNDRED_VECTOR}"
     assert COMBINED_WARNINGS_VECTOR.is_file(), f"missing {COMBINED_WARNINGS_VECTOR}"
+    assert HIDDEN_CHANGE_VECTOR.is_file(), f"missing {HIDDEN_CHANGE_VECTOR}"
     assert MEDIUM_VECTOR.read_bytes() == _native_medium(session).serialize()
     assert HUNDRED_VECTOR.read_bytes() == _native_bulk(session, COUNT).serialize()
     assert COMBINED_WARNINGS_VECTOR.read_bytes() == _combined_warnings(session).serialize()
+    assert HIDDEN_CHANGE_VECTOR.read_bytes() == _hidden_change(session).serialize()
+
+
+def test_a_hidden_change_address_is_found_in_addresses_100_to_149():
+    from bigsigner.psbt_view import SEARCH_WINDOW, search_address
+
+    session = _native()
+    psbt = PSBT.parse(HIDDEN_CHANGE_VECTOR.read_bytes())
+    assert not psbt.outputs[1].bip32_derivations
+    checked = check_loaded_psbt(session, 0, psbt)
+    view = describe_psbt(session, 0, checked)
+    address = session.addresses(0, 1, HIDDEN_CHANGE_INDEX, 1)[0]
+    assert view["outputs"][1]["address"] == address
+    assert view["outputs"][1]["owned"] is None
+    assert view["change_outputs"] == []
+    assert search_address(session, 0, address, 0, SEARCH_WINDOW) is None
+    assert search_address(session, 0, address, 50, SEARCH_WINDOW) is None
+    found = search_address(session, 0, address, 100, SEARCH_WINDOW)
+    assert found["branch"] == 1
+    assert found["index"] == HIDDEN_CHANGE_INDEX
+    assert found["place"] == f"Change Address #{HIDDEN_CHANGE_INDEX}"
 
 
 def test_the_combined_warnings_vector_loads_every_warning():
@@ -345,7 +400,7 @@ def test_a_hundred_native_segwit_payments_scroll_smoothly():
     weight = _tx_weight(psbt.tx, wallet)
     record.note(
         f"Native-segwit, {COUNT} inputs, {COUNT - 1} external outputs and 1 change, "
-        f"{weight} weight units. Scroll frames that reuse the tile window must stay under "
+        f"{weight} weight units. Scroll frames that reuse the cached parts must stay under "
         f"{int(SCROLL_FRAME_S * 1000)} ms."
     )
     assert weight <= MAX_STANDARD_TX_WEIGHT
@@ -369,8 +424,8 @@ def test_a_hundred_native_segwit_payments_scroll_smoothly():
     assert len(set(out_addresses)) == COUNT - 1
     assert out_addresses[0] == EXTERNAL_P2WPKH
 
-    # Closed sections put the Inputs row across a scroll-tile boundary. The
-    # label must still paint on the lower tile with the chevron.
+    # Closed sections put the Inputs row at the bottom of a long column. The
+    # row is one part, so the label stays with the chevron.
     app.psbt_outputs_open = False
     app.psbt_inputs_open = False
     app.psbt_txid_open = False
@@ -395,7 +450,7 @@ def test_a_hundred_native_segwit_payments_scroll_smoothly():
     started = time.perf_counter()
     record.shot(app, "top")
     first_ms = (time.perf_counter() - started) * 1000
-    # Warm tiles past the target, then measure a small move back that stays
+    # Warm the parts past the target, then measure a small move back that stays
     # inside the cached window so the frame is a blit, not a rebuild.
     mid = min(app.scroll_max.get("psbt-yaml", 0), 40_000)
     app.scroll["psbt-yaml"] = mid + 200

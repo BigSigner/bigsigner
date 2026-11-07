@@ -479,6 +479,9 @@ def _search_hidden_address(record, app):
     assert app.confirm == "psbt-found"
     assert app._confirm_message() == "Address found in Receive addresses"
     app._act("confirm-no")
+    assert app.scroll["psbt-yaml"] == 0
+    assert app._psbt_sheet is None
+    assert app._psbt_heights == {}
     place = f"Receive Address #{HIDDEN_INDEX}"
     assert any(card["place"] == place and card["receive_change"] for card in app.psbt_view["change_outputs"])
     assert any("receive address" in item["text"] for item in app.psbt_view["warnings"])

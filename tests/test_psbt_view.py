@@ -261,6 +261,7 @@ def test_change_is_its_own_section_and_a_receive_address_is_warned():
     assert view["change_outputs"][0]["place"] == "Change Address #0"
     assert view["change_outputs"][0]["receive_change"] is False
     assert view["warnings"] == []
+    assert view["change_open"] is False
 
     shown = _psbt(session)
     _pay_this_wallet(shown, session, branch=0, index=0)
@@ -270,6 +271,15 @@ def test_change_is_its_own_section_and_a_receive_address_is_warned():
     assert card["place"] == "Receive Address #0"
     assert card["receive_change"] is False
     assert view["warnings"] == []
+    assert view["change_open"] is False
+
+    paid = _psbt(session, output=50_000)
+    _pay_this_wallet(paid, session, branch=0, index=1, amount=40_000)
+    view = describe_psbt(session, 0, paid)
+    assert view["change_outputs"][0]["place"] == "Receive Address #1"
+    assert view["change_outputs"][0]["receive_change"] is True
+    assert view["warnings"][0]["text"] == RECEIVE_CHANGE_ONE
+    assert view["change_open"] is True
 
     several = _psbt(session, output=40_000)
     _pay_this_wallet(several, session, branch=1, index=0, amount=25_000)
@@ -279,6 +289,7 @@ def test_change_is_its_own_section_and_a_receive_address_is_warned():
     assert [item["place"] for item in view["change_outputs"]] == ["Change Address #0", "Receive Address #1"]
     assert view["warnings"][0]["text"] == MANY_CHANGE_WARNING
     assert view["warnings"][1]["text"] == RECEIVE_CHANGE_ONE
+    assert view["change_open"] is True
 
 
 def test_address_search_checks_both_branches_and_the_next_window():
@@ -360,6 +371,7 @@ def test_transaction_id_starts_closed_and_change_sits_above_inputs():
     app._accept_psbt_text(base64.b64encode(psbt.serialize()).decode(), "file")
     assert app.screen == "psbt-yaml"
     assert app.psbt_txid_open is False
+    assert app.psbt_change_open is False
     app.psbt_change_open = False
     app.render()
     assert any(hit["label"] == "Transaction Id" for hit in app.hits)
@@ -488,6 +500,36 @@ def test_back_to_wallet_leaves_the_signed_psbt_flow():
     app._act("psbt-back-wallet")
     assert app.screen == "wallet"
     assert app.back == ["wallets"]
+
+
+def test_back_from_op_return_drains_taps_that_landed_during_the_return():
+    """The signing screen is slow to rebuild. Taps during that wait must not click it."""
+    import time
+
+    from bigsigner.ui.app import SEARCH_TOUCH_GAP
+
+    app = App()
+    app.screen = "psbt-opreturn"
+    app.back = ["psbt-yaml"]
+    app.psbt_txid_open = False
+    app.back_one()
+    assert app.screen == "psbt-yaml"
+    assert app._search_touch_guard
+    assert app._discard_queued_touch
+    assert app._discard_gesture
+    assert app._press is None
+    app.hits = [{"action": "psbt-toggle-txid", "box": (0, 0, 480, 800), "label": "Transaction Id"}]
+    time.sleep(SEARCH_TOUCH_GAP + 0.15)
+    app.mark_search_touch_ready()
+    app.pointer_down(240, 400)
+    app.pointer_up(240, 400)
+    assert app.psbt_txid_open is False
+    assert app._search_touch_guard
+    time.sleep(SEARCH_TOUCH_GAP + 0.05)
+    app.pointer_down(240, 400)
+    app.pointer_up(240, 400)
+    assert app.psbt_txid_open is True
+    assert not app._search_touch_guard
 
 
 def test_a_press_during_searching_addresses_does_not_click_after():

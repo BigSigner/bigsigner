@@ -371,7 +371,7 @@ class App:
         self.psbt_view = None
         self.psbt_outputs_open = True
         self.psbt_inputs_open = False
-        self.psbt_change_open = True
+        self.psbt_change_open = False
         self.psbt_more_open = False
         self.psbt_txid_open = False
         self.psbt_continue = False
@@ -753,9 +753,9 @@ class App:
     def _arm_search_touch_quiet(self) -> None:
         """Flush queued taps and ignore new ones until a gap passes after paint.
 
-        Used after slow work (address search, signing) so a press during the wait
-        cannot click the screen that appears next. Fast navigations usually skip
-        this; see AGENTS.md.
+        Used after slow work (address search, signing, and Back from Show
+        OP_RETURN Content) so a press during the wait cannot click the screen
+        that appears next. Fast navigations usually skip this; see AGENTS.md.
         """
         self._press = None
         self._discard_gesture = True
@@ -1045,6 +1045,10 @@ class App:
         self.screen = self.back.pop() if self.back else "keys"
         if leaving == "psbt-share" and self.screen == "psbt-yaml":
             self._restore_loaded_psbt()
+        if leaving == "psbt-opreturn" and self.screen == "psbt-yaml":
+            # Rebuilding Transaction Signing takes long enough that taps
+            # during it would land on the screen that appears next.
+            self._arm_search_touch_quiet()
         if leaving_wallet:
             self._restore_wallet_accounts()
         if self.screen in ("keys", "wallets"):
@@ -7347,7 +7351,7 @@ class App:
         self.psbt_yaml_text = psbt_yaml(checked)
         self.psbt_outputs_open = True
         self.psbt_inputs_open = self.psbt_view["inputs_open"]
-        self.psbt_change_open = bool(self.psbt_view["change_outputs"])
+        self.psbt_change_open = bool(self.psbt_view["change_open"])
         self.psbt_more_open = False
         self.psbt_txid_open = False
         self.psbt_continue = False
@@ -7510,23 +7514,18 @@ class App:
 
     def _toggle_psbt_outputs(self):
         self.psbt_outputs_open = not self.psbt_outputs_open
-        self._psbt_sheet = None
 
     def _toggle_psbt_inputs(self):
         self.psbt_inputs_open = not self.psbt_inputs_open
-        self._psbt_sheet = None
 
     def _toggle_psbt_change(self):
         self.psbt_change_open = not self.psbt_change_open
-        self._psbt_sheet = None
 
     def _toggle_psbt_more(self):
         self.psbt_more_open = not self.psbt_more_open
-        self._psbt_sheet = None
 
     def _toggle_psbt_txid(self):
         self.psbt_txid_open = not self.psbt_txid_open
-        self._psbt_sheet = None
 
     def _begin_psbt_search(self, text: str):
         index, _, start = text.partition("-")
@@ -7666,8 +7665,10 @@ class App:
         self._psbt_heights = {}
         self._psbt_sheet = None
         self.psbt_found.pop(hit["index"], None)
-        if self.psbt_view["change_outputs"]:
-            self.psbt_change_open = True
+        self.psbt_change_open = bool(self.psbt_view["change_open"])
+        # The card may have grown, or moved from Outputs into Change Outputs.
+        # The old scroll offset would point at a different part.
+        self.scroll["psbt-yaml"] = 0
 
     def _write_output_origin(self, psbt, hit):
         from embit.psbt import DerivationPath

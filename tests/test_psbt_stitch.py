@@ -263,3 +263,46 @@ def test_the_hundred_input_sheet_matches_across_every_tile():
     app.session = session
     app.wallet_index = 0
     _assert_sheet(app, _signing_view(session, psbt, name), "100 inputs")
+
+
+def test_cards_are_drawn_only_near_the_screen():
+    session = _native()
+    psbt = PSBT.parse(MEDIUM_VECTOR.read_bytes())
+    app = App()
+    app.session = session
+    app.wallet_index = 0
+    app.psbt_view = describe_psbt(session, 0, check_loaded_psbt(session, 0, psbt))
+    app.psbt_outputs_open = True
+    app.psbt_inputs_open = True
+    app.psbt_change_open = True
+    app.screen = "psbt-yaml"
+    app.scroll["psbt-yaml"] = 0
+    app.render()
+    top_cards = [key for key in app._psbt_sheet["pictures"] if key[0] in ("input", "output", "change")]
+    assert top_cards
+    assert len(top_cards) < 12
+    assert any(key[0] == "input" for key in app._psbt_heights)
+    assert any(key[0] == "wallet" for key in app._psbt_sheet["pictures"])
+    heights = dict(app._psbt_heights)
+
+    app.scroll["psbt-yaml"] = 10**9
+    app.render()
+    bottom_cards = [key for key in app._psbt_sheet["pictures"] if key[0] in ("input", "output", "change")]
+    bottom_inputs = [key for key in bottom_cards if key[0] == "input"]
+    assert bottom_inputs
+    assert len(bottom_cards) < 12
+    assert set(bottom_cards).isdisjoint(top_cards)
+    assert any(key[0] == "wallet" for key in app._psbt_sheet["pictures"])
+    assert heights.keys() <= app._psbt_heights.keys()
+
+    app.psbt_txid_open = True
+    app.render()
+    app.psbt_txid_open = False
+    app.render()
+    txid = [key for key in app._psbt_sheet["pictures"] if key[0] == "txid"]
+    assert {key[1] for key in txid} == {True, False}
+
+    app._psbt_signing = True
+    app.render()
+    assert any(key[0] == "signs" and key[1] is True for key in app._psbt_sheet["pictures"])
+    assert any(key[0] == "signs" and key[1] is False for key in app._psbt_sheet["pictures"])

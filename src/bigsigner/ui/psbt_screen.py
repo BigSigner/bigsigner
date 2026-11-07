@@ -1,5 +1,7 @@
 """The Transaction Signing screen, the OP_RETURN page, and the signed-PSBT QR."""
 
+from PIL import Image, ImageDraw
+
 from ..psbt_view import format_btc, hex_lines, is_ascii
 from .canvas import (
     BLUE,
@@ -10,6 +12,7 @@ from .canvas import (
     LINE,
     MARGIN,
     MUTED,
+    PAPER,
     RED,
     TITLE_SIZE,
     WARNING,
@@ -32,10 +35,8 @@ _BRIGHTNESS_HEIGHT = 52
 _FORMAT_TOP = HEIGHT - 88
 _CONTROL_GAP = 12
 _TONE = {"red": RED, "yellow": WARNING, "grey": MUTED}
-# Keep a few screen-tall tiles around the scroll position. A full sheet of
-# open inputs would be tens of megabytes on this panel.
-_PSBT_TILE = HEIGHT
-_PSBT_TILE_PAD = 1
+# Cards are drawn only while they meet this screen or the one above or below.
+# Fixed blocks and each chevron mode stay cached. A hundred cards do not.
 
 
 def _clip_top(frame) -> int:
@@ -65,142 +66,139 @@ def paint_signing(app, frame):
         frame.header("Transaction Signing", "back")
         frame.text("This transaction is no longer loaded.", MARGIN, HEADER + 24, size=TITLE_SIZE)
         return
-    key = _signing_sheet_key(app)
     sheet = app._psbt_sheet
-    reused = sheet is not None and sheet["key"] == key
-    if not reused:
-        sheet = _new_signing_sheet(app, view, key)
+    if sheet is None or sheet.get("view_id") != id(view):
+        sheet = {"view_id": id(view), "pictures": {}}
         app._psbt_sheet = sheet
-    offset = app._scroll_offset("psbt-yaml", sheet["end"], clearance=16)
-    covered = _signing_tiles_cover(sheet, offset)
-    _ensure_signing_tiles(app, sheet, view, offset)
-    _blit_signing_tiles(frame, sheet, offset)
+    parts = _parts(app, view)
+    probe = None
+    y = 0
+    for part in parts:
+        height = app._psbt_heights.get(part["height_key"])
+        if height is None:
+            if probe is None:
+                probe = Frame()
+            height = int(part["paint"](probe, 0, False, 0))
+            app._psbt_heights[part["height_key"]] = height
+        part["y"] = y
+        part["height"] = height
+        y += height
+    end = max(y, HEIGHT)
+    sheet["end"] = end
+    offset = app._scroll_offset("psbt-yaml", end, clearance=16)
+    window_top = offset - HEIGHT
+    window_bottom = offset + 2 * HEIGHT
+    needed = set()
+    rendered_new = False
+    for part in parts:
+        if part["height"] <= 0:
+            continue
+        on_screen = part["y"] < offset + HEIGHT and part["y"] + part["height"] > offset
+        in_window = part["y"] < window_bottom and part["y"] + part["height"] > window_top
+        if not part["retain"] and not in_window:
+            continue
+        needed.add(part["picture_key"])
+        picture = sheet["pictures"].get(part["picture_key"])
+        if picture is None:
+            picture = _render_part(part)
+            sheet["pictures"][part["picture_key"]] = picture
+            rendered_new = True
+        if on_screen:
+            part["picture"] = picture
+    for key, picture in list(sheet["pictures"].items()):
+        if picture["retain"] or key in needed:
+            continue
+        del sheet["pictures"][key]
+    _blit_parts(frame, parts, offset)
     frame.header("Transaction Signing", "back")
-    # The body is already drawn. A drag only copies the visible slice.
-    if reused and covered and app._press is not None:
+    # A drag inside the cached window only copies pictures that already exist.
+    if not rendered_new and app._press is not None:
         app.dirty = (HEADER, HEIGHT)
 
 
-def _signing_sheet_key(app):
-    view = app.psbt_view
-    signing_fp = app._psbt_signing_fp.hex() if app._psbt_signing_fp is not None else None
-    return (
-        id(view),
-        app.psbt_outputs_open,
-        app.psbt_inputs_open,
-        app.psbt_change_open,
-        app.psbt_more_open,
-        app.psbt_txid_open,
-        app.psbt_continue,
-        app._psbt_signing,
-        signing_fp,
-        tuple(
-            (signer["fingerprint"], signer["signed"], signer.get("note") or "")
-            for signer in (view or {}).get("signers", ())
-        ),
-        (view or {}).get("signature_note") or "",
-    )
+def _render_part(part) -> dict:
+    """Draw this part whole, from its top through its own height."""
+    height = max(1, int(part["height"]))
+    frame = Frame()
+    frame.image = Image.new("RGB", (WIDTH, height), PAPER)
+    frame.draw = ImageDraw.Draw(frame.image)
+    frame.clip_top = 0
+    frame.clip_bottom = height
+    part["paint"](frame, 0, True, 0)
+    return {
+        "image": frame.image,
+        "hits": frame.hits,
+        "marks": frame.marks,
+        "retain": part["retain"],
+    }
 
 
-def _new_signing_sheet(app, view, key) -> dict:
-    probe = Frame()
-    end = _body(app, probe, view, paint=False, offset=0)
-    return {"key": key, "end": max(end, HEIGHT), "tiles": {}}
-
-
-def _signing_tiles_cover(sheet, offset: int) -> bool:
-    first = max(0, (offset // _PSBT_TILE) - _PSBT_TILE_PAD) * _PSBT_TILE
-    last = min(sheet["end"], offset + HEIGHT + _PSBT_TILE * _PSBT_TILE_PAD)
-    y = first
-    while y < last:
-        if y not in sheet["tiles"]:
-            return False
-        y += _PSBT_TILE
-    return True
-
-
-def _ensure_signing_tiles(app, sheet, view, offset: int) -> None:
-    first = max(0, (offset // _PSBT_TILE) - _PSBT_TILE_PAD) * _PSBT_TILE
-    last = min(sheet["end"], offset + HEIGHT + _PSBT_TILE * _PSBT_TILE_PAD)
-    needed = []
-    y = first
-    while y < last:
-        needed.append(y)
-        y += _PSBT_TILE
-    keep = set(needed)
-    for tile_y in list(sheet["tiles"]):
-        if tile_y not in keep:
-            del sheet["tiles"][tile_y]
-    for tile_y in needed:
-        if tile_y in sheet["tiles"]:
-            continue
-        tile = Frame()
-        # Fill the whole strip. The live screen keeps clip_top at HEADER so the
-        # title bar is not painted over; a tile has no title bar of its own.
-        tile.clip_top = 0
-        _body(app, tile, view, paint=True, offset=tile_y)
-        height = min(_PSBT_TILE, max(0, sheet["end"] - tile_y))
-        if height <= 0:
-            continue
-        image = tile.image.crop((0, 0, WIDTH, height))
-        hits = []
-        for hit in tile.hits:
-            box = hit["box"]
-            hits.append(
-                {
-                    "box": (box[0], box[1] + tile_y, box[2], box[3] + tile_y),
-                    "action": hit["action"],
-                    "label": hit.get("label", ""),
-                }
-            )
-        marks = []
-        for mark in tile.marks:
-            box = mark["box"]
-            marks.append(
-                {
-                    "text": mark["text"],
-                    "box": [box[0], box[1] + tile_y, box[2], box[3] + tile_y],
-                }
-            )
-        sheet["tiles"][tile_y] = {"image": image, "hits": hits, "marks": marks}
-
-
-def _blit_signing_tiles(frame, sheet, offset: int) -> None:
+def _blit_parts(frame, parts, offset: int) -> None:
     bottom = offset + HEIGHT
     seen_hits = set()
-    for tile_y, tile in sheet["tiles"].items():
-        image = tile["image"]
-        tile_bottom = tile_y + image.height
-        if tile_bottom <= offset or tile_y >= bottom:
+    for part in parts:
+        picture = part.get("picture")
+        if picture is None:
             continue
-        src_top = max(0, offset - tile_y)
-        dst_top = max(0, tile_y - offset)
-        src_bottom = min(image.height, bottom - tile_y)
+        image = picture["image"]
+        part_y = part["y"]
+        if part_y + image.height <= offset or part_y >= bottom:
+            continue
+        src_top = max(0, offset - part_y)
+        dst_top = max(0, part_y - offset)
+        src_bottom = min(image.height, bottom - part_y)
         if src_bottom <= src_top:
             continue
         frame.image.paste(
             image.crop((0, src_top, WIDTH, src_bottom)),
             (0, dst_top),
         )
-        for hit in tile["hits"]:
+        shift = part_y - offset
+        for hit in picture["hits"]:
             box = hit["box"]
-            top = box[1] - offset
-            bot = box[3] - offset
+            top = box[1] + shift
+            bot = box[3] + shift
             if bot <= HEADER or top >= HEIGHT:
                 continue
-            key = (hit["action"], int(box[0]), int(box[1]), int(box[2]), int(box[3]))
+            key = (hit["action"], int(box[0]), int(box[1]), int(box[2]), int(box[3]), part_y)
             if key in seen_hits:
                 continue
             seen_hits.add(key)
             frame.hit((box[0], top, box[2], bot), hit["action"], hit.get("label", ""))
-        for mark in tile["marks"]:
+        for mark in picture["marks"]:
             box = mark["box"]
-            top = box[1] - offset
-            bot = box[3] - offset
+            top = box[1] + shift
+            bot = box[3] + shift
             if bot > HEADER and top < HEIGHT:
                 frame.marks.append(
                     {"text": mark["text"], "box": [box[0], int(top), box[2], int(bot)]}
                 )
+
+
+def _card_painter(app, card, kind):
+    def paint(frame, y, do_paint, offset, item=card):
+        if kind == "output":
+            return _output_card(app, frame, y, do_paint, offset, item)
+        if kind == "change":
+            return _change_card(app, frame, y, do_paint, offset, item)
+        return _input_card(app, frame, y, do_paint, offset, item)
+
+    return paint
+
+
+def _sign_key(app, view):
+    signing_fp = None if app._psbt_signing_fp is None else app._psbt_signing_fp.hex()
+    return (
+        "signs",
+        bool(app._psbt_signing),
+        signing_fp,
+        bool(app.psbt_continue),
+        view.get("signature_note") or "",
+        tuple(
+            (signer["fingerprint"], signer["signed"], signer.get("note") or "", signer["button"])
+            for signer in view.get("signers", ())
+        ),
+    )
 
 
 def paint_opreturn(app, frame):
@@ -355,90 +353,191 @@ def _paste_qr(frame, image) -> int:
 
 
 def _body(app, frame, view, paint: bool, offset: int) -> int:
-    y = HEADER + 16
-    y = _centered_flow(frame, "Spending from Wallet:", y, paint, offset, TITLE_SIZE, INK)
-    y = _name_center(frame, view["wallet_name"], y, paint, offset, TITLE_SIZE, INK)
-    y = _wrapped_center(frame, view["account_line"], y, paint, offset, TITLE_SIZE, INK)
-    y = _chevron(frame, y, paint, offset, "Transaction Id", app.psbt_txid_open, "psbt-toggle-txid")
-    if app.psbt_txid_open:
-        for row in view["txid_rows"]:
-            y = _centered_flow(frame, row, y, paint, offset, TXID_SIZE, INK, mono=True)
-    if view["banner"]:
-        y = _wrapped(app, frame, view["banner"], y + 8, paint, offset, TITLE_SIZE, MUTED)
-    if view["more_info"]:
-        y = _chevron(frame, y, paint, offset, "More Information", app.psbt_more_open, "psbt-toggle-more")
-        if app.psbt_more_open:
-            y = _wrapped(app, frame, view["more_info"], y, paint, offset, TITLE_SIZE, MUTED)
-    warnings = view["warnings"]
+    y = 0
+    for part in _parts(app, view):
+        y = part["paint"](frame, y, paint, offset)
+    return y
+
+
+def _parts(app, view) -> list:
+    """The column, top to bottom.
+
+    A retained part is a fixed block or one chevron mode. Its picture stays
+    after the first draw. A card is not retained: only its height is kept,
+    and its picture exists while the card meets the screen or a neighbor.
+    """
+    parts = []
+
+    def add(key, painter, retain, height_key=None):
+        parts.append({
+            "picture_key": key,
+            "height_key": key if height_key is None else height_key,
+            "paint": painter,
+            "retain": retain,
+        })
+
+    name = view["wallet_name"]
+    account = view["account_line"]
+
+    def wallet(frame, y, paint, offset):
+        y += HEADER + 16
+        y = _centered_flow(frame, "Spending from Wallet:", y, paint, offset, TITLE_SIZE, INK)
+        y = _name_center(frame, name, y, paint, offset, TITLE_SIZE, INK)
+        return _wrapped_center(frame, account, y, paint, offset, TITLE_SIZE, INK)
+
+    add(("wallet", name, account), wallet, True)
+
+    txid_open = bool(app.psbt_txid_open)
+    rows = tuple(view["txid_rows"])
+
+    def txid(frame, y, paint, offset, open_now=txid_open, lines=rows):
+        y = _chevron(frame, y, paint, offset, "Transaction Id", open_now, "psbt-toggle-txid")
+        if open_now:
+            for row in lines:
+                y = _centered_flow(frame, row, y, paint, offset, TXID_SIZE, INK, mono=True)
+        return y
+
+    add(("txid", txid_open, rows), txid, True)
+
+    banner = view["banner"]
+    if banner:
+        def banner_paint(frame, y, paint, offset, text=banner):
+            return _wrapped(app, frame, text, y + 8, paint, offset, TITLE_SIZE, MUTED)
+
+        add(("banner", banner), banner_paint, True)
+
+    more = view["more_info"]
+    if more:
+        more_open = bool(app.psbt_more_open)
+
+        def more_paint(frame, y, paint, offset, text=more, open_now=more_open):
+            y = _chevron(frame, y, paint, offset, "More Information", open_now, "psbt-toggle-more")
+            if open_now:
+                y = _wrapped(app, frame, text, y, paint, offset, TITLE_SIZE, MUTED)
+            return y
+
+        add(("more", more_open, more), more_paint, True)
+
+    warnings = tuple(view["warnings"])
     if warnings:
-        title = "Warning" if len(warnings) == 1 else "Warnings"
-        y = _centered_flow(frame, title, y + 8, paint, offset, TITLE_SIZE, WARNING)
-        for item in warnings:
-            tone = _TONE[item["tone"]]
-            y = _wrapped(app, frame, item["text"], y, paint, offset, TITLE_SIZE, tone)
-            if item.get("center"):
-                y = _centered_flow(frame, item["center"], y, paint, offset, TITLE_SIZE, tone)
-            if item.get("after"):
-                y = _wrapped(app, frame, item["after"], y, paint, offset, TITLE_SIZE, tone)
-    y += 8
-    if view["outputs_note"]:
-        y = _wrapped(app, frame, view["outputs_note"], y, paint, offset, TITLE_SIZE, MUTED)
-    else:
-        y = _chevron(
-            frame, y, paint, offset, _count_label("Output", len(view["outputs"])),
-            app.psbt_outputs_open, "psbt-toggle-outputs",
+        frozen = tuple(
+            (item["text"], item["tone"], item.get("center") or "", item.get("after") or "")
+            for item in warnings
         )
-        if app.psbt_outputs_open:
+
+        def warnings_paint(frame, y, paint, offset, items=warnings):
+            title = "Warning" if len(items) == 1 else "Warnings"
+            y = _centered_flow(frame, title, y + 8, paint, offset, TITLE_SIZE, WARNING)
+            for item in items:
+                tone = _TONE[item["tone"]]
+                y = _wrapped(app, frame, item["text"], y, paint, offset, TITLE_SIZE, tone)
+                if item.get("center"):
+                    y = _centered_flow(frame, item["center"], y, paint, offset, TITLE_SIZE, tone)
+                if item.get("after"):
+                    y = _wrapped(app, frame, item["after"], y, paint, offset, TITLE_SIZE, tone)
+            return y
+
+        add(("warnings", frozen), warnings_paint, True)
+
+    note = view["outputs_note"]
+    if note:
+        def outputs_note(frame, y, paint, offset, text=note):
+            return _wrapped(app, frame, text, y + 8, paint, offset, TITLE_SIZE, MUTED)
+
+        add(("outputs-note", note), outputs_note, True)
+    else:
+        outputs_open = bool(app.psbt_outputs_open)
+        label = _count_label("Output", len(view["outputs"]))
+
+        def outputs_head(frame, y, paint, offset, open_now=outputs_open, title=label):
+            return _chevron(frame, y + 8, paint, offset, title, open_now, "psbt-toggle-outputs")
+
+        add(("outputs-head", outputs_open, label), outputs_head, True)
+        if outputs_open:
             for card in view["outputs"]:
-                y = _place_card(
-                    app, frame, y, paint, offset, ("output", _output_shape(app, card)),
-                    lambda do_paint, off, start=y, item=card: _output_card(
-                        app, frame, start, do_paint, off, item,
-                    ),
+                shape = _output_shape(app, card)
+                add(
+                    ("output", card["index"], shape),
+                    _card_painter(app, card, "output"),
+                    False,
+                    ("output", shape),
                 )
-    y += 8
+
     fee_fill = RED if view["fee_high"] else INK
     fee_text = format_btc(view["fee"])
-    y = _wrapped(app, frame, "Absolute Fee (BTC):", y, paint, offset, TITLE_SIZE, fee_fill)
-    y = _amount_flow(frame, fee_text, y, paint, offset, fee_fill)
-    y = _wrapped(app, frame, "Fee Rate:", y, paint, offset, TITLE_SIZE, fee_fill)
-    y = _centered_flow(
-        frame, f"~{view['fee_rate']} sat/vB", y, paint, offset, _fee_rate_size(view, fee_text), fee_fill,
-    )
-    y += 8
-    y = _wrapped(app, frame, view["locktime_label"], y, paint, offset, TITLE_SIZE, _TONE[view["locktime_tone"]])
-    if view["relative_line"]:
-        y = _wrapped(app, frame, view["relative_line"], y, paint, offset, TITLE_SIZE, WARNING)
-    y += 8
+    fee_rate = view["fee_rate"]
+    rate_size = _fee_rate_size(view, fee_text)
+
+    def fee(frame, y, paint, offset, text=fee_text, fill=fee_fill, rate=fee_rate, size=rate_size):
+        y += 8
+        y = _wrapped(app, frame, "Absolute Fee (BTC):", y, paint, offset, TITLE_SIZE, fill)
+        y = _amount_flow(frame, text, y, paint, offset, fill)
+        y = _wrapped(app, frame, "Fee Rate:", y, paint, offset, TITLE_SIZE, fill)
+        return _centered_flow(frame, f"~{rate} sat/vB", y, paint, offset, size, fill)
+
+    add(("fee", fee_text, view["fee_high"], fee_rate, rate_size), fee, True)
+
+    lock_label = view["locktime_label"]
+    lock_tone = view["locktime_tone"]
+    relative = view["relative_line"]
+
+    def locktime(frame, y, paint, offset, label=lock_label, tone=lock_tone, line=relative):
+        y += 8
+        y = _wrapped(app, frame, label, y, paint, offset, TITLE_SIZE, _TONE[tone])
+        if line:
+            y = _wrapped(app, frame, line, y, paint, offset, TITLE_SIZE, WARNING)
+        return y
+
+    add(("locktime", lock_label, lock_tone, relative), locktime, True)
+
     change_outputs = view["change_outputs"]
     if not change_outputs:
-        y = _section_label(frame, y, paint, offset, "0 Change Outputs")
+        def no_change(frame, y, paint, offset):
+            return _section_label(frame, y + 8, paint, offset, "0 Change Outputs")
+
+        add(("change-none",), no_change, True)
     else:
-        y = _chevron(
-            frame, y, paint, offset, _count_label("Change Output", len(change_outputs)),
-            app.psbt_change_open, "psbt-toggle-change",
-        )
-        if app.psbt_change_open:
-            for card in change_outputs:
-                y = _place_card(
-                    app, frame, y, paint, offset, ("change", _change_shape(card)),
-                    lambda do_paint, off, start=y, item=card: _change_card(
-                        app, frame, start, do_paint, off, item,
-                    ),
+        change_open = bool(app.psbt_change_open)
+        change_label = _count_label("Change Output", len(change_outputs))
+
+        def change_head(frame, y, paint, offset, open_now=change_open, title=change_label):
+            return _chevron(frame, y + 8, paint, offset, title, open_now, "psbt-toggle-change")
+
+        add(("change-head", change_open, change_label), change_head, True)
+        if change_open:
+            for index, card in enumerate(change_outputs):
+                shape = _change_shape(card)
+                add(
+                    ("change", index, shape),
+                    _card_painter(app, card, "change"),
+                    False,
+                    ("change", shape),
                 )
-    y += 8
-    y = _chevron(frame, y, paint, offset, _count_label("Input", len(view["inputs"])), app.psbt_inputs_open, "psbt-toggle-inputs")
-    if app.psbt_inputs_open:
+
+    inputs_open = bool(app.psbt_inputs_open)
+    inputs_label = _count_label("Input", len(view["inputs"]))
+
+    def inputs_head(frame, y, paint, offset, open_now=inputs_open, title=inputs_label):
+        return _chevron(frame, y + 8, paint, offset, title, open_now, "psbt-toggle-inputs")
+
+    add(("inputs-head", inputs_open, inputs_label), inputs_head, True)
+    if inputs_open:
         for card in view["inputs"]:
-            y = _place_card(
-                app, frame, y, paint, offset, ("input", _input_shape(view, card)),
-                lambda do_paint, off, start=y, item=card: _input_card(
-                    app, frame, start, do_paint, off, item,
-                ),
+            shape = _input_shape(view, card)
+            add(
+                ("input", card["index"], shape),
+                _card_painter(app, card, "input"),
+                False,
+                ("input", shape),
             )
-    y += 12
-    y = _sign_controls(app, frame, y, paint, offset)
-    return y
+
+    sign_key = _sign_key(app, view)
+
+    def signs(frame, y, paint, offset):
+        return _sign_controls(app, frame, y + 12, paint, offset)
+
+    add(sign_key, signs, True)
+    return parts
 
 
 def _sign_controls(app, frame, y, paint, offset) -> int:
@@ -480,18 +579,6 @@ def _sign_controls(app, frame, y, paint, offset) -> int:
         frame, y, "Continue", "psbt-continue", paint, offset, enabled=app.psbt_continue and not signing,
     )
     return y
-
-
-def _place_card(app, frame, y, paint, offset, key, draw) -> int:
-    """Reuse a measured card height, and draw it only when it is on screen."""
-    span = app._psbt_heights.get(key)
-    if span is None:
-        span = draw(False, 0) - y
-        app._psbt_heights[key] = span
-    top = y - offset
-    if paint and _strip_visible(frame, top, span):
-        draw(True, offset)
-    return y + span
 
 
 def _output_shape(app, card):

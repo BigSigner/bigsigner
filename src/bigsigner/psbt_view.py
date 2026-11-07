@@ -275,6 +275,7 @@ def describe_psbt(session, wallet_index: int, psbt: PSBT) -> dict:
         "relative_line": _relative_line(relative, locktime),
         "inputs": inputs,
         "inputs_open": any(item["sequence"] != SEQUENCE_STANDARD for item in inputs),
+        "change_open": _change_section_open(change_outputs),
         "signers": seed_sign_rows(session, wallet, psbt),
         "signature_note": multisig_signature_note(wallet, psbt),
     }
@@ -339,6 +340,17 @@ def _scan_accounts(session, wallet, accounts: dict, target: str, start: int, cou
         wallet.accounts.clear()
         wallet.accounts.update(saved)
     return None
+
+
+def _change_section_open(change_outputs: list[dict]) -> bool:
+    """Open the change list when a change output is unusual.
+
+    A single change address stays closed. A receive address used as change, or
+    more than one change output, is a warning and starts open.
+    """
+    if len(change_outputs) > 1:
+        return True
+    return any(card.get("receive_change") for card in change_outputs)
 
 
 def _change_returns_to_spending_account(wallet, change_outputs: list[dict]) -> bool:
