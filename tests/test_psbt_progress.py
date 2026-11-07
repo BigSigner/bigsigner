@@ -130,3 +130,30 @@ def test_a_refused_psbt_leaves_progress_for_the_error_screen():
     assert app.screen == "psbt-error"
     _tap(app, "OK")
     assert app.screen == "load-psbt"
+
+
+def test_deferred_psbt_progress_advances_across_frames():
+    """The browser paints progress when delay 0 asks for the next frame."""
+    session = _native()
+    app = App()
+    app.session = session
+    app.wallet_index = 0
+    app.screen = "load-psbt"
+    app.defer_psbt_progress = True
+    previous = app_mod.PSBT_PROGRESS_PAINT_S
+    app_mod.PSBT_PROGRESS_PAINT_S = 0
+    try:
+        app._accept_psbt_text(_psbt(session).serialize(), "file")
+        assert app.screen == "psbt-progress"
+        assert app.notice_delay() is None
+        app.render()
+        assert app._psbt_progress_shown
+        assert app.notice_delay() == 0
+        frames = 0
+        while app.screen == "psbt-progress" and frames < 50:
+            app.render()
+            frames += 1
+        assert app.screen == "psbt-yaml"
+        assert frames >= 2
+    finally:
+        app_mod.PSBT_PROGRESS_PAINT_S = previous

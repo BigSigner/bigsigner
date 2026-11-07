@@ -16,8 +16,8 @@ PY
 ## Run the 100-to-100 example
 
 `native_segwit_100_in_100_out.psbt` is 100 Abandon native-segwit inputs paying
-100 distinct LEGAL receive addresses (indexes 0–99). BigSigner refuses more
-than 100 inputs or 100 outputs.
+99 distinct LEGAL receive addresses (indexes 0–98) and one change output back
+to Abandon. BigSigner refuses more than 100 inputs or 100 outputs.
 
 ### Headless scroll timing (laptop)
 
@@ -83,4 +83,4 @@ Watch `dmesg | grep bigsigner` for progress and slow-frame lines while it loads.
 | File | Contents |
 |------|----------|
 | `native_segwit_100_in_1_external_1_change.psbt` | 100 Abandon native-segwit inputs, one payment to the LEGAL seed's first receive address, one change output back to Abandon, fee 10000 sats (0.0001 BTC). Previous txids are distinct seeded-random 32-byte values (never the zero hash). |
-| `native_segwit_100_in_100_out.psbt` | 100 Abandon native-segwit inputs paying 100 distinct LEGAL receive addresses, indexes 0–99 (50000 sats each). The first input is 100000 sats and the rest are 50000, so the fee is 50000 sats (under the high-fee warning). Previous txids are distinct seeded-random values as above. |
+| `native_segwit_100_in_100_out.psbt` | 100 Abandon native-segwit inputs paying 99 distinct LEGAL receive addresses (indexes 0–98) and one change output to Abandon change address #0 (50000 sats each). The first input is 100000 sats and the rest are 50000, so the fee is 50000 sats (under the high-fee warning). Previous txids are distinct seeded-random values as above. |

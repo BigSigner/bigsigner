@@ -18,7 +18,7 @@ from ..entropy import mnemonic_from_camera, mnemonic_from_coins, mnemonic_from_d
 from ..rpc import split_line
 from ..parse import ParseError
 from ..paths import HARDENED, MULTISIG_NATIVE, SINGLESIG_NATIVE, SINGLESIG_TAPROOT, coin_type, format_path
-from ..psbt_check import check_loaded_psbt, psbt_yaml
+from ..psbt_check import check_loaded_psbt, iter_check_loaded_psbt, psbt_yaml
 from ..psbt_load import TOO_LARGE, UNREADABLE, SpecterParts, explain_not_psbt, is_binary_psbt, psbt_bytes, psbt_text
 from ..psbt_qr import psbt_qr_parts
 from ..psbt_view import SEARCH_WINDOW, describe_psbt, search_address
@@ -466,6 +466,13 @@ class App:
         self.psbt_progress_total = 1
         self.psbt_progress_check_total = 0
         self._psbt_progress_painted_at = 0.0
+        self._psbt_progress_shown = False
+        self._psbt_load_text = None
+        self._psbt_load_source = ""
+        self._psbt_check_gen = None
+        # The browser asks for the next frame while a check runs (delay 0). The
+        # panel instead sets flush_display and finishes inside one accept call.
+        self.defer_psbt_progress = False
         # The panel sets this to push a frame while a long check is still running.
         self.flush_display = None
         self.camera_unavailable = False
@@ -505,6 +512,10 @@ class App:
         self.address_search_shown = False
         self._addresses_loading = False
         self._addresses_loading_shown = False
+        # Sign Transaction shows Signing… on the next paint, then the work runs.
+        self._psbt_signing = False
+        self._psbt_signing_shown = False
+        self._psbt_signing_fp = None
         # A gesture that started on Loading is not a click on the next screen.
         self._discard_gesture = False
         self._discard_queued_touch = False
@@ -650,6 +661,10 @@ class App:
             delays.append(0.05)
         if self._addresses_loading and self._addresses_loading_shown:
             delays.append(0)
+        if self._psbt_signing and self._psbt_signing_shown:
+            delays.append(0)
+        if self._psbt_progress_pending() and self._psbt_progress_shown:
+            delays.append(0)
         if not delays:
             return None
         return min(delays)
@@ -684,6 +699,8 @@ class App:
         self._advance_psbt_search()
         self._advance_psbt_qr()
         self._advance_addresses_open()
+        self._advance_psbt_check()
+        self._advance_psbt_signing()
         frame = Frame()
         self._painters[self.screen](frame)
         if self.menu:
@@ -702,6 +719,10 @@ class App:
             self.psbt_search_shown = True
         if self._addresses_loading:
             self._addresses_loading_shown = True
+        if self._psbt_signing:
+            self._psbt_signing_shown = True
+        if self._psbt_progress_pending():
+            self._psbt_progress_shown = True
         if self._shown_to_a_camera():
             return _dim_for_camera(frame.image, self.qr_brightness)
         return frame.image
@@ -714,20 +735,27 @@ class App:
             return True
         if self.psbt_search is not None:
             return True
+        if self._psbt_signing and self._psbt_signing_shown:
+            return True
         return self._addresses_loading and self._addresses_loading_shown
 
     def take_queued_touch_discard(self) -> bool:
-        """True once, after Addresses has replaced Loading."""
+        """True once when the next panel blit should flush queued digitizer bytes."""
         pending = self._discard_queued_touch
         self._discard_queued_touch = False
         return pending
 
     def arm_queued_touch_discard(self) -> None:
-        """The panel already had a touch waiting when Loading left the screen."""
+        """The panel already had a touch waiting when the blocked UI left the screen."""
         self._discard_gesture = True
 
     def _arm_search_touch_quiet(self) -> None:
-        """Ignore stale presses until the dialog has been painted and a gap passes."""
+        """Flush queued taps and ignore new ones until a gap passes after paint.
+
+        Used after slow work (address search, signing) so a press during the wait
+        cannot click the screen that appears next. Fast navigations usually skip
+        this; see AGENTS.md.
+        """
         self._press = None
         self._discard_gesture = True
         self._discard_queued_touch = True
@@ -777,6 +805,9 @@ class App:
             self._discard_gesture = True
             return
         if self._addresses_loading and self._addresses_loading_shown:
+            self._discard_gesture = True
+            return
+        if self._psbt_signing and self._psbt_signing_shown:
             self._discard_gesture = True
             return
         if self.psbt_search is not None:
@@ -1386,7 +1417,7 @@ class App:
         "psbt-toggle-change": lambda self: self._toggle_psbt_change(),
         "psbt-toggle-more": lambda self: self._toggle_psbt_more(),
         "psbt-toggle-txid": lambda self: self._toggle_psbt_txid(),
-        "psbt-sign": lambda self: self._sign_reviewed_psbt(),
+        "psbt-sign": lambda self: self._begin_psbt_signing(None),
         "psbt-continue": lambda self: self._continue_signed_psbt(),
         "psbt-show-qr": lambda self: self._open_psbt_qr(),
         "psbt-export": lambda self: self._open_psbt_export(),
@@ -1468,7 +1499,7 @@ class App:
         elif action.startswith("psbt-input-qr-"):
             self._open_input_qr(int(action[len("psbt-input-qr-") :]))
         elif action.startswith("psbt-sign-"):
-            self._sign_one_seed(bytes.fromhex(action[len("psbt-sign-") :]))
+            self._begin_psbt_signing(bytes.fromhex(action[len("psbt-sign-") :]))
         elif action.startswith("account-dec-"):
             if self._warn_before_account_change(action):
                 return
@@ -7186,6 +7217,58 @@ class App:
 
     def _accept_psbt_text(self, text: str | bytes, source: str):
         self._begin_psbt_progress("Reading transaction\u2026")
+        if self.defer_psbt_progress:
+            # Browser: show progress, then each delay-0 frame advances the check.
+            self._psbt_load_text = text
+            self._psbt_load_source = source
+            self._psbt_check_gen = None
+            self._psbt_progress_shown = False
+            return
+        self._finish_psbt_text(text, source)
+
+    def _psbt_progress_pending(self) -> bool:
+        return self._psbt_load_text is not None or self._psbt_check_gen is not None
+
+    def _advance_psbt_check(self):
+        """After progress is on screen, keep checking until the review is ready."""
+        if not self.defer_psbt_progress or not self._psbt_progress_shown:
+            return
+        if self.screen != "psbt-progress":
+            self._clear_psbt_progress_work()
+            return
+        if self._psbt_check_gen is None:
+            if self._psbt_load_text is None:
+                return
+            text = self._psbt_load_text
+            try:
+                psbt_bytes(text)
+                payload = psbt_text(text)
+            except SessionError as exc:
+                self._fail_psbt_text(exc, text, self._psbt_load_source)
+                return
+            self._psbt_check_gen = iter_check_loaded_psbt(self.session, self.wallet_index, payload)
+        try:
+            while True:
+                message, done, total = next(self._psbt_check_gen)
+                self.psbt_progress_check_total = total
+                painted = self._set_psbt_progress(message, done, total + 1)
+                if painted:
+                    return
+        except StopIteration as stop:
+            self._psbt_check_gen = None
+            self._psbt_load_text = None
+            self._open_checked_psbt(stop.value)
+        except SessionError as exc:
+            text = self._psbt_load_text
+            source = self._psbt_load_source
+            self._clear_psbt_progress_work()
+            self._fail_psbt_text(exc, text, source)
+        except ReviewError as exc:
+            self._clear_psbt_progress_work()
+            self._fail_psbt_review(exc)
+
+    def _finish_psbt_text(self, text: str | bytes, source: str):
+        """Panel and tests: run the whole check inside this call."""
         try:
             psbt_bytes(text)
             checked = check_loaded_psbt(
@@ -7195,25 +7278,34 @@ class App:
                 progress=self._on_psbt_check_progress,
             )
         except SessionError as exc:
-            message = str(exc)
-            if message == UNREADABLE and isinstance(text, str):
-                message = explain_not_psbt(text, source, self.session.network)
-                if message.startswith("This is a transaction"):
-                    message = UNREADABLE
-            self.set_error(message if message != TOO_LARGE else TOO_LARGE)
+            self._fail_psbt_text(exc, text, source)
+            return
+        except ReviewError as exc:
+            self._fail_psbt_review(exc)
+            return
+        self._open_checked_psbt(checked)
+
+    def _fail_psbt_text(self, exc: SessionError, text, source: str):
+        message = str(exc)
+        if message == UNREADABLE and isinstance(text, str):
+            message = explain_not_psbt(text, source, self.session.network)
+            if message.startswith("This is a transaction"):
+                message = UNREADABLE
+        self.set_error(message if message != TOO_LARGE else TOO_LARGE)
+        self._leave_psbt_progress()
+        self._return_to_load_psbt()
+
+    def _fail_psbt_review(self, exc: ReviewError):
+        message = str(exc)
+        if message == UNREADABLE:
+            self.set_error(message)
             self._leave_psbt_progress()
             self._return_to_load_psbt()
             return
-        except ReviewError as exc:
-            message = str(exc)
-            if message == UNREADABLE:
-                self.set_error(message)
-                self._leave_psbt_progress()
-                self._return_to_load_psbt()
-                return
-            self._leave_psbt_progress()
-            self._show_psbt_error(message)
-            return
+        self._leave_psbt_progress()
+        self._show_psbt_error(message)
+
+    def _open_checked_psbt(self, checked):
         check_total = max(1, self.psbt_progress_check_total)
         self._set_psbt_progress("Preparing review\u2026", check_total, check_total + 1, force=True)
         self.psbt_loaded = checked.serialize()
@@ -7238,8 +7330,15 @@ class App:
         self._return_to_load_psbt()
         self.go("psbt-yaml")
 
+    def _clear_psbt_progress_work(self):
+        self._psbt_load_text = None
+        self._psbt_load_source = ""
+        self._psbt_check_gen = None
+        self._psbt_progress_shown = False
+
     def _leave_psbt_progress(self):
         """A touch that began on the progress screen must not click the next one."""
+        self._clear_psbt_progress_work()
         self._press = None
         self._discard_queued_touch = True
 
@@ -7260,7 +7359,8 @@ class App:
         self.psbt_progress_check_total = total
         self._set_psbt_progress(message, done, total + 1)
 
-    def _set_psbt_progress(self, message: str, done: int, total: int, force: bool = False):
+    def _set_psbt_progress(self, message: str, done: int, total: int, force: bool = False) -> bool:
+        """Update the bar. True when this call should end the current frame."""
         self.psbt_progress_text = message
         self.psbt_progress_done = max(0, int(done))
         self.psbt_progress_total = max(1, int(total))
@@ -7268,14 +7368,16 @@ class App:
         now = time.monotonic()
         if (
             not force
-            and self.flush_display is not None
             and now - self._psbt_progress_painted_at < PSBT_PROGRESS_PAINT_S
             and done < total
         ):
-            return
+            return False
         self._psbt_progress_painted_at = now
         if self.flush_display is not None:
             self.flush_display()
+            return False
+        # Browser: return so render can paint, then notice_delay 0 asks again.
+        return self.defer_psbt_progress
 
     def _psbt_progress_screen(self, frame: Frame):
         """Status and a bar only. No title, and no controls to tap.
@@ -7445,6 +7547,38 @@ class App:
         self.psbt_op_mode = "hex" if self.psbt_op_mode == "ascii" else "ascii"
         self.scroll["psbt-opreturn"] = 0
         del delta
+
+    def _begin_psbt_signing(self, fingerprint: bytes | None):
+        """Show Signing… on the button. The next render does the heavy sign."""
+        if self.screen != "psbt-yaml" or self._psbt_signing:
+            return
+        self._psbt_signing = True
+        self._psbt_signing_shown = False
+        self._psbt_signing_fp = fingerprint
+
+    def _clear_psbt_signing(self):
+        self._psbt_signing = False
+        self._psbt_signing_shown = False
+        self._psbt_signing_fp = None
+
+    def _advance_psbt_signing(self):
+        """Signing… is already on screen. Sign, then open the result or update the rows."""
+        if not self._psbt_signing or not self._psbt_signing_shown:
+            return
+        if self.screen != "psbt-yaml":
+            self._clear_psbt_signing()
+            return
+        fingerprint = self._psbt_signing_fp
+        try:
+            if fingerprint is None:
+                self._sign_reviewed_psbt()
+            else:
+                self._sign_one_seed(fingerprint)
+        finally:
+            self._clear_psbt_signing()
+            # Same flush and gap as after Searching addresses: taps during the
+            # sign must not click Sign Transaction result or Continue.
+            self._arm_search_touch_quiet()
 
     def _sign_reviewed_psbt(self):
         checked = self.psbt_checked

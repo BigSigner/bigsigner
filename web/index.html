@@ -927,8 +927,8 @@ function hideStatus() {
   status.hidden = true;
   status.textContent = "";
 }
-function showFrame(msg) {
-  const binary = atob(msg.png);
+function paintPanel(png, screen) {
+  const binary = atob(png);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   const next = URL.createObjectURL(new Blob([bytes], {type: "image/png"}));
@@ -937,7 +937,10 @@ function showFrame(msg) {
   if (frameUrl) URL.revokeObjectURL(frameUrl);
   frameUrl = next;
   hideStatus();
-  syncCamera(msg.screen || "");
+  syncCamera(screen || "");
+}
+function showFrame(msg) {
+  paintPanel(msg.png, msg.screen || "");
   // null waits for a click. 0 asks for the next frame now; that frame does the work.
   // While that frame is outstanding, Loading is on screen and taps are ignored.
   const delay = msg.delay;

@@ -79,6 +79,10 @@ def test_the_static_page_reads_the_bundle_and_checks_downloads():
     assert '"delay": delay,' in worker
     assert 'typeof delay === "number"' in page
     assert "holdInput" in page
+    assert "app.defer_psbt_progress = True" in worker
+    assert "flush_display" not in worker
+    assert "showPaint" not in page
+    assert 'msg.type === "paint"' not in page
     assert "web/external-assets/" in Path(".gitignore").read_text(encoding="utf-8")
     by_name = {name: digest for name, _url, digest in EXTERNAL_ASSETS}
     assert by_name["embit/embit-0.8.0.tar.gz"] == "8bf4b10073c67400370ce523fb16f035fe759f6fdd987c579bdcc268d75ed770"

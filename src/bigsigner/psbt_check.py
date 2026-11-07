@@ -68,7 +68,22 @@ def check_loaded_psbt(session, wallet_index: int, text: str, progress=None) -> P
     ``progress`` is ``progress(message, done, total)``. ``done`` runs from 0 to
     ``total``. The caller may treat ``total`` as the check's share of a longer bar.
     """
-    _progress(progress, "Reading transaction\u2026", 0, 1)
+    steps = iter_check_loaded_psbt(session, wallet_index, text)
+    try:
+        while True:
+            message, done, total = next(steps)
+            _progress(progress, message, done, total)
+    except StopIteration as stop:
+        return stop.value
+
+
+def iter_check_loaded_psbt(session, wallet_index: int, text: str):
+    """Yield ``(message, done, total)`` while checking; return the parsed PSBT.
+
+    The browser emulator advances one paint's worth of work per frame. The panel
+    drains the iterator inside one call and pushes frames with ``flush_display``.
+    """
+    yield ("Reading transaction\u2026", 0, 1)
     if isinstance(text, PSBT):
         psbt = text
     else:
@@ -86,7 +101,7 @@ def check_loaded_psbt(session, wallet_index: int, text: str, progress=None) -> P
     # signatures, and one pass over outputs.
     total = 1 + input_count + input_count + output_count + 1
     done = 0
-    _progress(progress, "Checking transaction\u2026", done, total)
+    yield ("Checking transaction\u2026", done, total)
     require_psbt_version(psbt)
     refuse_v0_required_locktime(psbt)
     refuse_modifiable(psbt)
@@ -124,11 +139,10 @@ def check_loaded_psbt(session, wallet_index: int, text: str, progress=None) -> P
             f"A transaction over {MAX_STANDARD_TX_WEIGHT} weight units (100000 vB) is {NOT_SUPPORTED}."
         )
     done = 1
-    _progress(progress, "Checking transaction\u2026", done, total)
+    yield ("Checking transaction\u2026", done, total)
     parsed = []
     for index in range(input_count):
-        _progress(
-            progress,
+        yield (
             f"Parsing input {index + 1} of {input_count}",
             done + index,
             total,
@@ -139,8 +153,7 @@ def check_loaded_psbt(session, wallet_index: int, text: str, progress=None) -> P
     _known_wallet(session, wallet, parsed)
     _selected_accounts(wallet, parsed)
     for index, item in enumerate(parsed):
-        _progress(
-            progress,
+        yield (
             f"Checking input {index + 1} of {input_count}",
             done + index,
             total,
@@ -151,17 +164,16 @@ def check_loaded_psbt(session, wallet_index: int, text: str, progress=None) -> P
         _sequence(psbt.inputs[index], transaction.vin[index])
     done += input_count
     for index in range(output_count):
-        _progress(
-            progress,
+        yield (
             f"Checking output {index + 1} of {output_count}",
             done + index,
             total,
         )
         _check_output(session, wallet, psbt, index)
     done += output_count
-    _progress(progress, "Checking signatures\u2026", done, total)
+    yield ("Checking signatures\u2026", done, total)
     verify_existing_signatures(psbt)
-    _progress(progress, "Checking signatures\u2026", total, total)
+    yield ("Checking signatures\u2026", total, total)
     return psbt
 
 

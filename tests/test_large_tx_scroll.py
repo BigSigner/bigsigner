@@ -93,15 +93,18 @@ def _legal_receive_scripts(count: int) -> list:
 
 
 def _native_bulk(session, count: int):
-    """``count`` native-segwit inputs spending to ``count`` distinct external outputs.
+    """``count`` native-segwit inputs; ``count`` outputs with one change.
 
-    Each output is 50000 sats to a different LEGAL receive address (indexes
-    0 .. count-1). Most inputs match that; the first input carries an extra
-    50000 sats so the fee stays under the 100000-sat high-fee warning.
+    ``count - 1`` outputs are 50000 sats each to distinct LEGAL receive
+    addresses (indexes 0 .. count-2). The last is change to this wallet's
+    change address #0. Most inputs match that amount; the first carries an
+    extra 50000 sats so the fee stays under the 100000-sat high-fee warning.
     """
     fingerprint, child, path = _child(session, branch=0, index=0)
+    _fp, change_child, change_path = _child(session, branch=1, index=0)
     script = address_to_scriptpubkey(session.addresses(0, 0, 0, 1)[0])
-    destinations = _legal_receive_scripts(count)
+    change = address_to_scriptpubkey(session.addresses(0, 1, 0, 1)[0])
+    destinations = _legal_receive_scripts(count - 1)
     per_out = 50_000
     fee = 50_000
     vins = [
@@ -109,6 +112,7 @@ def _native_bulk(session, count: int):
         for txid in _prev_txids(count, label=f"native-bulk-{count}")
     ]
     vouts = [TransactionOutput(per_out, destination) for destination in destinations]
+    vouts.append(TransactionOutput(per_out, change))
     tx = Transaction(version=2, vin=vins, vout=vouts)
     psbt = PSBT(tx)
     for index, inp in enumerate(psbt.inputs):
@@ -116,6 +120,8 @@ def _native_bulk(session, count: int):
         inp.witness_utxo = TransactionOutput(amount, script)
         inp.bip32_derivations[child.key] = DerivationPath(fingerprint, path)
         inp.sighash_type = SIGHASH.ALL
+    change_scope = psbt.outputs[-1]
+    change_scope.bip32_derivations[change_child.key] = DerivationPath(fingerprint, change_path)
     return psbt
 
 
@@ -266,7 +272,7 @@ def test_a_hundred_native_segwit_payments_scroll_smoothly():
     wallet = session.wallets[0]
     weight = _tx_weight(psbt.tx, wallet)
     record.note(
-        f"Native-segwit to external native-segwit, {COUNT} inputs and {COUNT} outputs, "
+        f"Native-segwit, {COUNT} inputs, {COUNT - 1} external outputs and 1 change, "
         f"{weight} weight units. Scroll frames that reuse the tile window must stay under "
         f"{int(SCROLL_FRAME_S * 1000)} ms."
     )
@@ -283,10 +289,12 @@ def test_a_hundred_native_segwit_payments_scroll_smoothly():
     app._psbt_heights = {}
     app._psbt_sheet = None
     app.screen = "psbt-yaml"
-    assert len(app.psbt_view["outputs"]) == COUNT
+    assert len(app.psbt_view["outputs"]) == COUNT - 1
+    assert len(app.psbt_view["change_outputs"]) == 1
+    assert app.psbt_view["change_outputs"][0]["place"] == "Change Address #0"
     assert len(app.psbt_view["inputs"]) == COUNT
     out_addresses = [card["address"] for card in app.psbt_view["outputs"]]
-    assert len(set(out_addresses)) == COUNT
+    assert len(set(out_addresses)) == COUNT - 1
     assert out_addresses[0] == EXTERNAL_P2WPKH
 
     # Closed sections put the Inputs row across a scroll-tile boundary. The

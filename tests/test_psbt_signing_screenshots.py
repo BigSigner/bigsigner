@@ -130,6 +130,8 @@ def test_transaction_signing_saves_screenshots():
     app.back_one()
 
     app._act("psbt-sign")
+    record.shot(app, "signing")
+    app.render()
     record.shot(app, "sign-export")
     mount_memory({"files": {}})
     try:
@@ -304,6 +306,8 @@ def test_combined_warnings_save_screenshots():
     app.back_one()
 
     app._act("psbt-sign")
+    record.shot(app, "signing")
+    app.render()
     record.shot(app, "sign-export")
     mount_memory({"files": {}})
     try:

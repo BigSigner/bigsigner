@@ -502,6 +502,11 @@ def test_a_transaction_already_signed_by_a_loaded_seed_stays_loaded():
     sign_hits = [hit for hit in app.hits if hit["action"].startswith("psbt-sign-")]
     assert len(sign_hits) == 2
     app._act(sign_hits[0]["action"])
+    app.render()
+    assert app._psbt_signing
+    assert app.notice_delay() == 0
+    app.render()
+    assert not app._psbt_signing
     app.scroll["psbt-yaml"] = 10**9
     app.render()
     shown = " ".join(item["text"] for item in app.texts)

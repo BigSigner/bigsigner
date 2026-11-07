@@ -66,6 +66,7 @@ def paint_signing(app, frame):
 
 def _signing_sheet_key(app):
     view = app.psbt_view
+    signing_fp = app._psbt_signing_fp.hex() if app._psbt_signing_fp is not None else None
     return (
         id(view),
         app.psbt_outputs_open,
@@ -74,6 +75,8 @@ def _signing_sheet_key(app):
         app.psbt_more_open,
         app.psbt_txid_open,
         app.psbt_continue,
+        app._psbt_signing,
+        signing_fp,
         tuple(
             (signer["fingerprint"], signer["signed"], signer.get("note") or "")
             for signer in (view or {}).get("signers", ())
@@ -425,22 +428,38 @@ def _sign_controls(app, frame, y, paint, offset) -> int:
         y = _wrapped(app, frame, note, y, paint, offset, TITLE_SIZE, MUTED)
         y += 8
     signers = app.psbt_view["signers"]
+    signing = app._psbt_signing
+    signing_fp = None if app._psbt_signing_fp is None else app._psbt_signing_fp.hex()
     if len(signers) <= 1:
         signer = signers[0] if signers else None
-        enabled = signer is not None and not signer["signed"]
-        y = app._flow_button(frame, y, "Sign Transaction", "psbt-sign", paint, offset, enabled=enabled)
-        if signer and signer["signed"]:
+        if signing:
+            y = app._flow_button(frame, y, "Signing\u2026", "psbt-sign", paint, offset, enabled=False)
+        else:
+            enabled = signer is not None and not signer["signed"]
+            y = app._flow_button(frame, y, "Sign Transaction", "psbt-sign", paint, offset, enabled=enabled)
+        if signer and signer["signed"] and not signing:
             y = _wrapped_center(frame, signer["note"], y, paint, offset, TITLE_SIZE, MUTED)
         return y
     for signer in signers:
         action = f"psbt-sign-{signer['fingerprint']}"
-        y = app._flow_button(
-            frame, y, signer["button"], action, paint, offset, enabled=not signer["signed"],
-        )
-        if signer["signed"]:
+        if signing and signing_fp == signer["fingerprint"]:
+            y = app._flow_button(frame, y, "Signing\u2026", action, paint, offset, enabled=False)
+        else:
+            y = app._flow_button(
+                frame,
+                y,
+                signer["button"],
+                action,
+                paint,
+                offset,
+                enabled=not signer["signed"] and not signing,
+            )
+        if signer["signed"] and not (signing and signing_fp == signer["fingerprint"]):
             y = _wrapped_center(frame, signer["note"], y, paint, offset, TITLE_SIZE, MUTED)
     y += 8
-    y = app._flow_button(frame, y, "Continue", "psbt-continue", paint, offset, enabled=app.psbt_continue)
+    y = app._flow_button(
+        frame, y, "Continue", "psbt-continue", paint, offset, enabled=app.psbt_continue and not signing,
+    )
     return y
 
 

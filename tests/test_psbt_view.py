@@ -423,8 +423,24 @@ def test_the_signing_screen_offers_a_signed_qr_and_an_sd_file():
     assert app.screen == "psbt-yaml"
     app.scroll["psbt-yaml"] = 10**9
     app.render()
+    sign = next(hit for hit in app.hits if hit["action"] == "psbt-sign")
+    box = sign["box"]
     app._act("psbt-sign")
+    assert app.screen == "psbt-yaml"
+    assert app._psbt_signing
+    assert app.notice_delay() is None
+    signing = app.render()
+    assert app.screen == "psbt-yaml"
+    assert app.notice_delay() == 0
+    assert not any(hit["action"] == "psbt-sign" for hit in app.hits)
+    y = (box[1] + box[3]) // 2
+    assert any(signing.getpixel((x, y))[:3] == (186, 190, 196) for x in range(box[0] + 8, box[2] - 8))
+    app.render()
     assert app.screen == "psbt-share"
+    assert not app._psbt_signing
+    assert app._search_touch_guard
+    assert app._discard_queued_touch
+    assert app._discard_gesture
     app._act("psbt-export")
     assert app.screen == "psbt-export-format"
     app.render()
