@@ -48,6 +48,19 @@ def run_panel():
     # then once more when the finger pauses or lifts.
     pending = False
 
+    def flush_progress():
+        """Push the progress screen while a PSBT check is still running."""
+        nonlocal frames, painted_at
+        started = time.monotonic()
+        painted_at = started
+        _write(app.render())
+        elapsed = int((time.monotonic() - started) * 1000)
+        frames += 1
+        if frames == 1 or elapsed >= 500:
+            _kmsg(f"frame {frames} {elapsed} ms")
+
+    app.flush_display = flush_progress
+
     def blit():
         nonlocal frames, painted_at, pending, dump_error
         pending = False

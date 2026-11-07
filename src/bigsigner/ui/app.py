@@ -263,6 +263,8 @@ SCROLL_DELTA_X = 24
 SCROLL_DELTA_Y = 24
 # A tap just after a scroll is the finger arriving, not a button press.
 SCROLL_QUIET = 0.5
+# Progress paints while a PSBT is checked. The Pi cannot redraw every input.
+PSBT_PROGRESS_PAINT_S = 0.12
 # This panel reports a press above the finger. The extra target reaches up,
 # but it stops at the title bar so the title text is not the control.
 DROPDOWN_RAISE = 48
@@ -453,6 +455,13 @@ class App:
         self.psbt_parts = SpecterParts()
         self.psbt_yaml_text = ""
         self.psbt_error = ""
+        self.psbt_progress_text = ""
+        self.psbt_progress_done = 0
+        self.psbt_progress_total = 1
+        self.psbt_progress_check_total = 0
+        self._psbt_progress_painted_at = 0.0
+        # The panel sets this to push a frame while a long check is still running.
+        self.flush_display = None
         self.camera_unavailable = False
         self.sd_dir = ""
         self.sd_expect = "key"
@@ -570,6 +579,7 @@ class App:
             "address-verify-result": self._address_verify_result,
             "address-message": self._address_message,
             "load-psbt": self._load_psbt,
+            "psbt-progress": self._psbt_progress_screen,
             "psbt-error": self._psbt_error,
             "psbt-yaml": self._psbt_yaml,
             "psbt-opreturn": self._psbt_opreturn,
@@ -688,6 +698,8 @@ class App:
         """Loading is on screen, or this gesture began while it was."""
         if self._discard_gesture:
             return True
+        if self.screen == "psbt-progress":
+            return True
         if self.psbt_search is not None:
             return True
         return self._addresses_loading and self._addresses_loading_shown
@@ -722,6 +734,9 @@ class App:
                 return
 
     def pointer_down(self, x: int, y: int):
+        if self.screen == "psbt-progress":
+            self._discard_gesture = True
+            return
         if self._addresses_loading and self._addresses_loading_shown:
             self._discard_gesture = True
             return
@@ -7089,9 +7104,15 @@ class App:
         return text
 
     def _accept_psbt_text(self, text: str | bytes, source: str):
+        self._begin_psbt_progress("Reading transaction\u2026")
         try:
             psbt_bytes(text)
-            checked = check_loaded_psbt(self.session, self.wallet_index, psbt_text(text))
+            checked = check_loaded_psbt(
+                self.session,
+                self.wallet_index,
+                psbt_text(text),
+                progress=self._on_psbt_check_progress,
+            )
         except SessionError as exc:
             message = str(exc)
             if message == UNREADABLE and isinstance(text, str):
@@ -7099,16 +7120,21 @@ class App:
                 if message.startswith("This is a transaction"):
                     message = UNREADABLE
             self.set_error(message if message != TOO_LARGE else TOO_LARGE)
+            self._leave_psbt_progress()
             self._return_to_load_psbt()
             return
         except ReviewError as exc:
             message = str(exc)
             if message == UNREADABLE:
                 self.set_error(message)
+                self._leave_psbt_progress()
                 self._return_to_load_psbt()
                 return
+            self._leave_psbt_progress()
             self._show_psbt_error(message)
             return
+        check_total = max(1, self.psbt_progress_check_total)
+        self._set_psbt_progress("Preparing review\u2026", check_total, check_total + 1, force=True)
         self.psbt_loaded = checked.serialize()
         self.psbt_checked = checked
         self.psbt_view = describe_psbt(self.session, self.wallet_index, checked)
@@ -7125,9 +7151,81 @@ class App:
         self.psbt_search_hit = None
         self.signed_psbt = None
         self.scroll["psbt-yaml"] = 0
-        if self.screen != "load-psbt":
-            self._return_to_load_psbt()
+        self._set_psbt_progress("Preparing review\u2026", check_total + 1, check_total + 1, force=True)
+        self._leave_psbt_progress()
+        self._return_to_load_psbt()
         self.go("psbt-yaml")
+
+    def _leave_psbt_progress(self):
+        """A touch that began on the progress screen must not click the next one."""
+        self._press = None
+        self._discard_queued_touch = True
+
+    def _begin_psbt_progress(self, message: str):
+        """Replace the load screen with progress. Clicks do nothing until it leaves."""
+        self.menu = False
+        self.add_menu = False
+        self.confirm = None
+        self.open_dropdown = None
+        self.notice = ""
+        self.notice_until = None
+        self.notice_error = False
+        self.psbt_progress_check_total = 0
+        self.screen = "psbt-progress"
+        self._set_psbt_progress(message, 0, 1, force=True)
+
+    def _on_psbt_check_progress(self, message: str, done: int, total: int):
+        self.psbt_progress_check_total = total
+        self._set_psbt_progress(message, done, total + 1)
+
+    def _set_psbt_progress(self, message: str, done: int, total: int, force: bool = False):
+        self.psbt_progress_text = message
+        self.psbt_progress_done = max(0, int(done))
+        self.psbt_progress_total = max(1, int(total))
+        self.screen = "psbt-progress"
+        now = time.monotonic()
+        if (
+            not force
+            and self.flush_display is not None
+            and now - self._psbt_progress_painted_at < PSBT_PROGRESS_PAINT_S
+            and done < total
+        ):
+            return
+        self._psbt_progress_painted_at = now
+        if self.flush_display is not None:
+            self.flush_display()
+
+    def _psbt_progress_screen(self, frame: Frame):
+        """Status and a bar only. No title, and no controls to tap.
+
+        The status is centered vertically. The bar stays a fixed distance from
+        the bottom so wrapping text does not move it.
+        """
+        message = self.psbt_progress_text or "Loading transaction\u2026"
+        face = font(BODY_SIZE)
+        lines = wrap(frame.draw, message, face, WIDTH - 2 * MARGIN)
+        bar_h = 28
+        bar_bottom = HEIGHT - 110
+        bar_top = bar_bottom - bar_h
+        text_h = len(lines) * (BODY_SIZE + 8)
+        y = max(MARGIN, (HEIGHT - text_h) // 2)
+        for line in lines:
+            width = frame.draw.textlength(line, font=face)
+            x = (WIDTH - width) / 2
+            frame.draw.text((x, y), line, font=face, fill=INK)
+            frame.mark(line, frame.draw.textbbox((x, y), line, font=face))
+            y += BODY_SIZE + 8
+        left = MARGIN
+        right = WIDTH - MARGIN
+        frame.draw.rounded_rectangle((left, bar_top, right, bar_bottom), radius=10, outline=LINE, width=2, fill=WHITE)
+        span = right - left - 8
+        filled = 0 if self.psbt_progress_total <= 0 else int(span * min(1.0, self.psbt_progress_done / self.psbt_progress_total))
+        if filled > 0:
+            frame.draw.rounded_rectangle(
+                (left + 4, bar_top + 4, left + 4 + filled, bar_bottom - 4),
+                radius=6,
+                fill=BLUE,
+            )
 
     def _show_psbt_error(self, message: str):
         """A failed PSBT check replaces the popup, so the refusal is the whole screen."""

@@ -60,7 +60,7 @@ A seed key opens Derive Key (`derive`) for one of the three supported paths. The
 
 `scan.classify_content` names a QR payload or an SD card file: an address, a seed, a compact seed, a numeric seed, a BSMS file, a wallet descriptor, a Specter-DIY JSON export, a Bitcoin Core descriptor file, a key expression, or a transaction. The Specter and Bitcoin Core files are reduced to the descriptor they contain. The screen that asked for one kind refuses the others by that name.
 
-Load External Key is two screens, `external-review` and `external-details`. A failed QR or SD import uses `load-error`. A PSBT that fails a check uses `psbt-error`. A file that is not a PSBT stays a popup. The license list is `licenses`, and one notice is `license`.
+Load External Key is two screens, `external-review` and `external-details`. A failed QR or SD import uses `load-error`. While a PSBT is checked, `psbt-progress` shows status text and a bar with no title; the panel sets `flush_display` so those frames appear before the check returns. A PSBT that fails a check uses `psbt-error`. A file that is not a PSBT stays a popup. The license list is `licenses`, and one notice is `license`.
 
 On the Pi, `camera_preview_box` is the viewfinder rectangle for the scan and camera screens. `hardware/camera.py` fills it from picamera2 when that is installed, otherwise from the legacy picamera that bigsigner-os ships, and reads QR codes with pyzbar. Those packages come from the device image. They are not imported on a machine that is not capturing, and the emulator does not use that module. The emulator page shows the computer's camera above the panel.
 

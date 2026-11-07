@@ -14,6 +14,10 @@ An output is change only when its derivations use that same account combination,
 
 The signature hash must be SIGHASH_ALL. Taproot also allows the default sighash. SIGHASH_NONE, SIGHASH_SINGLE, and ANYONECANPAY are rejected. A PSBT that contains PSBT_GLOBAL_TX_MODIFIABLE is rejected on version 0 and version 2. A signature already on an input is checked against the transaction. Every signature on a multisig input is checked. A signature that does not match is rejected.
 
+## Loading progress
+
+After the file is read, or the last QR part is assembled, BigSigner shows a progress screen with no title. The text names the check in progress, such as Parsing input 7 of 80, and a bar below fills from empty to full. Touches do nothing until Transaction Signing opens, or until Error loading PSBT replaces it.
+
 ## Transaction Signing
 
 A PSBT that passes the checks opens Transaction Signing. The header says Spending from Wallet:, then the wallet name and Account: 0 (default) or Account: 3 (non-default). A multisig account line lists every key's index, such as Account: 0, 0, 0 (default). The parenthetical is default only when every index is 0. Under the account line, Transaction Id is a chevron, closed at first. Opening it shows the transaction id as four centered monospace rows, the same way an input shows a previous transaction id. A wallet name does not start a line with a word of two letters or fewer. A block-height locktime adds a grey note that the transaction can be mined only after that block height. The exact height is not included: Bitcoin accepts the transaction in the next block. More Information, closed at first, explains why wallets set a locktime near the chain tip.

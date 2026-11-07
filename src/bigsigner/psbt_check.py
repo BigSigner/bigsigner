@@ -58,8 +58,13 @@ NATIVE_DUST_SATS = 294
 WITNESS_SCRIPT_DUST_SATS = 330
 
 
-def check_loaded_psbt(session, wallet_index: int, text: str) -> PSBT:
-    """The parsed PSBT, after every refusal below has been passed."""
+def check_loaded_psbt(session, wallet_index: int, text: str, progress=None) -> PSBT:
+    """The parsed PSBT, after every refusal below has been passed.
+
+    ``progress`` is ``progress(message, done, total)``. ``done`` runs from 0 to
+    ``total``. The caller may treat ``total`` as the check's share of a longer bar.
+    """
+    _progress(progress, "Reading transaction\u2026", 0, 1)
     if isinstance(text, PSBT):
         psbt = text
     else:
@@ -70,10 +75,17 @@ def check_loaded_psbt(session, wallet_index: int, text: str) -> PSBT:
             raise
         except (PSBTError, Exception) as exc:
             raise ReviewError(UNREADABLE) from exc
+    transaction = psbt.tx
+    input_count = 0 if transaction is None else len(transaction.vin)
+    output_count = 0 if transaction is None else len(transaction.vout)
+    # Early checks, one pass over inputs for paths, one for matches, one for
+    # signatures, and one pass over outputs.
+    total = 1 + input_count + input_count + output_count + 1
+    done = 0
+    _progress(progress, "Checking transaction\u2026", done, total)
     require_psbt_version(psbt)
     refuse_v0_required_locktime(psbt)
     refuse_modifiable(psbt)
-    transaction = psbt.tx
     if transaction is None or transaction.version not in (2, 3):
         raise ReviewError(f"A transaction version other than 2 or 3 is {NOT_SUPPORTED}.")
     if not transaction.vin:
@@ -99,18 +111,51 @@ def check_loaded_psbt(session, wallet_index: int, text: str) -> PSBT:
         raise ReviewError(
             f"A transaction over {MAX_STANDARD_TX_WEIGHT} weight units (100000 vB) is {NOT_SUPPORTED}."
         )
-    parsed = [_input_paths(session, wallet, psbt.inputs[index]) for index in range(len(transaction.vin))]
+    done = 1
+    _progress(progress, "Checking transaction\u2026", done, total)
+    parsed = []
+    for index in range(input_count):
+        _progress(
+            progress,
+            f"Parsing input {index + 1} of {input_count}",
+            done + index,
+            total,
+        )
+        parsed.append(_input_paths(session, wallet, psbt.inputs[index]))
+    done += input_count
     _same_prefix(parsed)
     _known_wallet(session, wallet, parsed)
     _selected_accounts(wallet, parsed)
     for index, item in enumerate(parsed):
+        _progress(
+            progress,
+            f"Checking input {index + 1} of {input_count}",
+            done + index,
+            total,
+        )
         _matches_psbt(session, wallet, psbt.inputs[index], item)
         _scripts(wallet, psbt.inputs[index], session, item)
         _sighash(wallet, psbt.inputs[index])
         _sequence(psbt.inputs[index], transaction.vin[index])
-    _outputs(session, wallet, psbt)
+    done += input_count
+    for index in range(output_count):
+        _progress(
+            progress,
+            f"Checking output {index + 1} of {output_count}",
+            done + index,
+            total,
+        )
+        _check_output(session, wallet, psbt, index)
+    done += output_count
+    _progress(progress, "Checking signatures\u2026", done, total)
     verify_existing_signatures(psbt)
+    _progress(progress, "Checking signatures\u2026", total, total)
     return psbt
+
+
+def _progress(progress, message: str, done: int, total: int) -> None:
+    if progress is not None:
+        progress(message, done, total)
 
 
 def psbt_yaml(psbt: PSBT) -> str:
@@ -744,33 +789,38 @@ def _has_our_signature(scope, pubkey, taproot: bool) -> bool:
 
 
 def _outputs(session, wallet, psbt: PSBT):
-    for index, scope in enumerate(psbt.outputs):
-        vout = psbt.tx.vout[index]
-        script = scope.script_pubkey or vout.script_pubkey
-        derivations = _derivations(scope)
-        if not derivations or script is None:
-            continue
-        owner = _output_wallet(session, derivations)
-        if owner is None:
-            continue
-        try:
-            item = _input_paths(session, owner, scope)
-        except ReviewError as exc:
-            if "would not derive" in str(exc):
-                raise
-            continue
-        derived = _script_at(session, owner, _accounts(item), item["rows"][0]["branch"], item["rows"][0]["index"])
-        if derived == script:
-            continue
-        if owner is wallet:
-            raise ReviewError(
-                f"A change output whose derived address does not match the PSBT is {NOT_SUPPORTED}."
-            )
-        name = session.wallet_short_name_of(owner)
+    for index in range(len(psbt.outputs)):
+        _check_output(session, wallet, psbt, index)
+
+
+def _check_output(session, wallet, psbt: PSBT, index: int):
+    scope = psbt.outputs[index]
+    vout = psbt.tx.vout[index]
+    script = scope.script_pubkey or vout.script_pubkey
+    derivations = _derivations(scope)
+    if not derivations or script is None:
+        return
+    owner = _output_wallet(session, derivations)
+    if owner is None:
+        return
+    try:
+        item = _input_paths(session, owner, scope)
+    except ReviewError as exc:
+        if "would not derive" in str(exc):
+            raise
+        return
+    derived = _script_at(session, owner, _accounts(item), item["rows"][0]["branch"], item["rows"][0]["index"])
+    if derived == script:
+        return
+    if owner is wallet:
         raise ReviewError(
-            f"An output matches {name}, but the derived address does not match the PSBT. "
-            f"That is {NOT_SUPPORTED}."
+            f"A change output whose derived address does not match the PSBT is {NOT_SUPPORTED}."
         )
+    name = session.wallet_short_name_of(owner)
+    raise ReviewError(
+        f"An output matches {name}, but the derived address does not match the PSBT. "
+        f"That is {NOT_SUPPORTED}."
+    )
 
 
 def _output_wallet(session, derivations):
