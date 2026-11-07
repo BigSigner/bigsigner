@@ -23,6 +23,8 @@ Add SECURITY.md file to the project. Security contact email should be orenz0@pro
 
 Where this section disagrees with the rest of the document, this section wins.
 
+Every tap action starts a fixed 250 ms input guard after its resulting UI is displayed, using the current monotonic time rather than the input event's timestamp. Queued taps are discarded. Ignored input and scroll redraws do not restart the guard. When work continues after a loading frame, the guard starts again after its result is displayed.
+
 The screen is portrait 480×800. Supported wallets are singlesig native segwit (`m/84h/<coin>h/<account>h`), singlesig taproot key-path (`m/86h/<coin>h/<account>h`), and native-segwit multisig (`m/48h/<coin>h/<account>h/2h`). The coin type is `0h` on mainnet and `1h` on testnet and regtest.
 
 A multisig wallet has at least 2 keys and at most 15 keys. The largest threshold form is m-of-15. A descriptor or a selection with more than 15 participants is refused.

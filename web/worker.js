@@ -187,11 +187,14 @@ def tick(raw):
         raise RuntimeError("The emulator has not started.")
     buffer = io.BytesIO()
     app.render().save(buffer, format="PNG")
+    tap_guard = app.frame_presented()
+    app.take_queued_touch_discard()
     delay = app.notice_delay()
     changed = consume_memory_change()
     return json.dumps({
         "screen": app.screen,
         "delay": delay,
+        "tap_guard": tap_guard,
         "png": base64.b64encode(buffer.getvalue()).decode("ascii"),
         "card": changed,
     })

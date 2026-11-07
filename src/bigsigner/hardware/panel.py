@@ -89,10 +89,12 @@ def run_panel():
             except Exception as exc:
                 dump_error = True
                 _kmsg(f"ui dump {exc}")
-        # Stale presses queued while the UI was blocked must not click the new screen.
-        if touch is not None and app.take_queued_touch_discard():
+        # Start the gap only after the framebuffer write, including slow paint.
+        app.frame_presented()
+        if app.take_queued_touch_discard():
             dropped = flush_touch(touch)
-            app.arm_queued_touch_discard()
+            if touch is not None:
+                app.arm_queued_touch_discard()
             app.mark_search_touch_ready()
             if dropped:
                 _kmsg(f"flushed {dropped} touch bytes")
@@ -169,8 +171,8 @@ def run_panel():
                     else:
                         pending = True
             elif phase == "up":
-                app.pointer_up(x, y)
-                blit()
+                if app.pointer_up(x, y):
+                    blit()
     finally:
         camera.close()
 

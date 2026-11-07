@@ -264,11 +264,9 @@ SCROLL_DELTA_X = 24
 SCROLL_DELTA_Y = 24
 # A tap just after a scroll is the finger arriving, not a button press.
 SCROLL_QUIET = 0.5
-# Address search blocks the UI. The kernel queues presses; the panel flushes
-# them when the miss/found dialog opens. Any touch that still arrives starts
-# this gap clock; each ignored one refreshes it. The first touch more than
-# this long after the last ignored one is real.
-SEARCH_TOUCH_GAP = 0.2
+# Allow time to see a tap's resulting frame before accepting another gesture.
+# Use the current monotonic clock, never a queued input event's timestamp.
+SEARCH_TOUCH_GAP = 0.25
 # Progress paints while a PSBT is checked. The Pi cannot redraw every input.
 PSBT_PROGRESS_PAINT_S = 0.12
 # This panel reports a press above the finger. The extra target reaches up,
@@ -522,6 +520,7 @@ class App:
         self._discard_queued_touch = False
         self._search_touch_guard = False
         self._search_touch_at = 0.0
+        self._tap_frame_pending = False
         self._address_tops = {}
         self._address_top_key = None
         self._address_cache = {}
@@ -746,17 +745,29 @@ class App:
         self._discard_queued_touch = False
         return pending
 
+    def frame_presented(self) -> bool:
+        """Called by the display host after paint, not by render or scroll.
+
+        A tap action or completed background operation invalidates queued
+        input. Return True so the browser can also discard its queued taps
+        and start the gap after the image actually reaches its display.
+        """
+        if not (self._tap_frame_pending or self._discard_queued_touch):
+            return False
+        self._press = None
+        # The panel can first show a placeholder, then build the QR next frame.
+        self._tap_frame_pending = self._qr_strip_due
+        self._discard_queued_touch = True
+        self._search_touch_guard = True
+        self.mark_search_touch_ready()
+        return True
+
     def arm_queued_touch_discard(self) -> None:
         """The panel already had a touch waiting when the blocked UI left the screen."""
         self._discard_gesture = True
 
     def _arm_search_touch_quiet(self) -> None:
-        """Flush queued taps and ignore new ones until a gap passes after paint.
-
-        Used after slow work (address search, signing, and Back from Show
-        OP_RETURN Content) so a press during the wait cannot click the screen
-        that appears next. Fast navigations usually skip this; see AGENTS.md.
-        """
+        """Protect a completed operation, including work deferred past its tap."""
         self._press = None
         self._discard_gesture = True
         self._discard_queued_touch = True
@@ -769,12 +780,11 @@ class App:
             self._search_touch_at = time.monotonic()
 
     def _ignore_search_touch(self) -> bool:
-        """True to drop this touch. Stops after a gap past the last ignored one."""
+        """Drop input during the fixed gap after paint; ignored input cannot extend it."""
         if not self._search_touch_guard:
             return False
         now = time.monotonic()
-        if now - self._search_touch_at <= SEARCH_TOUCH_GAP:
-            self._search_touch_at = now
+        if now - self._search_touch_at < SEARCH_TOUCH_GAP:
             return True
         self._search_touch_guard = False
         self._discard_gesture = False
@@ -790,6 +800,7 @@ class App:
         if camera:
             self.camera_frames = list(camera.get("frames") or [])
             self.camera_final = camera.get("final") or b""
+        cleared_notice = bool(self.notice and not self.notice_error)
         if not self.notice_error:
             self.set_notice("")
         self._last_tap = (x, y)
@@ -798,8 +809,12 @@ class App:
             if left <= x < right and top <= y < bottom:
                 if self.notice_error and hit["action"] != "dismiss-notice":
                     return
+                self._tap_frame_pending = True
                 self._act(hit["action"])
-                return
+                return True
+        if cleared_notice:
+            self._tap_frame_pending = True
+            return True
 
     def pointer_down(self, x: int, y: int):
         if self.screen == "psbt-progress":
@@ -979,7 +994,8 @@ class App:
         if press is None:
             return
         if self._press_is_click(press, (x, y)):
-            self.tap(press[0], press[1], camera)
+            return self.tap(press[0], press[1], camera)
+        return True  # Paint the final scroll position without arming the tap gap.
 
     def pointer_idle(self) -> bool:
         """A pause is not a lift. The gesture ends when the finger lifts."""

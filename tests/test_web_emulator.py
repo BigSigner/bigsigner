@@ -3,11 +3,70 @@
 import base64
 import hashlib
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from bigsigner.bundle import EXTERNAL_ASSETS, bundle_files, install_assets, source_files, source_root, write_bundle
+
+
+def test_browser_drops_taps_queued_against_the_previous_frame():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to exercise the browser input queue")
+    page = Path("web/index.html").read_text(encoding="utf-8")
+    driver = "let worker = null;" + page.split("let worker = null;", 1)[1].split('if (location.protocol === "file:")', 1)[0]
+    script = """
+const assert = require("node:assert/strict");
+let now = 0;
+const performance = {now: () => now};
+let started = true, dirty = false, holdInput = false;
+let tapBlockedUntil = 0, tapFrame = 0, refreshTimer = 0;
+let screenName = "keys";
+const handlers = new Map();
+const panel = {style: {}, addEventListener: (name, fn) => handlers.set(name, fn)};
+const point = event => ({x: event.x, y: event.y});
+const card = {};
+const initial = {};
+""" + driver + """
+(async () => {
+  const sent = [];
+  let release;
+  rpc = async body => {
+    sent.push(body);
+    if (sent.length === 1) await new Promise(resolve => { release = resolve; });
+    return {tap_guard: body.phase === "up", delay: null, png: ""};
+  };
+  paintPanel = async () => { now += 1000; }; // Slow image decoding/presentation.
+  const event = {x: 240, y: 400, preventDefault() {}};
+  post({kind: "tap", phase: "up"});
+  await Promise.resolve(); // The first operation is running.
+  handlers.get("pointerdown")(event);
+  handlers.get("pointerup")(event);
+  assert.equal(press, null);
+  release();
+  await chain;
+  assert.equal(sent.length, 1); // The two queued phases cannot reach Python.
+  assert.equal(tapBlockedUntil, 1250); // Starts after presentation.
+  now = 1249;
+  handlers.get("pointerdown")(event);
+  assert.equal(press, null);
+  now = 1251;
+  handlers.get("pointerup")(event); // Lift after a rejected down is harmless.
+  await chain;
+  assert.equal(sent.length, 1);
+  handlers.get("pointerdown")(event);
+  await chain;
+  handlers.get("pointerup")(event);
+  await chain;
+  assert.deepEqual(sent.map(body => body.phase), ["up", "down", "up"]);
+  assert.equal(tapInputBlocked(), true);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    result = subprocess.run([node], input=script, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_the_static_page_reads_the_bundle_and_checks_downloads():

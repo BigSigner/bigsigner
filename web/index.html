@@ -277,6 +277,8 @@ let dirty = false;
 let started = false;
 let refreshTimer = 0;
 let holdInput = false;
+let tapBlockedUntil = 0;
+let tapFrame = 0;
 let frameUrl = "";
 let screenName = "";
 let cameraFrames = [];
@@ -927,7 +929,7 @@ function hideStatus() {
   status.hidden = true;
   status.textContent = "";
 }
-function paintPanel(png, screen) {
+async function paintPanel(png, screen) {
   const binary = atob(png);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -936,11 +938,20 @@ function paintPanel(png, screen) {
   panelWrap.classList.add("ready");
   if (frameUrl) URL.revokeObjectURL(frameUrl);
   frameUrl = next;
+  await panel.decode();
+  // The first callback precedes paint; the next gives that paint time to show.
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   hideStatus();
   syncCamera(screen || "");
 }
-function showFrame(msg) {
-  paintPanel(msg.png, msg.screen || "");
+async function showFrame(msg) {
+  if (msg.tap_guard) {
+    holdInput = true;
+    tapFrame += 1;
+    press = null;
+  }
+  await paintPanel(msg.png, msg.screen || "");
+  if (msg.tap_guard) tapBlockedUntil = performance.now() + 250;
   // null waits for a click. 0 asks for the next frame now; that frame does the work.
   // While that frame is outstanding, Loading is on screen and taps are ignored.
   const delay = msg.delay;
@@ -990,7 +1001,7 @@ async function sendTick(body) {
   started = true;
   panel.style.pointerEvents = "auto";
   if (msg.card) applyRemote(sent, msg.card);
-  showFrame(msg);
+  await showFrame(msg);
   if (dirty) enqueue(() => sendTick({kind: "frame"}));
 }
 function loadFrame() {
@@ -999,27 +1010,36 @@ function loadFrame() {
 }
 function post(body) {
   if (!started) return;
-  enqueue(() => sendTick(body));
+  const capturedFrame = tapFrame;
+  enqueue(() => {
+    // These coordinates belonged to the frame visible when the finger moved.
+    if (capturedFrame !== tapFrame) return;
+    return sendTick(body);
+  });
+}
+
+function tapInputBlocked() {
+  return holdInput || performance.now() < tapBlockedUntil;
 }
 
 let press = null;
 panel.addEventListener("pointerdown", (event) => {
   event.preventDefault();
-  if (holdInput) return;
+  if (tapInputBlocked()) return;
   if (panel.setPointerCapture) panel.setPointerCapture(event.pointerId);
   const p = point(event);
   press = {x: p.x, y: p.y, moved: false};
   post({kind: "tap", phase: "down", x: p.x, y: p.y});
 });
 panel.addEventListener("pointermove", (event) => {
-  if (holdInput || !press) return;
+  if (tapInputBlocked() || !press) return;
   const p = point(event);
   if (Math.abs(p.x - press.x) < 8 && Math.abs(p.y - press.y) < 8) return;
   press = {x: p.x, y: p.y, moved: true};
   post({kind: "tap", phase: "move", x: p.x, y: p.y});
 });
 panel.addEventListener("pointerup", (event) => {
-  if (holdInput) {
+  if (tapInputBlocked()) {
     press = null;
     return;
   }

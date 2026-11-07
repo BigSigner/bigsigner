@@ -133,9 +133,11 @@ def run(psbt_path: Path | None = None) -> None:
         frames += 1
         if frames == 1 or elapsed >= 500:
             _kmsg(f"frame {frames} {elapsed} ms {app.screen}")
-        if touch is not None and app.take_queued_touch_discard():
+        app.frame_presented()
+        if app.take_queued_touch_discard():
             dropped = flush_touch(touch)
-            app.arm_queued_touch_discard()
+            if touch is not None:
+                app.arm_queued_touch_discard()
             app.mark_search_touch_ready()
             if dropped:
                 _kmsg(f"flushed {dropped} touch bytes")
@@ -219,8 +221,8 @@ def run(psbt_path: Path | None = None) -> None:
                     else:
                         pending = True
             elif phase == "up":
-                app.pointer_up(x, y)
-                blit()
+                if app.pointer_up(x, y):
+                    blit()
     finally:
         _kmsg("finishing; handing panel back")
         print("finishing; handing panel back", flush=True)
