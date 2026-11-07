@@ -58,6 +58,16 @@ def font(size: int, mono: bool = False) -> ImageFont.ImageFont:
     return _font(name, size)
 
 
+def ink_span(size: int) -> int:
+    """How far below the draw position this size can still place ink.
+
+    The next line starts ``size + 8`` pixels down. A 48px amount still reaches
+    9px past its em size, so a tile must keep painting a glyph that began on
+    the previous tile until ``size + 16``.
+    """
+    return size + 16
+
+
 def icon_font(size: int, awesome: bool = False) -> ImageFont.FreeTypeFont:
     name = "Font_Awesome_6_Free-Solid-900.otf" if awesome else "seedsigner-icons.otf"
     return _font(name, size)
@@ -379,9 +389,10 @@ class Frame:
         for line in lines:
             # Live frames use clip_top=HEADER so a line that starts under the
             # title bar is not sliced in half. Tile strips use clip_top=0 and
-            # must still paint a line that began on the previous tile.
+            # must still paint a line that began on the previous tile, including
+            # the descender past the em box.
             visible = y < clip_bottom and (
-                y >= clip_top or (clip_top == 0 and y + size > clip_top)
+                y >= clip_top or (clip_top == 0 and y + ink_span(size) > clip_top)
             )
             if visible:
                 self.draw.text((x, y), line, font=face, fill=fill)

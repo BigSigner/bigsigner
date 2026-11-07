@@ -18,6 +18,7 @@ from .canvas import (
     Icons,
     font,
     glyph_sprite,
+    ink_span,
     wrap,
 )
 
@@ -40,6 +41,22 @@ _PSBT_TILE_PAD = 1
 def _clip_top(frame) -> int:
     """Title bar on a normal frame; 0 when painting a scroll tile strip."""
     return getattr(frame, "clip_top", HEADER)
+
+
+def _strip_visible(frame, top: float, span: float) -> bool:
+    """True when this box meets the strip being painted.
+
+    A tile uses clip_top 0 and still draws a box that began on the previous
+    tile, so the stitch does not cut a glyph in half. A live frame keeps
+    clip_top at the title bar and skips a box that starts underneath it.
+    """
+    clip_top = _clip_top(frame)
+    clip_bottom = getattr(frame, "clip_bottom", HEIGHT)
+    if top >= clip_bottom or top + span <= clip_top:
+        return False
+    if top >= clip_top:
+        return True
+    return clip_top == 0
 
 
 def paint_signing(app, frame):
@@ -472,7 +489,7 @@ def _place_card(app, frame, y, paint, offset, key, draw) -> int:
         span = draw(False, 0) - y
         app._psbt_heights[key] = span
     top = y - offset
-    if paint and top < HEIGHT and top + span > _clip_top(frame):
+    if paint and _strip_visible(frame, top, span):
         draw(True, offset)
     return y + span
 
@@ -665,8 +682,9 @@ def _input_body(app, frame, card, cursor, paint, offset) -> int:
 def _card_button(frame, y, label, action, paint, offset, enabled=True) -> int:
     height = frame.button_height(label)
     top = y - offset
+    # rounded_rectangle includes the bottom row, so the span is one past height.
     box = (MARGIN + 16, top, WIDTH - MARGIN - 16, top + height)
-    if paint and top + height > _clip_top(frame) and top < HEIGHT:
+    if paint and _strip_visible(frame, top, height + 1):
         color = BLUE if enabled else (186, 190, 196)
         text = WHITE if enabled else (132, 136, 142)
         frame.draw.rounded_rectangle(box, radius=14, fill=color)
@@ -694,7 +712,7 @@ def _address_flow(app, frame, address, y, paint, offset) -> int:
 def _chevron(frame, y, paint, offset, title, open_now, action) -> int:
     height = TITLE_SIZE + 20
     top = y - offset
-    if paint and top + height > _clip_top(frame) and top < HEIGHT:
+    if paint and _strip_visible(frame, top, height):
         text_y = top + 4
         _left, ink_top, _right, ink_bottom = frame.draw.textbbox((0, 0), title, font=font(TITLE_SIZE))
         _section_chevron(frame, open_now, MARGIN + 16, text_y + (ink_top + ink_bottom - 1) / 2)
@@ -706,7 +724,7 @@ def _chevron(frame, y, paint, offset, title, open_now, action) -> int:
 def _section_label(frame, y, paint, offset, title) -> int:
     height = TITLE_SIZE + 20
     top = y - offset
-    if paint and top + height > _clip_top(frame) and top < HEIGHT:
+    if paint and _strip_visible(frame, top, height):
         frame.text(title, MARGIN + 40, top + 4, size=TITLE_SIZE)
     return y + height + 8
 
@@ -761,7 +779,7 @@ def _zero_amount_line(frame, y, paint, offset) -> int:
     x = MARGIN + 16
     if paint:
         yy = y - offset
-        if _clip_top(frame) <= yy < HEIGHT:
+        if _strip_visible(frame, yy, ink_span(TITLE_SIZE)):
             frame.draw.text((x, yy), label, font=face, fill=MUTED)
             frame.draw.text((x + frame.draw.textlength(label, font=face), yy), value, font=face, fill=INK)
             frame.mark(label + value, frame.draw.textbbox((x, yy), label + value, font=face))
@@ -802,7 +820,7 @@ def _sequence_line(frame, y, paint, offset, sequence: int) -> int:
     x = MARGIN + 16
     if paint:
         yy = y - offset
-        if _clip_top(frame) <= yy < HEIGHT:
+        if _strip_visible(frame, yy, ink_span(TITLE_SIZE)):
             frame.draw.text((x, yy), label, font=face, fill=MUTED)
             label_w = frame.draw.textlength(label, font=face)
             frame.draw.text((x + label_w, yy), value, font=mono, fill=INK)
@@ -817,7 +835,7 @@ def _card_text(frame, text, y, paint, offset, size, fill) -> int:
     if paint:
         for index, line in enumerate(lines):
             yy = y - offset + index * (size + 8)
-            if _clip_top(frame) <= yy < HEIGHT:
+            if _strip_visible(frame, yy, ink_span(size)):
                 frame.draw.text((x, yy), line, font=face, fill=fill)
                 frame.mark(line, frame.draw.textbbox((x, yy), line, font=face))
     return y + len(lines) * (size + 8)
@@ -926,6 +944,8 @@ def _centered_flow(frame, text, y, paint, offset, size, fill, mono=False) -> int
 
 
 def _centered(frame, text, y, size, fill, mono=False):
+    if not _strip_visible(frame, y, ink_span(size)):
+        return
     face = font(size, mono=mono)
     width = frame.draw.textlength(text, font=face)
     x = (WIDTH - width) / 2

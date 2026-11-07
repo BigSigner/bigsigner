@@ -19,8 +19,8 @@ from hashlib import sha256
 from pathlib import Path
 from random import Random
 
-from embit.psbt import DerivationPath, PSBT
-from embit.script import address_to_scriptpubkey
+from embit.psbt import DerivationPath, OutputScope, PSBT
+from embit.script import Script, address_to_scriptpubkey
 from embit.transaction import SIGHASH, Transaction, TransactionInput, TransactionOutput
 
 from bigsigner.psbt_check import (
@@ -36,6 +36,7 @@ from bigsigner.ui.app import App
 from bigsigner.ui.canvas import HEADER, HEIGHT, WIDTH
 from test_domain import LEGAL
 from test_psbt_load import _child, _native, _psbt
+from test_psbt_view import _pay_this_wallet
 from test_ui import ScreenRecord
 
 COUNT = 100
@@ -52,6 +53,19 @@ MEDIUM_CHANGE_SATS = (
 VECTORS = Path(__file__).resolve().parent / "vectors"
 MEDIUM_VECTOR = VECTORS / "native_segwit_100_in_1_external_1_change.psbt"
 HUNDRED_VECTOR = VECTORS / "native_segwit_100_in_100_out.psbt"
+COMBINED_WARNINGS_VECTOR = VECTORS / "native_segwit_combined_warnings.psbt"
+# Sequences for the combined-warnings vector: RBF-enabled, RBF-disabled,
+# block relative locktimes, and time relative locktimes (including the max).
+COMBINED_SEQUENCES = (
+    0xFFFFFFFD,
+    0xFFFFFFFD,
+    0xFFFFFFFE,
+    0xFFFFFFFE,
+    1,
+    144,
+    0x00400002,
+    0x0040FFFF,
+)
 # The panel logs a frame of 500 ms or more as slow.
 SCROLL_FRAME_S = 0.5
 
@@ -176,6 +190,43 @@ def _native_medium(session):
     return psbt
 
 
+def _op_return(payload: bytes, amount: int = 0) -> OutputScope:
+    if len(payload) <= 75:
+        raw = bytes([0x6A, len(payload)]) + payload
+    else:
+        raw = bytes([0x6A, 0x4C, len(payload)]) + payload
+    return OutputScope(vout=TransactionOutput(amount, Script(raw)))
+
+
+def _combined_warnings(session):
+    """Abandon native-segwit spend that surfaces every Transaction Signing warning.
+
+    Eight inputs of the Abandon receive address #0 use the sequence kinds that
+    produce RBF-disabled and relative-locktime notes. The absolute locktime is
+    a timestamp. Outputs are one payment to the LEGAL receive address #0, change
+    to Abandon change #0, a second change on Abandon receive #1, and a paid
+    OP_RETURN. The fee is intentionally huge.
+    """
+    fingerprint, child, path = _child(session, branch=0, index=0)
+    script = address_to_scriptpubkey(session.addresses(0, 0, 0, 1)[0])
+    destination = address_to_scriptpubkey(EXTERNAL_P2WPKH)
+    vins = [
+        TransactionInput(bytes([index + 1]) * 32, 0, sequence=sequence)
+        for index, sequence in enumerate(COMBINED_SEQUENCES)
+    ]
+    tx = Transaction(version=2, vin=vins, vout=[TransactionOutput(40_000, destination)])
+    tx.locktime = 1_700_000_000
+    psbt = PSBT(tx)
+    for inp in psbt.inputs:
+        inp.witness_utxo = TransactionOutput(200_000, script)
+        inp.bip32_derivations[child.key] = DerivationPath(fingerprint, path)
+        inp.sighash_type = SIGHASH.ALL
+    _pay_this_wallet(psbt, session, branch=1, index=0, amount=40_000)
+    _pay_this_wallet(psbt, session, branch=0, index=1, amount=40_000)
+    psbt.outputs.append(_op_return(b"meta", 1_000))
+    return psbt
+
+
 def write_psbt_vectors(folder: Path | None = None) -> list[Path]:
     """Write the committed PSBT binaries. Returns the paths that were written."""
     folder = VECTORS if folder is None else folder
@@ -185,6 +236,7 @@ def write_psbt_vectors(folder: Path | None = None) -> list[Path]:
     for path, psbt in (
         (folder / MEDIUM_VECTOR.name, _native_medium(session)),
         (folder / HUNDRED_VECTOR.name, _native_bulk(session, COUNT)),
+        (folder / COMBINED_WARNINGS_VECTOR.name, _combined_warnings(session)),
     ):
         path.write_bytes(psbt.serialize())
         written.append(path)
@@ -234,8 +286,28 @@ def test_the_committed_psbt_vectors_match_the_builders():
     session = _native()
     assert MEDIUM_VECTOR.is_file(), f"missing {MEDIUM_VECTOR}"
     assert HUNDRED_VECTOR.is_file(), f"missing {HUNDRED_VECTOR}"
+    assert COMBINED_WARNINGS_VECTOR.is_file(), f"missing {COMBINED_WARNINGS_VECTOR}"
     assert MEDIUM_VECTOR.read_bytes() == _native_medium(session).serialize()
     assert HUNDRED_VECTOR.read_bytes() == _native_bulk(session, COUNT).serialize()
+    assert COMBINED_WARNINGS_VECTOR.read_bytes() == _combined_warnings(session).serialize()
+
+
+def test_the_combined_warnings_vector_loads_every_warning():
+    session = _native()
+    psbt = PSBT.parse(COMBINED_WARNINGS_VECTOR.read_bytes())
+    view = describe_psbt(session, 0, check_loaded_psbt(session, 0, psbt))
+    texts = [item["text"] for item in view["warnings"]]
+    assert any("non-zero amount" in text for text in texts)
+    assert any(text == "This transaction uses an extremely high fee." for text in texts)
+    assert any(text.startswith("This transaction uses a timestamp locktime.") for text in texts)
+    assert any(text.startswith("Some inputs use a relative locktime.") for text in texts)
+    assert any("additional requirement" in text for text in texts)
+    assert any(text.startswith("Some inputs are marked as Replace-by-Fee") for text in texts)
+    assert any(text.startswith("This transaction has more than one change output.") for text in texts)
+    assert any("receive address instead of a change address" in text for text in texts)
+    places = [card["place"] for card in view["change_outputs"]]
+    assert places == ["Change Address #0", "Receive Address #1"]
+    assert view["outputs"][0]["address"] == EXTERNAL_P2WPKH
 
 
 def test_a_hundred_inputs_with_change_load_and_describe():

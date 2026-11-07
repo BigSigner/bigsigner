@@ -82,6 +82,7 @@ from .canvas import (
     Icons,
     font,
     glyph_sprite,
+    ink_span,
     logo,
     wrap,
 )
@@ -2904,7 +2905,10 @@ class App:
         height = frame.button_height(label)
         top = y - offset
         clip_top = getattr(frame, "clip_top", HEADER)
-        if paint and top + height > clip_top and top < HEIGHT:
+        clip_bottom = getattr(frame, "clip_bottom", HEIGHT)
+        # The button rectangle includes its bottom row. A tile that starts on
+        # that row still has to draw it, or the stitch drops the last pixel.
+        if paint and top + height >= clip_top and top < clip_bottom:
             frame.button(top, label, action, label=hit_label, enabled=enabled)
         return y + height + 12
 
@@ -4524,7 +4528,10 @@ class App:
             total = sum(widths) + space * (len(groups) - 1)
             x = (WIDTH - total) / 2
             clip_top = getattr(frame, "clip_top", HEADER)
-            if paint and y + line_h > clip_top and y < bottom:
+            # A tile paints a row that began on the previous tile, including a
+            # descender past the line step. A live frame keeps that line step.
+            span = ink_span(TITLE_SIZE) if clip_top == 0 else line_h
+            if paint and y + span > clip_top and y < bottom:
                 for index, (group, group_width) in enumerate(zip(groups, widths)):
                     color = MUTED if (row_index * 4 + index) % 2 else INK
                     frame.draw.text((x, y), group, font=face, fill=color)

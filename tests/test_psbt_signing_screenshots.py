@@ -15,6 +15,7 @@ from bigsigner.session import Session, _account_path, _public_for
 from bigsigner.ui.app import QR_BRIGHTNESS_STOPS, App
 from bigsigner.ui.canvas import WIDTH, font
 from bigsigner.ui.psbt_screen import TITLE_SIZE
+from test_large_tx_scroll import COMBINED_SEQUENCES, COMBINED_WARNINGS_VECTOR, _combined_warnings
 from test_psbt_load import _child, _psbt
 from test_psbt_view import _native, _pay_this_wallet
 from test_ui import ScreenRecord
@@ -192,24 +193,6 @@ def _op_return(payload: bytes, amount: int = 0) -> OutputScope:
     return OutputScope(vout=TransactionOutput(amount, Script(raw)))
 
 
-def _many_inputs(session, sequences):
-    """Several inputs of the same address, each spending a different output."""
-    fingerprint, child, path = _child(session, branch=0, index=0)
-    script = address_to_scriptpubkey(session.addresses(0, 0, 0, 1)[0])
-    destination = address_to_scriptpubkey("bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu")
-    vins = [
-        TransactionInput(bytes([index + 1]) * 32, 0, sequence=sequence)
-        for index, sequence in enumerate(sequences)
-    ]
-    tx = Transaction(version=2, vin=vins, vout=[TransactionOutput(40_000, destination)])
-    psbt = PSBT(tx)
-    for inp in psbt.inputs:
-        inp.witness_utxo = TransactionOutput(200_000, script)
-        inp.bip32_derivations[child.key] = DerivationPath(fingerprint, path)
-        inp.sighash_type = SIGHASH.ALL
-    return psbt
-
-
 def _scroll_all(record, app, name) -> str:
     """Save every step from the top of the screen through the bottom."""
     app.scroll["psbt-yaml"] = 0
@@ -235,16 +218,21 @@ def test_combined_warnings_save_screenshots():
         "One transaction with every warning that can appear together, "
         "and one input of each sequence kind: 0xFFFFFFFD, 0xFFFFFFFE, "
         "a block relative locktime, and a time relative locktime. "
-        "One time lock is 0x0040FFFF, the top of that range."
+        "One time lock is 0x0040FFFF, the top of that range. "
+        "The committed binary is tests/vectors/native_segwit_combined_warnings.psbt."
     )
-    psbt = _many_inputs(
-        app.session,
-        (0xFFFFFFFD, 0xFFFFFFFD, 0xFFFFFFFE, 0xFFFFFFFE, 1, 144, 0x00400002, 0x0040FFFF),
+    assert COMBINED_SEQUENCES == (
+        0xFFFFFFFD,
+        0xFFFFFFFD,
+        0xFFFFFFFE,
+        0xFFFFFFFE,
+        1,
+        144,
+        0x00400002,
+        0x0040FFFF,
     )
-    psbt.locktime = 1_700_000_000
-    _pay_this_wallet(psbt, app.session, branch=1, index=0, amount=40_000)
-    _pay_this_wallet(psbt, app.session, branch=0, index=1, amount=40_000)
-    psbt.outputs.append(_op_return(b"meta", 1_000))
+    psbt = _combined_warnings(app.session)
+    assert COMBINED_WARNINGS_VECTOR.read_bytes() == psbt.serialize()
     _load(app, psbt)
     warnings = [item["text"] for item in app.psbt_view["warnings"]]
     assert any("non-zero amount" in text for text in warnings)
