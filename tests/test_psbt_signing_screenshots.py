@@ -141,7 +141,7 @@ def test_transaction_signing_saves_screenshots():
         assert app.export_bytes.startswith(b"psbt\xff")
         record.shot(app, "export-binary")
         app._act("export-new")
-        assert app.filename == "transaction.psbt"
+        assert app.filename == "transaction-signed.psbt"
         record.shot(app, "export-binary-name")
         app.back_one()
         app.back_one()
@@ -150,6 +150,7 @@ def test_transaction_signing_saves_screenshots():
         assert app.export_text.startswith("cHNidP")
         record.shot(app, "export-base64")
         app._act("export-new")
+        assert app.filename == "transaction-signed-base64.psbt"
         record.shot(app, "export-base64-name")
         app.back_one()
         app.back_one()
@@ -311,12 +312,14 @@ def test_combined_warnings_save_screenshots():
         app._act("psbt-export-binary")
         record.shot(app, "export-binary")
         app._act("export-new")
+        assert app.filename == "transaction-signed.psbt"
         record.shot(app, "export-binary-name")
         app.back_one()
         app.back_one()
         app._act("psbt-export-base64")
         record.shot(app, "export-base64")
         app._act("export-new")
+        assert app.filename == "transaction-signed-base64.psbt"
         record.shot(app, "export-base64-name")
         app.back_one()
         app.back_one()

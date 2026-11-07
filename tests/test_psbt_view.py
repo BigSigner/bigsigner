@@ -388,6 +388,20 @@ def test_the_signing_screen_offers_a_signed_qr_and_an_sd_file():
     assert app.screen == "psbt-export-format"
     app.render()
     assert "Binary" in [hit["label"] for hit in app.hits]
+    from bigsigner.sdcard import mount_memory, unmount_memory
+
+    mount_memory({"files": {}})
+    try:
+        app._act("psbt-export-binary")
+        app._act("export-new")
+        assert app.filename == "transaction-signed.psbt"
+        app.back_one()
+        app.back_one()
+        app._act("psbt-export-base64")
+        app._act("export-new")
+        assert app.filename == "transaction-signed-base64.psbt"
+    finally:
+        unmount_memory()
     app._act("psbt-show-qr")
     assert app.screen == "psbt-qr"
     app.render()

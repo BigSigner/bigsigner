@@ -1896,7 +1896,9 @@ class App:
 
     def _suggested_export_name(self) -> str:
         if self.export_label == "PSBT":
-            return "transaction.psbt"
+            if self.export_binary:
+                return "transaction-signed.psbt"
+            return "transaction-signed-base64.psbt"
         if self.export_label == "Signature" and self.wallet_index < len(self.session.wallets):
             fingerprint = self.session.wallets[self.wallet_index].fingerprints[0].hex()
             return f"{fingerprint}-signature.txt"
