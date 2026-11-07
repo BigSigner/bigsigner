@@ -3,8 +3,12 @@
 
 Stops nothing by itself. On the device, stop the normal service first, then run
 this. It shows progress, Transaction Signing, and a short auto-scroll back to
-the top, then keeps owning touch so you can tap and scroll manually. Ctrl-C
-quits and runs ``seedsigner start`` (a fresh normal app).
+the top, then keeps owning touch so you can tap and scroll manually. Type ``r``
+and Enter (over SSH with a TTY) to quit and run ``seedsigner start``. The same
+``r`` line on the RPC pipe works without a TTY.
+
+Ctrl-C on the laptop often kills only the SSH client and leaves this process
+running; prefer ``r``.
 
 This script is a stand-in for the panel process while it runs. That is unrelated
 to the desktop ``.venv``; see ``tests/vectors/README.md``.
@@ -16,7 +20,10 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import subprocess
+import sys
+import threading
 import time
 from pathlib import Path
 
@@ -37,6 +44,8 @@ ABANDON = (
 VECTOR = (
     Path(__file__).resolve().parent / "vectors" / "native_segwit_100_in_100_out.psbt"
 )
+# Wake the touch loop often enough to notice a quit request without a finger.
+_POLL_S = 0.25
 
 
 def make_app(psbt_path: Path) -> App:
@@ -59,6 +68,17 @@ def _start_normal_app() -> None:
     subprocess.run(["seedsigner", "start"], check=False)
 
 
+def _watch_stdin(stop: threading.Event) -> None:
+    """Set stop when the operator types r and Enter. EOF is not a quit."""
+    try:
+        for line in sys.stdin:
+            if line.strip().lower() == "r":
+                stop.set()
+                return
+    except (OSError, ValueError):
+        return
+
+
 def run(psbt_path: Path | None = None) -> None:
     path = VECTOR if psbt_path is None else psbt_path
     if not path.is_file():
@@ -77,6 +97,16 @@ def run(psbt_path: Path | None = None) -> None:
     frames = 0
     painted_at = 0.0
     pending = False
+    stop = threading.Event()
+
+    def _request_stop(signum, frame):
+        stop.set()
+
+    for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        try:
+            signal.signal(signum, _request_stop)
+        except (OSError, ValueError):
+            pass
 
     def _write(image):
         band = app.dirty if image.size == (width, height) else None
@@ -108,7 +138,7 @@ def run(psbt_path: Path | None = None) -> None:
     app.flush_display = blit
 
     def wait():
-        delays = []
+        delays = [_POLL_S]
         if pending:
             delays.append(_drag_interval(app))
         if app.finger_down():
@@ -116,8 +146,6 @@ def run(psbt_path: Path | None = None) -> None:
         notice = app.notice_delay()
         if notice is not None:
             delays.append(notice)
-        if not delays:
-            return None
         return min(delays)
 
     try:
@@ -146,20 +174,26 @@ def run(psbt_path: Path | None = None) -> None:
         )
         done = (
             "test finished; tap and scroll manually. "
-            "Ctrl-C restarts the app from scratch."
+            "Type r and Enter to restart the app from scratch."
         )
         _kmsg(done)
         print(done, flush=True)
         if touch is None and rpc_fd is None:
             return
+        threading.Thread(target=_watch_stdin, args=(stop,), daemon=True).start()
         x_range = ranges[0] if ranges else (0, width - 1)
         y_range = ranges[1] if ranges else (0, height - 1)
         for point in read_points(touch, width, height, x_range, y_range, wait=wait, rpc=rpc_fd):
+            if stop.is_set():
+                break
             if point is None:
                 app.pointer_idle()
                 blit()
                 continue
             if point[0] == "rpc":
+                if point[1].strip().lower() == "r":
+                    stop.set()
+                    break
                 try:
                     _kmsg(apply_line(app, point[1]))
                 except Exception as exc:
@@ -182,6 +216,8 @@ def run(psbt_path: Path | None = None) -> None:
                 app.pointer_up(x, y)
                 blit()
     finally:
+        _kmsg("finishing; handing panel back")
+        print("finishing; handing panel back", flush=True)
         camera.close()
         if touch is not None:
             os.close(touch)

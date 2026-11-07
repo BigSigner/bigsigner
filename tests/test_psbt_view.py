@@ -447,3 +447,47 @@ def test_the_signing_screen_offers_a_signed_qr_and_an_sd_file():
     assert app.screen == "psbt-qr"
     app.render()
     assert "Animated UR" in [item["text"] for item in app.texts]
+
+
+def test_a_press_during_searching_addresses_does_not_click_after():
+    """Taps while search runs, or queued until it ends, must not click the dialog."""
+    import time
+
+    from bigsigner.ui.app import SEARCH_TOUCH_QUIET
+
+    app = App()
+    app.screen = "psbt-yaml"
+    app.psbt_search = {"index": 0, "start": 0}
+    app.psbt_search_shown = True
+    app.pointer_down(240, 400)
+    assert app._press is None
+    assert app._discard_gesture
+    app.psbt_search = None
+    app.psbt_search_shown = False
+    app.confirm = "psbt-miss"
+    app.pointer_up(240, 400)
+    assert app.confirm == "psbt-miss"
+    assert not app._discard_gesture
+
+    app.psbt_search = {"index": 0, "start": 0}
+    app.psbt_search_shown = True
+    app._press = (240, 400, 0, False, "")
+    before = time.monotonic()
+    app._advance_psbt_search()
+    assert app.psbt_search is None
+    assert app._press is None
+    assert app._discard_gesture
+    assert app._discard_queued_touch
+    assert app._discard_until >= before + SEARCH_TOUCH_QUIET - 0.05
+    app.confirm = "psbt-miss"
+    app.hits = [{"action": "confirm-yes", "box": (0, 0, 480, 800), "label": "OK"}]
+    # Kernel-queued gesture arrives after the miss dialog is already drawn.
+    app.pointer_down(240, 400)
+    app.pointer_up(240, 400)
+    assert app.confirm == "psbt-miss"
+    assert app._touch_blocked()
+    app._discard_until = 0.0
+    app._discard_gesture = False
+    app.pointer_down(240, 400)
+    app.pointer_up(240, 400)
+    assert app.confirm is None

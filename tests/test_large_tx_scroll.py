@@ -31,7 +31,9 @@ from bigsigner.psbt_check import (
 )
 from bigsigner.psbt_review import ReviewError, _tx_weight
 from bigsigner.psbt_view import describe_psbt
+from bigsigner.session import Session
 from bigsigner.ui.app import App
+from test_domain import LEGAL
 from test_psbt_load import _child, _native, _psbt
 from test_ui import ScreenRecord
 
@@ -72,22 +74,40 @@ def _prev_txids(count: int, *, label: str) -> list[bytes]:
     return out
 
 
-def _native_bulk(session, count: int):
-    """``count`` native-segwit inputs spending to ``count`` external outputs.
+def _legal_receive_scripts(count: int) -> list:
+    """Native-segwit scripts for LEGAL receive addresses 0 .. ``count`` - 1."""
+    from embit import bip32, bip39
+    from embit.descriptor.checksum import checksum
 
-    Each output is 50000 sats. Most inputs match that; the first input carries
-    an extra 50000 sats so the fee stays under the 100000-sat high-fee warning.
+    legal = Session()
+    legal.add_mnemonic(LEGAL.split())
+    root = bip32.HDKey.from_seed(bip39.mnemonic_to_seed(LEGAL))
+    public = root.derive("m/84h/0h/0h").to_public()
+    key = f"[{root.my_fingerprint.hex()}/84h/0h/0h]{public.to_string()}/<0;1>/*"
+    legal.add_text(f"wpkh({key})#{checksum('wpkh(' + key + ')')}")
+    addresses = legal.addresses(0, 0, 0, count)
+    assert addresses[0] == EXTERNAL_P2WPKH
+    assert len(set(addresses)) == count
+    return [address_to_scriptpubkey(address) for address in addresses]
+
+
+def _native_bulk(session, count: int):
+    """``count`` native-segwit inputs spending to ``count`` distinct external outputs.
+
+    Each output is 50000 sats to a different LEGAL receive address (indexes
+    0 .. count-1). Most inputs match that; the first input carries an extra
+    50000 sats so the fee stays under the 100000-sat high-fee warning.
     """
     fingerprint, child, path = _child(session, branch=0, index=0)
     script = address_to_scriptpubkey(session.addresses(0, 0, 0, 1)[0])
-    destination = address_to_scriptpubkey(EXTERNAL_P2WPKH)
+    destinations = _legal_receive_scripts(count)
     per_out = 50_000
     fee = 50_000
     vins = [
         TransactionInput(txid, 0, sequence=0xFFFFFFFD)
         for txid in _prev_txids(count, label=f"native-bulk-{count}")
     ]
-    vouts = [TransactionOutput(per_out, destination) for _ in range(count)]
+    vouts = [TransactionOutput(per_out, destination) for destination in destinations]
     tx = Transaction(version=2, vin=vins, vout=vouts)
     psbt = PSBT(tx)
     for index, inp in enumerate(psbt.inputs):
@@ -264,6 +284,9 @@ def test_a_hundred_native_segwit_payments_scroll_smoothly():
     app.screen = "psbt-yaml"
     assert len(app.psbt_view["outputs"]) == COUNT
     assert len(app.psbt_view["inputs"]) == COUNT
+    out_addresses = [card["address"] for card in app.psbt_view["outputs"]]
+    assert len(set(out_addresses)) == COUNT
+    assert out_addresses[0] == EXTERNAL_P2WPKH
 
     app.scroll["psbt-yaml"] = 0
     started = time.perf_counter()

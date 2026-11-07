@@ -263,6 +263,9 @@ SCROLL_DELTA_X = 24
 SCROLL_DELTA_Y = 24
 # A tap just after a scroll is the finger arriving, not a button press.
 SCROLL_QUIET = 0.5
+# Address search blocks the panel. Touches queue in the kernel and arrive after
+# the miss/found dialog is already on screen; ignore them for this quiet window.
+SEARCH_TOUCH_QUIET = 0.35
 # Progress paints while a PSBT is checked. The Pi cannot redraw every input.
 PSBT_PROGRESS_PAINT_S = 0.12
 # This panel reports a press above the finger. The extra target reaches up,
@@ -503,6 +506,7 @@ class App:
         # A gesture that started on Loading is not a click on the next screen.
         self._discard_gesture = False
         self._discard_queued_touch = False
+        self._discard_until = 0.0
         self._address_tops = {}
         self._address_top_key = None
         self._address_cache = {}
@@ -701,7 +705,7 @@ class App:
 
     def _touch_blocked(self) -> bool:
         """Loading is on screen, or this gesture began while it was."""
-        if self._discard_gesture:
+        if self._discard_gesture or time.monotonic() < self._discard_until:
             return True
         if self.screen == "psbt-progress":
             return True
@@ -718,6 +722,13 @@ class App:
     def arm_queued_touch_discard(self) -> None:
         """The panel already had a touch waiting when Loading left the screen."""
         self._discard_gesture = True
+
+    def _arm_search_touch_quiet(self) -> None:
+        """Ignore touches queued while search blocked the panel."""
+        self._press = None
+        self._discard_gesture = True
+        self._discard_queued_touch = True
+        self._discard_until = time.monotonic() + SEARCH_TOUCH_QUIET
 
     def tap(self, x: int, y: int, camera: dict | None = None):
         if self._touch_blocked():
@@ -745,7 +756,10 @@ class App:
         if self._addresses_loading and self._addresses_loading_shown:
             self._discard_gesture = True
             return
-        if self._discard_gesture:
+        if self.psbt_search is not None:
+            self._discard_gesture = True
+            return
+        if self._discard_gesture or time.monotonic() < self._discard_until:
             return
         if self._in_hscroll_field(x, y):
             panel = "hfield"
@@ -894,7 +908,9 @@ class App:
 
     def pointer_up(self, x: int, y: int, camera: dict | None = None):
         if self._touch_blocked():
-            self._discard_gesture = False
+            # Keep discarding through the quiet window so queued ups drain.
+            if time.monotonic() >= self._discard_until:
+                self._discard_gesture = False
             self._press = None
             return
         press = self._press
@@ -7364,10 +7380,12 @@ class App:
         if self.screen != "psbt-yaml" or not self.psbt_view:
             self.psbt_search = None
             self.psbt_search_shown = False
+            self._arm_search_touch_quiet()
             return
         job = self.psbt_search
         self.psbt_search = None
         self.psbt_search_shown = False
+        self._arm_search_touch_quiet()
         card = next((item for item in self.psbt_view["outputs"] if item["index"] == job["index"]), None)
         if card is None:
             return

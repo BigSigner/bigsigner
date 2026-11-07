@@ -16,7 +16,7 @@ PY
 ## Run the 100-to-100 example
 
 `native_segwit_100_in_100_out.psbt` is 100 Abandon native-segwit inputs paying
-100 times to the LEGAL seed's first receive address. BigSigner refuses more
+100 distinct LEGAL receive addresses (indexes 0–99). BigSigner refuses more
 than 100 inputs or 100 outputs.
 
 ### Headless scroll timing (laptop)
@@ -38,14 +38,17 @@ Screenshots go to
 `seedsigner stop` frees the panel, then this script *is* the panel process
 (framebuffer + touch). Only one process may own touch. After the auto-scroll it
 prints that the test finished and leaves Transaction Signing interactive so you
-can tap and scroll. Ctrl-C quits and runs `seedsigner start` (a fresh normal
-app). That is on the device; it has nothing to do with the desktop `.venv`.
+can tap and scroll. Type `r` and Enter to quit and run `seedsigner start` (a
+fresh normal app). Ctrl-C on the laptop often kills only SSH and leaves the
+demo running on the device — prefer `r`. That is on the device; it has nothing
+to do with the desktop `.venv`.
 
 The demo loads the Abandon test mnemonic only. Do not sign with a real seed.
 
 `docs/scripts/rsync-to-seedsigner.sh` (in the sibling `bigsigner-os` repo) copies
 the app to `/mnt/data/seedsigner` but **excludes** `tests/`. Sync the app, copy
-the demo files, stop the normal service, then run the demo.
+the demo files, stop the normal service, then run the demo with a TTY so `r`
+reaches the process.
 
 ```bash
 # From bigsigner-os — copies src/ and restarts the panel.
@@ -61,17 +64,23 @@ rsync -avz \
   ~/private_workspace/bigsigner/tests/vectors \
   root@seedsigner.local:/mnt/data/seedsigner/tests/
 
-# Free the framebuffer, then run the demo.
+# Free the framebuffer, then run the demo (-t keeps stdin for "r").
 docs/scripts/ssh-seedsigner.sh \
   'seedsigner stop; killall python3 2>/dev/null || true; sleep 1'
-docs/scripts/ssh-seedsigner.sh \
+ssh -t \
+  -o ControlPath=/tmp/seedsigner-ssh.sock \
+  -o UserKnownHostsFile="$HOME/.ssh/seedsigner_known_hosts" \
+  -o LogLevel=ERROR \
+  root@seedsigner.local \
   'cd /mnt/data/seedsigner && PYTHONPATH=src:tests PYTHONUNBUFFERED=1 \
-   python3 tests/panel_show_hundred_psbt.py'
+   python3 -u tests/panel_show_hundred_psbt.py'
 ```
+
+Without a TTY, `docs/scripts/rpc.sh r` also quits the demo (same `r` line).
 
 Watch `dmesg | grep bigsigner` for progress and slow-frame lines while it loads.
 
 | File | Contents |
 |------|----------|
 | `native_segwit_100_in_1_external_1_change.psbt` | 100 Abandon native-segwit inputs, one payment to the LEGAL seed's first receive address, one change output back to Abandon, fee 10000 sats (0.0001 BTC). Previous txids are distinct seeded-random 32-byte values (never the zero hash). |
-| `native_segwit_100_in_100_out.psbt` | 100 Abandon native-segwit inputs paying 100 times to the LEGAL seed's first receive address (50000 sats each). The first input is 100000 sats and the rest are 50000, so the fee is 50000 sats (under the high-fee warning). Previous txids are distinct seeded-random values as above. |
+| `native_segwit_100_in_100_out.psbt` | 100 Abandon native-segwit inputs paying 100 distinct LEGAL receive addresses, indexes 0–99 (50000 sats each). The first input is 100000 sats and the rest are 50000, so the fee is 50000 sats (under the high-fee warning). Previous txids are distinct seeded-random values as above. |
