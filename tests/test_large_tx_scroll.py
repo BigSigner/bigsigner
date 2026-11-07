@@ -33,6 +33,7 @@ from bigsigner.psbt_review import ReviewError, _tx_weight
 from bigsigner.psbt_view import describe_psbt
 from bigsigner.session import Session
 from bigsigner.ui.app import App
+from bigsigner.ui.canvas import HEADER, HEIGHT, WIDTH
 from test_domain import LEGAL
 from test_psbt_load import _child, _native, _psbt
 from test_ui import ScreenRecord
@@ -288,6 +289,28 @@ def test_a_hundred_native_segwit_payments_scroll_smoothly():
     assert len(set(out_addresses)) == COUNT
     assert out_addresses[0] == EXTERNAL_P2WPKH
 
+    # Closed sections put the Inputs row across a scroll-tile boundary. The
+    # label must still paint on the lower tile with the chevron.
+    app.psbt_outputs_open = False
+    app.psbt_inputs_open = False
+    app.psbt_txid_open = False
+    app._psbt_sheet = None
+    app.scroll["psbt-yaml"] = 10**9
+    closed = app.render()
+    inputs = next(hit for hit in app.hits if hit["action"] == "psbt-toggle-inputs")
+    assert inputs["label"] == "100 Inputs"
+    box = inputs["box"]
+    label_ink = sum(
+        1
+        for y in range(max(HEADER, box[1]), min(HEIGHT, box[3]))
+        for x in range(box[0] + 40, min(WIDTH, box[0] + 220))
+        if closed.getpixel((x, y))[0] < 100
+    )
+    assert label_ink > 200, f"Inputs label missing beside chevron ({label_ink} ink)"
+
+    app.psbt_outputs_open = True
+    app.psbt_inputs_open = True
+    app._psbt_sheet = None
     app.scroll["psbt-yaml"] = 0
     started = time.perf_counter()
     record.shot(app, "top")

@@ -1,14 +1,13 @@
 """Show the signer on the HDMI framebuffer and read touch events."""
 
 import os
-import select
 import time
 
 from ..rpc import apply_line, open_rpc_pipe
 from ..ui.app import App
 from .camera import LiveCamera, jpeg_bytes, paste_preview, read_qr
 from .display import framebuffer_info, pack_image, silence_console
-from .touch import ABS_X, ABS_Y, axis_range, find_touch, read_points
+from .touch import ABS_X, ABS_Y, axis_range, find_touch, flush_touch, read_points
 from .ui_dump import append_snapshot
 
 # Seconds between frames while a finger drags a list.
@@ -90,11 +89,13 @@ def run_panel():
             except Exception as exc:
                 dump_error = True
                 _kmsg(f"ui dump {exc}")
-        # A touch already waiting was pressed while Loading was on the glass.
+        # Stale presses queued while the UI was blocked must not click the new screen.
         if touch is not None and app.take_queued_touch_discard():
-            ready, _, _ = select.select([touch], [], [], 0)
-            if ready:
-                app.arm_queued_touch_discard()
+            dropped = flush_touch(touch)
+            app.arm_queued_touch_discard()
+            app.mark_search_touch_ready()
+            if dropped:
+                _kmsg(f"flushed {dropped} touch bytes")
         return elapsed
 
     def _write(image):

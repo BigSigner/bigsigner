@@ -263,9 +263,11 @@ SCROLL_DELTA_X = 24
 SCROLL_DELTA_Y = 24
 # A tap just after a scroll is the finger arriving, not a button press.
 SCROLL_QUIET = 0.5
-# Address search blocks the panel. Touches queue in the kernel and arrive after
-# the miss/found dialog is already on screen; ignore them for this quiet window.
-SEARCH_TOUCH_QUIET = 0.35
+# Address search blocks the UI. The kernel queues presses; the panel flushes
+# them when the miss/found dialog opens. Any touch that still arrives starts
+# this gap clock; each ignored one refreshes it. The first touch more than
+# this long after the last ignored one is real.
+SEARCH_TOUCH_GAP = 0.2
 # Progress paints while a PSBT is checked. The Pi cannot redraw every input.
 PSBT_PROGRESS_PAINT_S = 0.12
 # This panel reports a press above the finger. The extra target reaches up,
@@ -506,7 +508,8 @@ class App:
         # A gesture that started on Loading is not a click on the next screen.
         self._discard_gesture = False
         self._discard_queued_touch = False
-        self._discard_until = 0.0
+        self._search_touch_guard = False
+        self._search_touch_at = 0.0
         self._address_tops = {}
         self._address_top_key = None
         self._address_cache = {}
@@ -705,7 +708,7 @@ class App:
 
     def _touch_blocked(self) -> bool:
         """Loading is on screen, or this gesture began while it was."""
-        if self._discard_gesture or time.monotonic() < self._discard_until:
+        if self._discard_gesture:
             return True
         if self.screen == "psbt-progress":
             return True
@@ -724,13 +727,33 @@ class App:
         self._discard_gesture = True
 
     def _arm_search_touch_quiet(self) -> None:
-        """Ignore touches queued while search blocked the panel."""
+        """Ignore stale presses until the dialog has been painted and a gap passes."""
         self._press = None
         self._discard_gesture = True
         self._discard_queued_touch = True
-        self._discard_until = time.monotonic() + SEARCH_TOUCH_QUIET
+        self._search_touch_guard = True
+        self._search_touch_at = time.monotonic()
+
+    def mark_search_touch_ready(self) -> None:
+        """Restart the gap after paint/flush so a slow frame cannot expire it."""
+        if self._search_touch_guard:
+            self._search_touch_at = time.monotonic()
+
+    def _ignore_search_touch(self) -> bool:
+        """True to drop this touch. Stops after a gap past the last ignored one."""
+        if not self._search_touch_guard:
+            return False
+        now = time.monotonic()
+        if now - self._search_touch_at <= SEARCH_TOUCH_GAP:
+            self._search_touch_at = now
+            return True
+        self._search_touch_guard = False
+        self._discard_gesture = False
+        return False
 
     def tap(self, x: int, y: int, camera: dict | None = None):
+        if self._ignore_search_touch():
+            return
         if self._touch_blocked():
             return
         if self._scroll_at is not None and time.monotonic() - self._scroll_at < SCROLL_QUIET:
@@ -759,7 +782,10 @@ class App:
         if self.psbt_search is not None:
             self._discard_gesture = True
             return
-        if self._discard_gesture or time.monotonic() < self._discard_until:
+        if self._ignore_search_touch():
+            self._discard_gesture = True
+            return
+        if self._discard_gesture:
             return
         if self._in_hscroll_field(x, y):
             panel = "hfield"
@@ -907,10 +933,12 @@ class App:
         return True
 
     def pointer_up(self, x: int, y: int, camera: dict | None = None):
+        if self._ignore_search_touch():
+            self._discard_gesture = True
+            self._press = None
+            return
         if self._touch_blocked():
-            # Keep discarding through the quiet window so queued ups drain.
-            if time.monotonic() >= self._discard_until:
-                self._discard_gesture = False
+            self._discard_gesture = False
             self._press = None
             return
         press = self._press
@@ -7380,14 +7408,16 @@ class App:
         if self.screen != "psbt-yaml" or not self.psbt_view:
             self.psbt_search = None
             self.psbt_search_shown = False
+            self._press = None
             self._arm_search_touch_quiet()
             return
         job = self.psbt_search
         self.psbt_search = None
         self.psbt_search_shown = False
-        self._arm_search_touch_quiet()
+        self._press = None
         card = next((item for item in self.psbt_view["outputs"] if item["index"] == job["index"]), None)
         if card is None:
+            self._arm_search_touch_quiet()
             return
         found = search_address(
             self.session, self.wallet_index, card["address"], job["start"], SEARCH_WINDOW,
@@ -7396,9 +7426,11 @@ class App:
             found["index"] = job["index"]
             self.psbt_search_hit = found
             self.confirm = "psbt-found"
+            self._arm_search_touch_quiet()
             return
         self.psbt_search_hit = {"index": job["index"], "next": job["start"] + SEARCH_WINDOW}
         self.confirm = "psbt-miss"
+        self._arm_search_touch_quiet()
 
     def _open_psbt_opreturn(self, index: int):
         card = next((item for item in (self.psbt_view or {}).get("outputs", []) if item["index"] == index), None)

@@ -450,10 +450,10 @@ def test_the_signing_screen_offers_a_signed_qr_and_an_sd_file():
 
 
 def test_a_press_during_searching_addresses_does_not_click_after():
-    """Taps while search runs, or queued until it ends, must not click the dialog."""
+    """Stale taps after search are ignored; one deliberate tap after the gap works."""
     import time
 
-    from bigsigner.ui.app import SEARCH_TOUCH_QUIET
+    from bigsigner.ui.app import SEARCH_TOUCH_GAP
 
     app = App()
     app.screen = "psbt-yaml"
@@ -467,27 +467,27 @@ def test_a_press_during_searching_addresses_does_not_click_after():
     app.confirm = "psbt-miss"
     app.pointer_up(240, 400)
     assert app.confirm == "psbt-miss"
-    assert not app._discard_gesture
 
     app.psbt_search = {"index": 0, "start": 0}
     app.psbt_search_shown = True
     app._press = (240, 400, 0, False, "")
-    before = time.monotonic()
     app._advance_psbt_search()
     assert app.psbt_search is None
     assert app._press is None
-    assert app._discard_gesture
+    assert app._search_touch_guard
     assert app._discard_queued_touch
-    assert app._discard_until >= before + SEARCH_TOUCH_QUIET - 0.05
+    assert app._discard_gesture
     app.confirm = "psbt-miss"
     app.hits = [{"action": "confirm-yes", "box": (0, 0, 480, 800), "label": "OK"}]
-    # Kernel-queued gesture arrives after the miss dialog is already drawn.
+    # Slow paint would expire an arm-time gap; ready restarts it after the frame.
+    time.sleep(SEARCH_TOUCH_GAP + 0.15)
+    app.mark_search_touch_ready()
     app.pointer_down(240, 400)
     app.pointer_up(240, 400)
     assert app.confirm == "psbt-miss"
-    assert app._touch_blocked()
-    app._discard_until = 0.0
-    app._discard_gesture = False
+    assert app._search_touch_guard
+    time.sleep(SEARCH_TOUCH_GAP + 0.05)
     app.pointer_down(240, 400)
     app.pointer_up(240, 400)
     assert app.confirm is None
+    assert not app._search_touch_guard

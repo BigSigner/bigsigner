@@ -49,7 +49,7 @@ def test_the_static_page_reads_the_bundle_and_checks_downloads():
     assert '<option value="mainnet">mainnet</option>' in page
     assert '<option value="testnet">testnet</option>' in page
     assert '<option value="regtest">regtest</option>' in page
-    assert ">Reload<" in page
+    assert ">Save and Reload<" in page
     assert 'id="hash-example"' in page
     assert ">example<" in page
     assert ">wallet descriptor<" in page

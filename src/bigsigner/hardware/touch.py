@@ -235,6 +235,29 @@ def _nonblocking(handle):
     fcntl.fcntl(handle, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
 
+def flush_touch(handle) -> int:
+    """Drop every pending input event. Returns how many bytes were discarded.
+
+    While the UI thread is blocked, the kernel queues presses. After a modal
+    opens, those stale events must not become clicks on the new buttons.
+    """
+    if handle is None:
+        return 0
+    _nonblocking(handle)
+    total = 0
+    while True:
+        ready, _, _ = select.select([handle], [], [], 0)
+        if not ready:
+            return total
+        try:
+            chunk = os.read(handle, EVENT_SIZE * 64)
+        except BlockingIOError:
+            return total
+        if not chunk:
+            return total
+        total += len(chunk)
+
+
 def read_points(handle, width, height, x_range, y_range, wait=None, rpc=None):
     """Yield ("down", x, y), ("move", x, y), ("up", x, y), ("rpc", line), or None.
 

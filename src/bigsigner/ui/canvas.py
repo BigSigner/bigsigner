@@ -377,9 +377,13 @@ class Frame:
         clip_top = getattr(self, "clip_top", HEADER)
         clip_bottom = getattr(self, "clip_bottom", HEIGHT)
         for line in lines:
-            # A scrolled line that starts under the title bar would be sliced in half.
-            # Tile paints set clip_top to 0 so a strip is filled edge to edge.
-            if clip_top <= y < clip_bottom:
+            # Live frames use clip_top=HEADER so a line that starts under the
+            # title bar is not sliced in half. Tile strips use clip_top=0 and
+            # must still paint a line that began on the previous tile.
+            visible = y < clip_bottom and (
+                y >= clip_top or (clip_top == 0 and y + size > clip_top)
+            )
+            if visible:
                 self.draw.text((x, y), line, font=face, fill=fill)
                 self.mark(line, self.draw.textbbox((x, y), line, font=face))
             y += size + 8

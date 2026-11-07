@@ -33,7 +33,7 @@ from embit.descriptor.checksum import checksum
 from bigsigner.hardware.camera import LiveCamera
 from bigsigner.hardware.display import framebuffer_info, pack_image, silence_console
 from bigsigner.hardware.panel import _drag_interval, _kmsg
-from bigsigner.hardware.touch import ABS_X, ABS_Y, axis_range, find_touch, read_points
+from bigsigner.hardware.touch import ABS_X, ABS_Y, axis_range, find_touch, flush_touch, read_points
 from bigsigner.rpc import apply_line, open_rpc_pipe
 from bigsigner.ui.app import App
 
@@ -133,6 +133,12 @@ def run(psbt_path: Path | None = None) -> None:
         frames += 1
         if frames == 1 or elapsed >= 500:
             _kmsg(f"frame {frames} {elapsed} ms {app.screen}")
+        if touch is not None and app.take_queued_touch_discard():
+            dropped = flush_touch(touch)
+            app.arm_queued_touch_discard()
+            app.mark_search_touch_ready()
+            if dropped:
+                _kmsg(f"flushed {dropped} touch bytes")
         return elapsed
 
     app.flush_display = blit
