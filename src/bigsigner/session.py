@@ -139,6 +139,7 @@ class Session:
         if network == self.network:
             return "The network is already set to that value."
         self.network = network
+        self._descriptor_cache = None
         removed_xpub = False
         for record in self.fingerprints.values():
             kept = [key for key in record.keys if key.has_seed]
@@ -353,14 +354,60 @@ class Session:
                     return {"branch": label, "index": index, "address": candidate}
         return None
 
-    def _parsed_descriptor(self, wallet: WalletRecord):
-        text = _descriptor(wallet, self)
+    def _parsed_descriptor(self, wallet: WalletRecord, accounts=None):
+        """The parsed descriptor for this wallet at `accounts`.
+
+        `accounts` overlays the wallet's selected accounts. The same parsed
+        descriptor is reused until the network, the wallet, those accounts, or
+        the seed or xpub that `_descriptor` would read actually changes.
+        Branch and address index are applied later, by `derive`.
+        """
+        chosen = _descriptor_accounts(wallet, accounts)
+        key = self._descriptor_cache_key(wallet, chosen)
         cached = self._descriptor_cache
-        if cached is not None and cached[0] == text:
+        if cached is not None and cached[0] == key:
             return cached[1]
+        saved = None
+        current = _descriptor_accounts(wallet, None)
+        if chosen != current:
+            saved = dict(wallet.accounts)
+            for fingerprint, account in chosen:
+                wallet.accounts[fingerprint] = account
+        try:
+            text = _descriptor(wallet, self)
+        finally:
+            if saved is not None:
+                wallet.accounts.clear()
+                wallet.accounts.update(saved)
         parsed = Descriptor.from_string(text)
-        self._descriptor_cache = (text, parsed)
+        self._descriptor_cache = (key, parsed)
         return parsed
+
+    def _descriptor_cache_key(self, wallet: WalletRecord, accounts):
+        """Identity of the string `_descriptor` would build. Not that string.
+
+        A seed contributes its master key, because the account xpub is derived
+        from it. An external key contributes the stored xpub and its path.
+        """
+        chunks = [
+            self.network.encode(),
+            wallet.role.encode(),
+            str(int(wallet.threshold)).encode(),
+        ]
+        for fingerprint, account in accounts:
+            chunks.append(fingerprint)
+            chunks.append(str(account).encode())
+            chunks.append(self._descriptor_source(wallet, fingerprint, account))
+        return _tagged_digest(chunks)
+
+    def _descriptor_source(self, wallet: WalletRecord, fingerprint: bytes, account: int) -> bytes:
+        seed = self._seed_for(fingerprint)
+        if seed is not None:
+            return b"seed" + _extended_material(_seed_root(seed))
+        for key in self._xpubs(fingerprint):
+            if getattr(key, "role", None) == wallet.role and key.account == account:
+                return b"xpub" + _path_material(key.path) + _extended_material(key.xpub)
+        return b"missing"
 
     def _add_watch_key(self, key) -> dict:
         self._check_watch_key(key)
@@ -911,6 +958,42 @@ def _network_name(network: str) -> str:
     if network == "regtest":
         return "regtest"
     return "test"
+
+
+def _descriptor_accounts(wallet: WalletRecord, accounts):
+    """Account per fingerprint, in the wallet's fingerprint order.
+
+    `accounts` overlays the selected accounts the same way an update would.
+    A fingerprint the overlay omits keeps the selected account.
+    """
+    merged = wallet.accounts if accounts is None else {**wallet.accounts, **accounts}
+    return tuple((fingerprint, int(merged[fingerprint])) for fingerprint in wallet.fingerprints)
+
+
+def _extended_material(key) -> bytes:
+    """The fields that change an xpub string or a derivation from this key."""
+    return b"".join(
+        (
+            bytes(key.version),
+            bytes([key.depth]),
+            bytes(key.fingerprint),
+            int(key.child_number).to_bytes(4, "big"),
+            bytes(key.chain_code),
+            key.key.serialize(),
+        )
+    )
+
+
+def _path_material(path) -> bytes:
+    return b"/".join(str(int(step)).encode() for step in path)
+
+
+def _tagged_digest(chunks) -> bytes:
+    digest = hashlib.sha256()
+    for chunk in chunks:
+        digest.update(len(chunk).to_bytes(4, "big"))
+        digest.update(chunk)
+    return digest.digest()
 
 
 def _descriptor(wallet: WalletRecord, session: Session) -> str:

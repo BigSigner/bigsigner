@@ -1,13 +1,12 @@
 """Review a PSBT against one loaded wallet before anything is signed."""
 
-from embit.descriptor import Descriptor
 from embit.networks import NETWORKS
 from embit.psbt import PSBT, PSBTError
 from embit.script import Script
 from embit.transaction import SIGHASH, Transaction, TransactionInput, TransactionOutput, Witness
 
 from .paths import HARDENED, classify_path, format_path, parse_path
-from .session import SessionError, _account_path, _descriptor, _public_for, _seed_root
+from .session import SessionError, _account_path, _seed_root
 
 LOCKTIME_THRESHOLD = 500_000_000
 SEQUENCE_FINAL = 0xFFFFFFFF
@@ -203,13 +202,8 @@ def _one_account_tuple(wallet, inputs: list[dict]) -> dict:
 
 
 def _script_at(session, wallet, accounts, branch: int, index: int):
-    saved = dict(wallet.accounts)
-    wallet.accounts.update(accounts)
-    try:
-        descriptor = _descriptor(wallet, session)
-    finally:
-        wallet.accounts = saved
-    return Descriptor.from_string(descriptor).derive(index, branch_index=branch).script_pubkey()
+    parsed = session._parsed_descriptor(wallet, accounts)
+    return parsed.derive(index, branch_index=branch).script_pubkey()
 
 
 def _check_sighash(sighash, taproot: bool):

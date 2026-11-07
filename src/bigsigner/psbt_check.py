@@ -5,7 +5,6 @@ not supported by this hardware wallet, and names the wallets or accounts when
 that is what distinguishes it.
 """
 
-from embit.descriptor import Descriptor
 from embit.ec import PublicKey, SchnorrSig, Signature
 from embit.psbt import PSBT, PSBTError
 from embit.script import Script
@@ -14,7 +13,7 @@ from embit.transaction import SIGHASH
 from .paths import HARDENED, SINGLESIG_NATIVE, SINGLESIG_TAPROOT, coin_type, format_path
 from .psbt_load import UNREADABLE, psbt_bytes
 from .psbt_review import ReviewError, _tx_weight
-from .session import SessionError, _descriptor, _public_for
+from .session import SessionError, _public_for
 
 NOT_SUPPORTED = "not supported by this hardware wallet"
 
@@ -788,14 +787,8 @@ def _accounts(item: dict) -> dict:
 
 
 def _script_at(session, wallet, accounts: dict, branch: int, index: int):
-    saved = dict(wallet.accounts)
-    wallet.accounts.update(accounts)
-    try:
-        text = _descriptor(wallet, session)
-    finally:
-        wallet.accounts.clear()
-        wallet.accounts.update(saved)
-    return Descriptor.from_string(text).derive(index, branch_index=branch).script_pubkey()
+    parsed = session._parsed_descriptor(wallet, accounts)
+    return parsed.derive(index, branch_index=branch).script_pubkey()
 
 
 def _child_key(session, wallet, fingerprint: bytes, row: dict):
