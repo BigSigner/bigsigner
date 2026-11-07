@@ -1,6 +1,6 @@
 """The Transaction Signing screen, the OP_RETURN page, and the signed-PSBT QR."""
 
-from ..psbt_view import SEARCH_WINDOW, format_btc, hex_lines, is_ascii
+from ..psbt_view import format_btc, hex_lines, is_ascii
 from .canvas import (
     BLUE,
     HEADER,
@@ -276,7 +276,32 @@ def _body(app, frame, view, paint: bool, offset: int) -> int:
                 ),
             )
     y += 12
-    y = app._flow_button(frame, y, "Sign Transaction", "psbt-sign", paint, offset)
+    y = _sign_controls(app, frame, y, paint, offset)
+    return y
+
+
+def _sign_controls(app, frame, y, paint, offset) -> int:
+    note = app.psbt_view.get("signature_note") or ""
+    if note:
+        y = _wrapped(app, frame, note, y, paint, offset, TITLE_SIZE, MUTED)
+        y += 8
+    signers = app.psbt_view["signers"]
+    if len(signers) <= 1:
+        signer = signers[0] if signers else None
+        enabled = signer is not None and not signer["signed"]
+        y = app._flow_button(frame, y, "Sign Transaction", "psbt-sign", paint, offset, enabled=enabled)
+        if signer and signer["signed"]:
+            y = _wrapped_center(frame, signer["note"], y, paint, offset, TITLE_SIZE, MUTED)
+        return y
+    for signer in signers:
+        action = f"psbt-sign-{signer['fingerprint']}"
+        y = app._flow_button(
+            frame, y, signer["button"], action, paint, offset, enabled=not signer["signed"],
+        )
+        if signer["signed"]:
+            y = _wrapped_center(frame, signer["note"], y, paint, offset, TITLE_SIZE, MUTED)
+    y += 8
+    y = app._flow_button(frame, y, "Continue", "psbt-continue", paint, offset, enabled=app.psbt_continue)
     return y
 
 
@@ -300,7 +325,7 @@ def _output_shape(app, card):
     if owned:
         return ("owned", len(card["address"]), owned["name"], owned["account_line"], owned["place"], amount)
     searching = bool(app.psbt_search and app.psbt_search["index"] == card["index"])
-    return ("external", len(card["address"]), searching, app.psbt_search_from.get(card["index"], 0), amount)
+    return ("external", len(card["address"]), searching, amount)
 
 
 def _input_shape(view, card):
@@ -331,19 +356,12 @@ def _output_card(app, frame, y, paint, offset, card) -> int:
             cursor = _centered_flow(frame, "External Address", cursor, paint, offset, TITLE_SIZE, INK)
             cursor += 12
             searching = app.psbt_search and app.psbt_search["index"] == card["index"]
-            start_at = app.psbt_search_from.get(card["index"], 0)
             if searching:
-                label = "Searching\u2026"
-                enabled = False
-            elif start_at:
-                label = f"Search {start_at}-{start_at + SEARCH_WINDOW - 1}"
+                label, enabled = "Searching\u2026", False
             else:
-                label = "Search for Address in Loaded Wallets"
-                enabled = True
-            if not searching:
-                enabled = True
+                label, enabled = "Search for Address in Loaded Wallets", True
             cursor = _card_button(
-                frame, cursor, label, f"psbt-search-{card['index']}-{start_at}", paint, offset, enabled=enabled,
+                frame, cursor, label, f"psbt-search-{card['index']}-0", paint, offset, enabled=enabled,
             )
             cursor += 12
     if card["kind"] != "op_return":
@@ -398,15 +416,12 @@ def _output_card_text(app, frame, start, offset, card, height):
             cursor = _centered_flow(frame, "External Address", cursor, True, offset, TITLE_SIZE, INK)
             cursor += 12
             searching = app.psbt_search and app.psbt_search["index"] == card["index"]
-            start_at = app.psbt_search_from.get(card["index"], 0)
             if searching:
                 label, enabled = "Searching\u2026", False
-            elif start_at:
-                label, enabled = f"Search {start_at}-{start_at + SEARCH_WINDOW - 1}", True
             else:
                 label, enabled = "Search for Address in Loaded Wallets", True
             cursor = _card_button(
-                frame, cursor, label, f"psbt-search-{card['index']}-{start_at}", True, offset, enabled=enabled,
+                frame, cursor, label, f"psbt-search-{card['index']}-0", True, offset, enabled=enabled,
             )
             cursor += 12
         shown = format_btc(card["amount"])
@@ -532,8 +547,10 @@ def _chevron(frame, y, paint, offset, title, open_now, action) -> int:
     height = TITLE_SIZE + 20
     top = y - offset
     if paint and top + height > HEADER and top < HEIGHT:
-        _section_chevron(frame, open_now, MARGIN + 16, top + height / 2)
-        frame.text(title, MARGIN + 40, top + 4, size=TITLE_SIZE)
+        text_y = top + 4
+        _left, ink_top, _right, ink_bottom = frame.draw.textbbox((0, 0), title, font=font(TITLE_SIZE))
+        _section_chevron(frame, open_now, MARGIN + 16, text_y + (ink_top + ink_bottom - 1) / 2)
+        frame.text(title, MARGIN + 40, text_y, size=TITLE_SIZE)
         frame.hit((MARGIN, top, WIDTH - MARGIN, top + height), action, title)
     return y + height + 8
 
@@ -593,9 +610,15 @@ def _section_chevron(frame, open_now: bool, cx: float, cy: float):
         return
     image, _center = rendered
     turned = image.rotate(90, expand=True)
+    ink = turned.getchannel("A").point(lambda alpha: 255 if alpha > 16 else 0).getbbox()
+    if ink is None:
+        return
+    min_x, min_y, right_edge, bottom_edge = ink
+    ink_cx = (min_x + right_edge - 1) / 2
+    ink_cy = (min_y + bottom_edge - 1) / 2
     frame.image.paste(
         turned,
-        (round(cx - turned.width / 2), round(cy - turned.height / 2)),
+        (round(cx - ink_cx), round(cy - ink_cy)),
         turned,
     )
 
@@ -637,28 +660,55 @@ def _name_center(frame, text, y, paint, offset, size, fill) -> int:
 
 
 def _wrap_name(draw, text, face, width) -> list[str]:
-    """Wrap a wallet name. A word of two letters or fewer stays with the word before it."""
-    words = text.split(" ")
+    """Wrap a wallet name.
+
+    A word of two letters or fewer stays with the word before it. A
+    comma-separated list, such as multisig fingerprints, may break after a
+    comma. The comma stays on the line it ended. A space after a comma stays
+    a space, and a break at that space drops the space.
+    """
+    pieces = []
+    for word_index, word in enumerate(text.split(" ")):
+        chunks = [word] if "," not in word else []
+        if not chunks:
+            parts = word.split(",")
+            for index, part in enumerate(parts):
+                if index < len(parts) - 1:
+                    chunks.append(part + ",")
+                elif part:
+                    chunks.append(part)
+            chunks = chunks or [""]
+        for chunk_index, chunk in enumerate(chunks):
+            pieces.append((chunk, word_index > 0 and chunk_index == 0))
     lines = []
     current = []
 
-    def length(parts) -> float:
-        return draw.textlength(" ".join(parts), font=face)
+    def joined(parts) -> str:
+        text = ""
+        for chunk, spaced in parts:
+            if not text or not spaced:
+                text += chunk
+            else:
+                text += " " + chunk
+        return text
 
-    for word in words:
-        if not current or length(current + [word]) <= width:
-            current.append(word)
+    def length(parts) -> float:
+        return draw.textlength(joined(parts), font=face)
+
+    for piece in pieces:
+        if not current or length(current + [piece]) <= width:
+            current.append(piece)
             continue
-        if len(word) <= 2 and current:
+        if len(piece[0]) <= 2 and current:
             carried = current.pop()
             if current:
-                lines.append(" ".join(current))
-            current = [carried, word]
+                lines.append(joined(current))
+            current = [carried, piece]
             continue
-        lines.append(" ".join(current))
-        current = [word]
+        lines.append(joined(current))
+        current = [piece]
     if current:
-        lines.append(" ".join(current))
+        lines.append(joined(current))
     return lines
 
 

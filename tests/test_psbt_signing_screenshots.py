@@ -5,11 +5,13 @@ import time
 from pathlib import Path
 
 from PIL import Image, ImageDraw
+from embit.descriptor.checksum import checksum
 from embit.psbt import DerivationPath, OutputScope, PSBT
 from embit.script import Script, address_to_scriptpubkey
 from embit.transaction import SIGHASH, Transaction, TransactionInput, TransactionOutput
 
 from bigsigner.sdcard import mount_memory, unmount_memory
+from bigsigner.session import Session, _account_path, _public_for
 from bigsigner.ui.app import QR_BRIGHTNESS_STOPS, App
 from bigsigner.ui.canvas import WIDTH, font
 from bigsigner.ui.psbt_screen import TITLE_SIZE
@@ -374,3 +376,209 @@ def test_op_return_content_saves_screenshots():
     assert "e8 e9 ea eb ec ed ee ef" in _joined(app)
     assert "00 01 02 03 04 05 06 07" not in _joined(app)
     assert "Scroll down" not in _joined(app)
+
+
+ZOO = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong"
+HIDDEN_INDEX = 73
+
+
+def _address(session, wallet_index, account, branch, index) -> str:
+    wallet = session.wallets[wallet_index]
+    saved = dict(wallet.accounts)
+    try:
+        for fingerprint in wallet.fingerprints:
+            wallet.accounts[fingerprint] = account
+        session._descriptor_cache = None
+        return session.addresses(wallet_index, branch, index, 1)[0]
+    finally:
+        wallet.accounts.clear()
+        wallet.accounts.update(saved)
+        session._descriptor_cache = None
+
+
+def _derivations(session, wallet_index, account, branch, index):
+    wallet = session.wallets[wallet_index]
+    rows = []
+    for fingerprint in wallet.fingerprints:
+        stored = _public_for(session, fingerprint, wallet.role, account)
+        child = stored.xpub.derive(f"m/{branch}/{index}")
+        path = list(stored.path) + [branch, index]
+        rows.append((child.key, DerivationPath(fingerprint, path)))
+    return rows
+
+
+def _output(session, wallet_index, account, branch, index, amount, with_origin: bool):
+    script = address_to_scriptpubkey(_address(session, wallet_index, account, branch, index))
+    scope = OutputScope(vout=TransactionOutput(amount, script))
+    if with_origin:
+        for key, origin in _derivations(session, wallet_index, account, branch, index):
+            scope.bip32_derivations[key] = origin
+    return scope
+
+
+def _spend(session, wallet_index, account, amount):
+    wallet = session.wallets[wallet_index]
+    script = address_to_scriptpubkey(_address(session, wallet_index, account, 0, 0))
+    txid = bytes([wallet_index + 3]) * 32
+    vin = TransactionInput(txid, 0, sequence=0xFFFFFFFD)
+    psbt_input_script = script
+    sighash = None if wallet.role == "singlesig_taproot" else SIGHASH.ALL
+    return vin, psbt_input_script, sighash, amount
+
+
+def _gallery_psbt(session, spending, account):
+    """One input, a hidden same-wallet address, another account, and another wallet."""
+    vin, script, sighash, amount = _spend(session, spending, account, 200_000)
+    hidden = _output(session, spending, account, 0, HIDDEN_INDEX, 40_000, False)
+    other_account = 1 if account != 1 else 4
+    same_wallet = _output(session, spending, other_account, 1, 4, 40_000, True)
+    other = 1 if spending == 0 else 0
+    other_wallet = _output(session, other, 0, 0, 2, 40_000, True)
+    external = OutputScope(
+        vout=TransactionOutput(20_000, address_to_scriptpubkey("bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"))
+    )
+    tx = Transaction(version=2, vin=[vin], vout=[item.vout for item in (hidden, other_wallet, same_wallet, external)])
+    psbt = PSBT(tx)
+    psbt.inputs[0].witness_utxo = TransactionOutput(amount, script)
+    for key, origin in _derivations(session, spending, account, 0, 0):
+        psbt.inputs[0].bip32_derivations[key] = origin
+    if sighash is not None:
+        psbt.inputs[0].sighash_type = sighash
+    for index, scope in enumerate((hidden, other_wallet, same_wallet, external)):
+        for key, origin in scope.bip32_derivations.items():
+            psbt.outputs[index].bip32_derivations[key] = origin
+    return psbt
+
+
+def _scroll_until(app, phrase: str):
+    app.scroll["psbt-yaml"] = 0
+    app.render()
+    for _ in range(40):
+        if phrase in _joined(app):
+            return
+        limit = app.scroll_max["psbt-yaml"]
+        if app.scroll["psbt-yaml"] >= limit:
+            break
+        app.scroll["psbt-yaml"] = min(limit, app.scroll["psbt-yaml"] + 280)
+        app.render()
+    raise AssertionError(phrase)
+
+
+def _search_hidden_address(record, app):
+    """The address is index 73, so the first window misses and 50–99 finds it."""
+    _scroll_until(app, "Search for Address in Loaded Wallets")
+    record.shot(app, "search-before")
+    app._act("psbt-search-0-0")
+    record.shot(app, "search-0-49")
+    assert "Searching" in _joined(app)
+    record.shot(app, "search-miss")
+    assert app.confirm == "psbt-miss"
+    assert "50-99" in app._confirm_message()
+    assert any(hit["label"] == "Cancel" for hit in app.hits)
+    assert any(hit["label"] == "OK" for hit in app.hits)
+    app._act("confirm-yes")
+    record.shot(app, "search-50-99")
+    record.shot(app, "search-found")
+    assert app.confirm == "psbt-found"
+    assert app._confirm_message() == "Address found in Receive addresses"
+    app._act("confirm-no")
+    place = f"Receive Address #{HIDDEN_INDEX}"
+    assert any(card["place"] == place and card["receive_change"] for card in app.psbt_view["change_outputs"])
+    assert any("receive address" in item["text"] for item in app.psbt_view["warnings"])
+    _scroll_until(app, place)
+    record.shot(app, "search-result")
+    assert place in _joined(app)
+
+
+def _taproot_and_native():
+    from test_domain import ABANDON, LEGAL, expression
+
+    session = Session()
+    session.add_mnemonic(ABANDON.split())
+    session.add_mnemonic(LEGAL.split())
+    taproot = expression(ABANDON, "m/86h/0h/0h")
+    native = expression(LEGAL, "m/84h/0h/0h")
+    session.add_text(f"tr({taproot})#{checksum('tr(' + taproot + ')')}")
+    session.add_text(f"wpkh({native})#{checksum('wpkh(' + native + ')')}")
+    wallet = session.wallets[0]
+    wallet.accounts[wallet.fingerprints[0]] = 3
+    session._descriptor_cache = None
+    return session
+
+
+def _multisig_and_native():
+    from test_domain import ABANDON, LEGAL, expression
+
+    session = Session()
+    session.add_mnemonic(ABANDON.split())
+    session.add_mnemonic(LEGAL.split())
+    session.add_mnemonic(ZOO.split())
+    first = expression(ABANDON, "m/48h/0h/0h/2h")
+    second = expression(LEGAL, "m/48h/0h/0h/2h")
+    third = expression(ZOO, "m/48h/0h/0h/2h")
+    body = f"wsh(sortedmulti(2,{first},{second},{third}))"
+    session.add_text(f"{body}#{checksum(body)}")
+    native = expression(ABANDON, "m/84h/0h/0h")
+    session.add_text(f"wpkh({native})#{checksum('wpkh(' + native + ')')}")
+    return session
+
+
+def test_taproot_nonzero_account_saves_screenshots():
+    record = ScreenRecord(_folder("test_taproot_nonzero_account_saves_screenshots"))
+    session = _taproot_and_native()
+    app = App()
+    app.session = session
+    app.wallet_index = 0
+    record.note(
+        "Taproot wallet on account 3. One output is this wallet's receive address 73 "
+        "with no derivation, found by searching 50-99. One change output is account 1. "
+        "One output is the other loaded wallet and keeps its derivation."
+    )
+    _load(app, _gallery_psbt(session, 0, 3))
+    assert app.psbt_view["account_line"] == "Account: 3 (non-default)"
+    assert [card["place"] for card in app.psbt_view["change_outputs"]] == ["Change Address #4"]
+    _scroll_all(record, app, "signing")
+    _search_hidden_address(record, app)
+    app.scroll["psbt-yaml"] = 10**9
+    record.shot(app, "sign-transaction")
+    assert any(hit["action"] == "psbt-sign" for hit in app.hits)
+
+
+def test_multisig_sign_with_saves_screenshots():
+    record = ScreenRecord(_folder("test_multisig_sign_with_saves_screenshots"))
+    session = _multisig_and_native()
+    app = App()
+    app.session = session
+    app.wallet_index = 0
+    record.note(
+        "2-of-3 native-segwit wallet with all three seeds loaded. "
+        "Receive address 73 has no derivation and is found in the 50-99 search. "
+        "Account 1 change keeps its derivation. Another output belongs to the "
+        "singlesig wallet and keeps its derivation. Each loaded seed has its own "
+        "Sign Transaction with button."
+    )
+    _load(app, _gallery_psbt(session, 0, 0))
+    assert app.psbt_view["account_line"] == "Account: 0, 0, 0 (default)"
+    assert "Some inputs have no signatures." in app.psbt_view["signature_note"]
+    assert [card["place"] for card in app.psbt_view["change_outputs"]] == ["Change Address #4"]
+    _scroll_all(record, app, "signing")
+    _search_hidden_address(record, app)
+    _scroll_until(app, "Some inputs have no signatures.")
+    record.shot(app, "sign-note")
+    app.scroll["psbt-yaml"] = 10**9
+    record.shot(app, "sign-with-before")
+    sign_hits = [hit for hit in app.hits if hit["action"].startswith("psbt-sign-")]
+    assert len(sign_hits) == 3
+    assert all(hit["label"].startswith("Sign Transaction with\n") for hit in sign_hits)
+    assert not any(hit["action"] == "psbt-continue" for hit in app.hits)
+    app._act(sign_hits[0]["action"])
+    _scroll_until(app, "Each input already has 1 signature.")
+    record.shot(app, "sign-note-after")
+    assert app.psbt_view["signature_note"] == (
+        "Each input already has 1 signature. "
+        "1 additional signature is required to complete this 2-of-3 wallet."
+    )
+    app.scroll["psbt-yaml"] = 10**9
+    record.shot(app, "sign-with-after")
+    assert any(hit["action"] == "psbt-continue" for hit in app.hits)
+    assert sum(hit["action"].startswith("psbt-sign-") for hit in app.hits) == 2

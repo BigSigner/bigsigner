@@ -52,7 +52,15 @@ from ..licenses import NOTICES
 from ..seedqr import compact_bytes
 from ..slip132 import display_form, label_of
 from ..ur import descriptor_ur
-from .psbt_screen import paint_export_format, paint_input_qr, paint_opreturn, paint_qr, paint_share, paint_signing
+from .psbt_screen import (
+    _wrap_name,
+    paint_export_format,
+    paint_input_qr,
+    paint_opreturn,
+    paint_qr,
+    paint_share,
+    paint_signing,
+)
 from .canvas import (
     BLUE,
     ELLIPSIS,
@@ -351,14 +359,15 @@ class App:
         self.descriptor_format = 0
         self.review = None
         self.psbt_checked = None
+        self.psbt_loaded = None
         self.psbt_view = None
         self.psbt_outputs_open = True
         self.psbt_inputs_open = False
         self.psbt_change_open = True
         self.psbt_more_open = False
         self.psbt_txid_open = False
+        self.psbt_continue = False
         self.psbt_found = {}
-        self.psbt_search_from = {}
         self.psbt_search = None
         self.psbt_search_shown = False
         self.psbt_search_hit = None
@@ -930,7 +939,10 @@ class App:
         destination = self.back[-1] if self.back else "keys"
         if self.screen == "seed" or destination == "seed":
             self._seed_title_count = 0
+        leaving = self.screen
         self.screen = self.back.pop() if self.back else "keys"
+        if leaving == "psbt-share" and self.screen == "psbt-yaml":
+            self._restore_loaded_psbt()
         if leaving_wallet:
             self._restore_wallet_accounts()
         if self.screen in ("keys", "wallets"):
@@ -1107,12 +1119,9 @@ class App:
         self.confirm = None
         self._account_warning_action = None
         if kind == "psbt-found" and self.psbt_search_hit:
-            index = self.psbt_search_hit["index"]
-            self.psbt_found[index] = self.psbt_search_hit
+            self._include_found_derivation(self.psbt_search_hit)
             self.psbt_search_hit = None
-        elif kind == "psbt-miss" and self.psbt_search_hit:
-            index = self.psbt_search_hit["index"]
-            self.psbt_search_from[index] = self.psbt_search_hit["next"]
+        elif kind == "psbt-miss":
             self.psbt_search_hit = None
 
     def _act_delete_key(self):
@@ -1308,6 +1317,7 @@ class App:
         "psbt-toggle-more": lambda self: self._toggle_psbt_more(),
         "psbt-toggle-txid": lambda self: self._toggle_psbt_txid(),
         "psbt-sign": lambda self: self._sign_reviewed_psbt(),
+        "psbt-continue": lambda self: self._continue_signed_psbt(),
         "psbt-show-qr": lambda self: self._open_psbt_qr(),
         "psbt-export": lambda self: self._open_psbt_export(),
         "psbt-export-binary": lambda self: self._choose_psbt_export(True),
@@ -1387,6 +1397,8 @@ class App:
             self._open_psbt_opreturn(int(action[len("psbt-opreturn-") :]))
         elif action.startswith("psbt-input-qr-"):
             self._open_input_qr(int(action[len("psbt-input-qr-") :]))
+        elif action.startswith("psbt-sign-"):
+            self._sign_one_seed(bytes.fromhex(action[len("psbt-sign-") :]))
         elif action.startswith("account-dec-"):
             if self._warn_before_account_change(action):
                 return
@@ -5822,8 +5834,8 @@ class App:
             return ACCOUNT_INDEX_WARNING
         if self.confirm == "message-more":
             return MESSAGE_MORE
-        if self.confirm == "psbt-found":
-            return "This address was found. Show it on the output?"
+        if self.confirm == "psbt-found" and self.psbt_search_hit:
+            return self._found_address_message()
         if self.confirm == "psbt-miss" and self.psbt_search_hit:
             start = self.psbt_search_hit["next"]
             end = start + SEARCH_WINDOW - 1
@@ -5833,6 +5845,21 @@ class App:
             )
         return "Delete this key?"
 
+    def _found_address_message(self) -> str:
+        hit = self.psbt_search_hit
+        if hit["wallet_index"] != self.wallet_index:
+            return f"Address was found in wallet {hit['name']}"
+        wallet = self.session.wallets[self.wallet_index]
+        indexes = [int(index) for index in hit.get("account_indexes") or []]
+        spending = [int(wallet.accounts[fingerprint]) for fingerprint in wallet.fingerprints]
+        if indexes == spending:
+            kind = "Receive" if hit.get("branch") == 0 else "Change"
+            return f"Address found in {kind} addresses"
+        if len(indexes) > 1:
+            return "Address found in account-sequence " + ", ".join(str(index) for index in indexes)
+        number = indexes[0] if indexes else 0
+        return f"Address found in account #{number}"
+
     def _confirm(self, frame: Frame):
         overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 110))
         base = frame.image.convert("RGBA")
@@ -5841,7 +5868,10 @@ class App:
         frame.hit((0, 0, WIDTH, HEIGHT), "confirm-no", "outside")
         message = self._confirm_message()
         face = font(BODY_SIZE)
-        lines = wrap(frame.draw, message, face, WIDTH - 88)
+        if self.confirm == "psbt-found":
+            lines = _wrap_name(frame.draw, message, face, WIDTH - 88) or [""]
+        else:
+            lines = wrap(frame.draw, message, face, WIDTH - 88)
         line_h = BODY_SIZE + 8
         button_h = BODY_SIZE + 36
         text_top = 268
@@ -5864,7 +5894,17 @@ class App:
         self._confirm_buttons(frame, box)
 
     def _confirm_buttons(self, frame: Frame, box):
-        if self.confirm in ("message-more", "psbt-found", "psbt-miss"):
+        if self.confirm == "psbt-miss":
+            gap = 12
+            height = BODY_SIZE + 36
+            y = box[3] - 24 - height
+            left = box[0] + 20
+            right = box[2] - 20
+            width = (right - left - gap) // 2
+            self._dialog_button(frame, (left, y, left + width, y + height), "Cancel", "confirm-no", (132, 138, 148))
+            self._dialog_button(frame, (left + width + gap, y, right, y + height), "OK", "confirm-yes", BLUE)
+            return
+        if self.confirm in ("message-more", "psbt-found"):
             height = BODY_SIZE + 36
             y = box[3] - 24 - height
             left = box[0] + 20
@@ -5917,6 +5957,11 @@ class App:
             self._accept_account_warning()
         elif kind == "replace-file":
             self._write_export()
+        elif kind == "psbt-miss" and self.psbt_search_hit is not None:
+            index = self.psbt_search_hit["index"]
+            start = self.psbt_search_hit["next"]
+            self.psbt_search_hit = None
+            self._begin_psbt_search(f"{index}-{start}")
 
     def _descriptor_choice_message(self) -> str:
         if self.descriptor_choice and self.descriptor_choice.get("multisig"):
@@ -7062,6 +7107,7 @@ class App:
                 return
             self._show_psbt_error(message)
             return
+        self.psbt_loaded = checked.serialize()
         self.psbt_checked = checked
         self.psbt_view = describe_psbt(self.session, self.wallet_index, checked)
         self._psbt_heights = {}
@@ -7071,8 +7117,8 @@ class App:
         self.psbt_change_open = bool(self.psbt_view["change_outputs"])
         self.psbt_more_open = False
         self.psbt_txid_open = False
+        self.psbt_continue = False
         self.psbt_found = {}
-        self.psbt_search_from = {}
         self.psbt_search = None
         self.psbt_search_hit = None
         self.signed_psbt = None
@@ -7224,6 +7270,88 @@ class App:
         except (ReviewError, SessionError) as exc:
             self.set_error(str(exc))
             return
+        self._offer_signed_psbt(signed)
+
+    def _sign_one_seed(self, fingerprint: bytes):
+        checked = self.psbt_checked
+        if checked is None or self.wallet_index >= len(self.session.wallets):
+            self.set_error("This transaction is no longer loaded.")
+            return
+        from embit.psbt import PSBT
+
+        from ..psbt_check import multisig_signature_note, seed_sign_rows
+
+        signed = PSBT.parse(checked.serialize())
+        try:
+            sign_with(self.session, self.wallet_index, signed, fingerprint)
+        except (ReviewError, SessionError) as exc:
+            self.set_error(str(exc))
+            return
+        self.psbt_checked = signed
+        wallet = self.session.wallets[self.wallet_index]
+        self.psbt_view["signers"] = seed_sign_rows(self.session, wallet, signed)
+        self.psbt_view["signature_note"] = multisig_signature_note(wallet, signed)
+        self.psbt_continue = True
+
+    def _include_found_derivation(self, hit):
+        """Treat a searched address as if its derivation had been in the loaded PSBT."""
+        if self.psbt_checked is None:
+            return
+        self._write_output_origin(self.psbt_checked, hit)
+        if self.psbt_loaded is not None:
+            from embit.psbt import PSBT
+
+            loaded = PSBT.parse(self.psbt_loaded)
+            self._write_output_origin(loaded, hit)
+            self.psbt_loaded = loaded.serialize()
+        self.psbt_view = describe_psbt(self.session, self.wallet_index, self.psbt_checked)
+        self._psbt_heights = {}
+        self.psbt_found.pop(hit["index"], None)
+        if self.psbt_view["change_outputs"]:
+            self.psbt_change_open = True
+
+    def _write_output_origin(self, psbt, hit):
+        from embit.psbt import DerivationPath
+
+        from ..paths import SINGLESIG_TAPROOT
+        from ..session import _public_for
+
+        wallet = self.session.wallets[hit["wallet_index"]]
+        scope = psbt.outputs[hit["index"]]
+        branch = int(hit["branch"])
+        address_index = int(hit["address_index"])
+        for fingerprint, account in zip(wallet.fingerprints, hit["account_indexes"]):
+            stored = _public_for(self.session, fingerprint, wallet.role, int(account))
+            child = stored.xpub.derive(f"m/{branch}/{address_index}")
+            origin = DerivationPath(fingerprint, list(stored.path) + [branch, address_index])
+            if wallet.role == SINGLESIG_TAPROOT:
+                scope.taproot_bip32_derivations[child.key] = ([], origin)
+            else:
+                scope.bip32_derivations[child.key] = origin
+
+    def _restore_loaded_psbt(self):
+        """Back from the signed result shows the PSBT that was loaded, not the one just signed."""
+        if self.psbt_loaded is None or self.wallet_index >= len(self.session.wallets):
+            return
+        from embit.psbt import PSBT
+
+        from ..psbt_check import multisig_signature_note, seed_sign_rows
+
+        restored = PSBT.parse(self.psbt_loaded)
+        self.psbt_checked = restored
+        self.psbt_continue = False
+        if not self.psbt_view:
+            return
+        wallet = self.session.wallets[self.wallet_index]
+        self.psbt_view["signers"] = seed_sign_rows(self.session, wallet, restored)
+        self.psbt_view["signature_note"] = multisig_signature_note(wallet, restored)
+
+    def _continue_signed_psbt(self):
+        if not self.psbt_continue or self.psbt_checked is None:
+            return
+        self._offer_signed_psbt(self.psbt_checked)
+
+    def _offer_signed_psbt(self, signed):
         self.signed_psbt = signed
         self.psbt_qr_format = 0
         self.psbt_qr_part = 0
@@ -7855,14 +7983,14 @@ def _wrap_indented(draw, text: str, face, width: int) -> list[str]:
             lines.extend(wrap(draw, body, face, width))
             continue
         room = max(1, int(width - draw.textlength(indent, font=face)))
-        first = ""
-        index = 0
-        while index < len(body) and draw.textlength(first + body[index], font=face) <= room:
-            first += body[index]
-            index += 1
+        fitted = wrap(draw, body, face, room) or [""]
+        first = fitted[0]
         lines.append(indent + first)
-        if index < len(body):
-            lines.extend(wrap(draw, body[index:], face, width))
+        rest = body[len(first):] if body.startswith(first) else ""
+        if rest.startswith(" "):
+            rest = rest[1:]
+        if rest:
+            lines.extend(wrap(draw, rest, face, width))
     return lines
 
 

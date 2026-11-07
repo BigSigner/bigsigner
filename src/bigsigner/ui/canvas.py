@@ -114,7 +114,70 @@ def _break_token(draw: ImageDraw.ImageDraw, word: str, face, width: int) -> list
     return pieces
 
 
+def _fit_prefix(draw: ImageDraw.ImageDraw, text: str, face, width: int) -> int:
+    """How many leading characters fit. At least one when `text` is not empty."""
+    if text == "" or draw.textlength(text, font=face) <= width:
+        return len(text)
+    low, high = 1, len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if draw.textlength(text[:middle], font=face) <= width:
+            low = middle
+        else:
+            high = middle - 1
+    return low
+
+
+def _comma_pieces(word: str) -> list[str]:
+    """Split after commas. The comma stays on the piece it ended."""
+    if "," not in word:
+        return [word]
+    parts = word.split(",")
+    pieces = []
+    for index, part in enumerate(parts):
+        if index < len(parts) - 1:
+            pieces.append(part + ",")
+        elif part:
+            pieces.append(part)
+    return pieces or [""]
+
+
+def _pieces_keeping_comma(draw: ImageDraw.ImageDraw, chunk: str, face, width: int) -> list[str]:
+    """Break a chunk that ends with a comma. The comma ends a line.
+
+    A space at a break is dropped. A comma is not. When the comma does not fit
+    on the same line as every letter before it, those letters break first and
+    the comma stays with the last of them.
+    """
+    if not chunk.endswith(",") or draw.textlength(chunk, font=face) <= width:
+        return _break_token(draw, chunk, face, width)
+    pieces = []
+    rest = chunk
+    while rest:
+        if draw.textlength(rest, font=face) <= width:
+            pieces.append(rest)
+            break
+        count = _fit_prefix(draw, rest, face, width)
+        if count < len(rest) and rest[count] == ",":
+            if count > 1 and draw.textlength(rest[count - 1 : count + 1], font=face) <= width:
+                pieces.append(rest[: count - 1])
+                rest = rest[count - 1 :]
+                continue
+            pieces.append(rest[: count + 1])
+            rest = rest[count + 1 :]
+            continue
+        pieces.append(rest[:count])
+        rest = rest[count:]
+    return [piece for piece in pieces if piece]
+
+
 def wrap(draw: ImageDraw.ImageDraw, text: str, face, width: int) -> list[str]:
+    """Break at a space or after a comma.
+
+    The break takes the place of a space. The comma stays on the line it ended.
+    A piece with no space or comma that is wider than `width` breaks at the
+    character that would overflow.
+    """
     lines = []
     for paragraph in text.split("\n"):
         if paragraph == "":
@@ -122,19 +185,30 @@ def wrap(draw: ImageDraw.ImageDraw, text: str, face, width: int) -> list[str]:
             continue
         current = ""
         for word in paragraph.split(" "):
-            for index, piece in enumerate(_break_token(draw, word, face, width)):
-                if index:
-                    if current:
-                        lines.append(current)
-                    current = piece
-                    continue
-                trial = piece if not current else f"{current} {piece}"
-                if draw.textlength(trial, font=face) <= width:
-                    current = trial
-                else:
-                    if current:
-                        lines.append(current)
-                    current = piece
+            for chunk_index, chunk in enumerate(_comma_pieces(word)):
+                pieces = (
+                    _pieces_keeping_comma(draw, chunk, face, width)
+                    if chunk.endswith(",")
+                    else _break_token(draw, chunk, face, width)
+                )
+                for piece_index, piece in enumerate(pieces):
+                    if piece_index:
+                        if current:
+                            lines.append(current)
+                        current = piece
+                        continue
+                    if not current:
+                        trial = piece
+                    elif chunk_index:
+                        trial = current + piece
+                    else:
+                        trial = f"{current} {piece}"
+                    if draw.textlength(trial, font=face) <= width:
+                        current = trial
+                    else:
+                        if current:
+                            lines.append(current)
+                        current = piece
         lines.append(current)
     return lines
 

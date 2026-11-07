@@ -11,7 +11,7 @@ from embit.descriptor import Descriptor
 from embit.networks import NETWORKS
 from embit.psbt import PSBT
 
-from .psbt_check import _input_amount
+from .psbt_check import _input_amount, multisig_signature_note, seed_sign_rows
 from .psbt_review import LOCKTIME_THRESHOLD, _derivations, _estimate_vsize, _locate
 from .session import _descriptor
 
@@ -115,10 +115,12 @@ def format_locktime(locktime: int) -> str:
 
 def account_line(fingerprints, accounts: dict) -> str:
     indexes = [int(accounts[fingerprint]) for fingerprint in fingerprints]
-    notes = [f"{index} ({'default' if index == 0 else 'non-default'})" for index in indexes]
-    if len(set(indexes)) <= 1:
-        return f"Account: {notes[0] if notes else '0 (default)'}"
-    return "Accounts: " + ", ".join(notes)
+    if len(indexes) > 1:
+        note = "default" if all(index == 0 for index in indexes) else "non-default"
+        return f"Account: {', '.join(str(index) for index in indexes)} ({note})"
+    index = indexes[0] if indexes else 0
+    note = "default" if index == 0 else "non-default"
+    return f"Account: {index} ({note})"
 
 
 def place_line(branch: int, index: int) -> str:
@@ -270,6 +272,8 @@ def describe_psbt(session, wallet_index: int, psbt: PSBT) -> dict:
         "relative_line": _relative_line(relative, locktime),
         "inputs": inputs,
         "inputs_open": any(item["sequence"] != SEQUENCE_STANDARD for item in inputs),
+        "signers": seed_sign_rows(session, wallet, psbt),
+        "signature_note": multisig_signature_note(wallet, psbt),
     }
 
 
@@ -295,6 +299,8 @@ def search_address(session, spending_index: int, address: str, start: int, count
             found["wallet_index"] = index
             found["name"] = session.wallet_short_name_of(wallet)
             found["account_line"] = account_line(wallet.fingerprints, trial)
+            found["account_indexes"] = [int(trial[fingerprint]) for fingerprint in wallet.fingerprints]
+            found["address_index"] = found["index"]
             found["place"] = place_line(found["branch"], found["index"])
             return found
     return None

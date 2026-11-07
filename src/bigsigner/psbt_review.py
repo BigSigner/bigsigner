@@ -39,7 +39,7 @@ def review_psbt(session, wallet_index: int, raw: str | bytes) -> dict:
     fee = sum(item["amount"] for item in inputs) - sum(item["amount"] for item in outputs)
     if fee < 0:
         raise ReviewError("The outputs are larger than the inputs.")
-    from .psbt_check import _check_op_returns, _check_output_scripts
+    from .psbt_check import _check_op_returns, _check_output_scripts, verify_existing_signatures
 
     _check_op_returns(psbt)
     _check_output_scripts(psbt)
@@ -48,6 +48,7 @@ def review_psbt(session, wallet_index: int, raw: str | bytes) -> dict:
     warnings = _warnings(transaction, inputs, outputs, external)
     if vsize and fee / vsize > 200:
         warnings.append("The fee rate is above 200 sat/vB.")
+    verify_existing_signatures(psbt)
     return {
         "psbt": psbt,
         "psbt_version": 0 if psbt.version in (None, 0) else 2,

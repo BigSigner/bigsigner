@@ -11,6 +11,7 @@ from bigsigner.psbt_check import psbt_yaml
 from bigsigner.psbt_qr import psbt_qr_parts, ur_parts_round_trip
 from bigsigner.psbt_view import (
     ALL_TO_WALLET,
+    account_line,
     input_qr_text,
     HIGH_FEE_WARNING,
     MANY_CHANGE_WARNING,
@@ -43,6 +44,41 @@ def test_a_two_letter_word_stays_with_the_word_before_it():
     lines = _wrap_name(draw, "Grateful Ivory Impala 0A (Native-Segwit)", font(32), 300)
     assert lines == ["Grateful Ivory", "Impala 0A", "(Native-Segwit)"]
     assert all(not line.startswith("0A") for line in lines)
+    from bigsigner.ui.canvas import WIDTH, MARGIN
+
+    fingerprints = "2-of-3 73c5da0a,b8688df1,3f635a63"
+    limit = WIDTH - 2 * MARGIN
+    wrapped = _wrap_name(draw, fingerprints, font(32), limit)
+    assert wrapped == ["2-of-3 73c5da0a,b8688df1,", "3f635a63"]
+    assert all(draw.textlength(line, font=font(32)) <= limit for line in wrapped)
+    found = _wrap_name(draw, f"Address found in wallet {fingerprints}", font(36), WIDTH - 88)
+    assert any(line.endswith(",") for line in found)
+    assert all(draw.textlength(line, font=font(36)) <= WIDTH - 88 for line in found)
+    sequence = _wrap_name(draw, "Address found in account-sequence 0, 2, 0", font(36), WIDTH - 88)
+    assert " ".join(sequence) == "Address found in account-sequence 0, 2, 0"
+    assert all(not line.startswith(",") for line in sequence)
+
+
+def test_a_found_address_notice_names_receive_account_or_wallet():
+    session = _native()
+    app = App()
+    app.session = session
+    app.wallet_index = 0
+    app.psbt_search_hit = {
+        "wallet_index": 0,
+        "branch": 0,
+        "name": "2-of-3 aa,bb,cc",
+        "account_indexes": [0],
+    }
+    assert app._found_address_message() == "Address found in Receive addresses"
+    app.psbt_search_hit["branch"] = 1
+    assert app._found_address_message() == "Address found in Change addresses"
+    app.psbt_search_hit["account_indexes"] = [3]
+    assert app._found_address_message() == "Address found in account #3"
+    app.psbt_search_hit["account_indexes"] = [0, 2, 0]
+    assert app._found_address_message() == "Address found in account-sequence 0, 2, 0"
+    app.psbt_search_hit["wallet_index"] = 1
+    assert app._found_address_message() == "Address was found in wallet 2-of-3 aa,bb,cc"
 
 
 def test_btc_amounts_are_strings_with_eight_decimal_places():
@@ -62,6 +98,12 @@ def test_warnings_name_op_return_fee_locktime_and_rbf():
     plain = describe_psbt(session, 0, _psbt(session))
     assert plain["warnings"] == []
     assert plain["account_line"] == "Account: 0 (default)"
+    assert account_line([b"\x01", b"\x02", b"\x03"], {b"\x01": 0, b"\x02": 0, b"\x03": 0}) == (
+        "Account: 0, 0, 0 (default)"
+    )
+    assert account_line([b"\x01", b"\x02", b"\x03"], {b"\x01": 0, b"\x02": 2, b"\x03": 0}) == (
+        "Account: 0, 2, 0 (non-default)"
+    )
     assert plain["inputs_open"] is False
     assert plain["outputs"][0]["owned"] is None
     assert plain["fee"] == 10_000
@@ -229,6 +271,31 @@ def _box_top(items, text):
     matches = [item for item in items if item.get("text") == text or item.get("label") == text]
     assert matches, text
     return min(item["box"][1] for item in matches)
+
+
+def _ink_rows(image, box, x0, x1):
+    pixels = image.load()
+    rows = []
+    for y in range(max(0, box[1] - 24), min(image.height, box[3] + 24)):
+        if any(pixels[x, y][0] < 40 for x in range(x0, x1)):
+            rows.append(y)
+    assert rows
+    return rows
+
+
+def test_a_section_chevron_lines_up_with_the_middle_of_its_label():
+    session = _native()
+    app = App()
+    app.session = session
+    app.wallet_index = 0
+    app._accept_psbt_text(base64.b64encode(_psbt(session).serialize()).decode(), "file")
+    image = app.render()
+    for label in ("Transaction Id", "1 Output"):
+        box = next(item["box"] for item in app.texts if item["text"] == label)
+        text_mid = (box[1] + box[3] - 1) / 2
+        rows = _ink_rows(image, box, max(0, box[0] - 36), box[0] - 4)
+        chevron_mid = (rows[0] + rows[-1]) / 2
+        assert abs(chevron_mid - text_mid) <= 1, (label, chevron_mid, text_mid)
 
 
 def test_transaction_id_starts_closed_and_change_sits_above_inputs():

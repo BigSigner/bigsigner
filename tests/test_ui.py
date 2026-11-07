@@ -505,6 +505,34 @@ def test_xpub_key_screen_shows_the_account_and_the_path():
     assert account0.tobytes() != account7.tobytes()
 
 
+def test_wrap_breaks_at_a_space_or_a_comma():
+    draw = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+    face = font(32)
+    commas = "aa,bb,cc"
+    comma_width = draw.textlength("aa,bb,", font=face)
+    assert draw.textlength(commas, font=face) > comma_width
+    assert wrap(draw, commas, face, comma_width) == ["aa,bb,", "cc"]
+    sentence = "hello world"
+    sentence_width = draw.textlength("hello wor", font=face)
+    assert wrap(draw, sentence, face, sentence_width) == ["hello", "world"]
+    together = "keep,together"
+    assert wrap(draw, together, face, draw.textlength(together, font=face)) == [together]
+    mixed = "word aa,bb"
+    mixed_width = draw.textlength("word aa,", font=face)
+    assert wrap(draw, mixed, face, mixed_width) == ["word aa,", "bb"]
+    token = "abcdefghijklmnop"
+    token_width = draw.textlength("abcdefghij", font=face)
+    lines = wrap(draw, token, face, token_width)
+    assert "".join(lines) == token
+    assert all(draw.textlength(line, font=face) <= token_width for line in lines)
+    tight = draw.textlength("hello", font=face)
+    broken = wrap(draw, "hello, world", face, tight)
+    assert broken == ["hell", "o,", "worl", "d"]
+    assert all(not line.startswith(",") for line in broken)
+    assert "".join(broken) == "hello,world"
+    assert all(draw.textlength(line, font=face) <= tight for line in broken)
+
+
 def test_a_long_xpub_wraps_inside_the_screen():
     from test_domain import expression
 

@@ -184,6 +184,10 @@ def test_descriptor_text_indents_each_key_and_the_qr_stays_compact():
     wrapped = _wrap_indented(draw, "  " + "x" * 80, face, draw.textlength("x" * 20, font=face))
     assert wrapped[0].startswith("  ")
     assert wrapped[1:] and all(not line.startswith(" ") for line in wrapped[1:])
+    space_width = draw.textlength("  hello wor", font=face)
+    assert _wrap_indented(draw, "  hello world", face, space_width) == ["  hello", "world"]
+    comma_width = draw.textlength("  aa,bb,c", font=face)
+    assert _wrap_indented(draw, "  aa,bb,cc", face, comma_width) == ["  aa,bb,", "cc"]
 
 
 def test_delete_wallet_asks_first_and_keeps_the_keys():

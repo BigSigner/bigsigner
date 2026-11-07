@@ -6,7 +6,9 @@ that is what distinguishes it.
 """
 
 from embit.descriptor import Descriptor
+from embit.ec import PublicKey, SchnorrSig, Signature
 from embit.psbt import PSBT, PSBTError
+from embit.script import Script
 from embit.transaction import SIGHASH
 
 from .paths import HARDENED, SINGLESIG_NATIVE, SINGLESIG_TAPROOT, coin_type, format_path
@@ -105,10 +107,7 @@ def check_loaded_psbt(session, wallet_index: int, text: str) -> PSBT:
         _sighash(wallet, psbt.inputs[index])
         _sequence(psbt.inputs[index], transaction.vin[index])
     _outputs(session, wallet, psbt)
-    if _all_inputs_signed_by_wallet(session, wallet, psbt):
-        raise ReviewError(
-            f"A transaction whose inputs are already signed by this wallet is {NOT_SUPPORTED}."
-        )
+    verify_existing_signatures(psbt)
     return psbt
 
 
@@ -316,6 +315,192 @@ def _scripts(wallet, scope, session, item: dict):
         return
 
 
+def verify_existing_signatures(psbt: PSBT) -> None:
+    """Reject a PSBT when a signature already on an input does not match.
+
+    A multisig input can carry one partial signature per cosigner. Each one is
+    checked. Taproot key signatures and a finalized witness are checked too.
+    """
+    for index, scope in enumerate(psbt.inputs):
+        _verify_partial_signatures(psbt, index, scope)
+        _verify_taproot_script_signatures(psbt, index, scope)
+        _verify_taproot_key_field(psbt, index, scope)
+        _verify_final_witness(psbt, index, scope)
+
+
+def _signature_mismatch(index: int):
+    raise ReviewError(f"A signature on input {index} does not match.")
+
+
+def _verify_partial_signatures(psbt: PSBT, index: int, scope) -> None:
+    if not scope.partial_sigs:
+        return
+    try:
+        message = psbt.sighash(index, sighash=SIGHASH.ALL)
+    except Exception as exc:
+        raise ReviewError(f"A signature on input {index} does not match.") from exc
+    for pubkey, raw in scope.partial_sigs.items():
+        if not _ecdsa_matches(pubkey, raw, message):
+            _signature_mismatch(index)
+
+
+def _ecdsa_matches(pubkey, raw: bytes, message: bytes) -> bool:
+    if len(raw) < 9 or raw[0] != 0x30 or raw[-1] != SIGHASH.ALL:
+        return False
+    try:
+        signature = Signature.parse(raw[:-1])
+        return bool(pubkey.verify(signature, message))
+    except Exception:
+        return False
+
+
+def _verify_taproot_key_field(psbt: PSBT, index: int, scope) -> None:
+    raw = scope.unknown.get(b"\x13") if scope.unknown else None
+    if not raw:
+        return
+    _verify_taproot_key_signature(psbt, index, scope, raw)
+
+
+def _verify_taproot_script_signatures(psbt: PSBT, index: int, scope) -> None:
+    from embit.hashes import tagged_hash
+
+    for (pubkey, leaf_hash), raw in getattr(scope, "taproot_sigs", {}).items():
+        body = _schnorr_body(raw)
+        if body is None:
+            _signature_mismatch(index)
+        matched = False
+        for script_bytes in getattr(scope, "taproot_scripts", {}).values():
+            if not script_bytes:
+                continue
+            leaf_version = script_bytes[-1]
+            script = Script(script_bytes[:-1])
+            leaf = tagged_hash("TapLeaf", bytes([leaf_version]) + script.serialize())
+            if leaf != leaf_hash:
+                continue
+            matched = True
+            try:
+                message = psbt.sighash(
+                    index,
+                    sighash=SIGHASH.DEFAULT,
+                    ext_flag=1,
+                    script=script,
+                    leaf_version=leaf_version,
+                )
+            except Exception as exc:
+                raise ReviewError(f"A signature on input {index} does not match.") from exc
+            try:
+                matches = pubkey.schnorr_verify(SchnorrSig(body), message)
+            except Exception as exc:
+                raise ReviewError(f"A signature on input {index} does not match.") from exc
+            if not matches:
+                _signature_mismatch(index)
+        if not matched:
+            _signature_mismatch(index)
+
+
+def _verify_final_witness(psbt: PSBT, index: int, scope) -> None:
+    witness = scope.final_scriptwitness
+    if witness is None:
+        return
+    items = [item for item in list(getattr(witness, "items", []) or [])]
+    if not items:
+        return
+    if _is_taproot_input(scope) and len(items) == 1 and len(items[0]) in (64, 65):
+        _verify_taproot_key_signature(psbt, index, scope, items[0])
+        return
+    if len(items) == 2 and items[0][:1] == b"\x30" and _is_pubkey(items[1]):
+        try:
+            message = psbt.sighash(index, sighash=SIGHASH.ALL)
+            pubkey = PublicKey.parse(items[1])
+        except Exception as exc:
+            raise ReviewError(f"A signature on input {index} does not match.") from exc
+        if not _ecdsa_matches(pubkey, items[0], message):
+            _signature_mismatch(index)
+        return
+    if len(items) >= 2:
+        pubs = _pubkeys_in_script(items[-1])
+        signatures = [item for item in items[:-1] if item]
+        if signatures and not pubs:
+            _signature_mismatch(index)
+        if not pubs:
+            return
+        try:
+            message = psbt.sighash(index, sighash=SIGHASH.ALL)
+        except Exception as exc:
+            raise ReviewError(f"A signature on input {index} does not match.") from exc
+        for raw in signatures:
+            if not any(_ecdsa_matches(pubkey, raw, message) for pubkey in pubs):
+                _signature_mismatch(index)
+
+
+def _verify_taproot_key_signature(psbt: PSBT, index: int, scope, raw: bytes) -> None:
+    body = _schnorr_body(raw)
+    script = _taproot_output_key(scope)
+    if body is None or script is None:
+        _signature_mismatch(index)
+    try:
+        message = psbt.sighash(index, sighash=SIGHASH.DEFAULT)
+        pubkey = PublicKey.from_xonly(script)
+    except Exception as exc:
+        raise ReviewError(f"A signature on input {index} does not match.") from exc
+    try:
+        matches = pubkey.schnorr_verify(SchnorrSig(body), message)
+    except Exception as exc:
+        raise ReviewError(f"A signature on input {index} does not match.") from exc
+    if not matches:
+        _signature_mismatch(index)
+
+
+def _schnorr_body(raw: bytes) -> bytes | None:
+    if len(raw) == 64:
+        return raw
+    if len(raw) == 65 and raw[-1] == SIGHASH.DEFAULT:
+        return raw[:64]
+    return None
+
+
+def _taproot_output_key(scope) -> bytes | None:
+    utxo = scope.witness_utxo or getattr(scope, "utxo", None)
+    if utxo is None or utxo.script_pubkey is None:
+        return None
+    data = bytes(utxo.script_pubkey.data)
+    if len(data) == 34 and data[:2] == b"\x51\x20":
+        return data[2:]
+    return None
+
+
+def _is_taproot_input(scope) -> bool:
+    return _taproot_output_key(scope) is not None
+
+
+def _is_pubkey(raw: bytes) -> bool:
+    return len(raw) in (33, 65) and raw[:1] in (b"\x02", b"\x03", b"\x04")
+
+
+def _pubkeys_in_script(script: bytes) -> list:
+    pubs = []
+    index = 0
+    while index < len(script):
+        opcode = script[index]
+        index += 1
+        if opcode in (33, 65) and index + opcode <= len(script) and _is_pubkey(script[index : index + opcode]):
+            try:
+                pubs.append(PublicKey.parse(script[index : index + opcode]))
+            except Exception:
+                return []
+            index += opcode
+            continue
+        if opcode <= 0x4B:
+            index += opcode
+        elif opcode == 0x4C and index < len(script):
+            index += 1 + script[index]
+        elif opcode == 0x4D and index + 2 <= len(script):
+            index += 2 + int.from_bytes(script[index : index + 2], "little")
+        elif opcode == 0x4E and index + 4 <= len(script):
+            index += 4 + int.from_bytes(script[index : index + 4], "little")
+    return pubs
+
+
 def _sighash(wallet, scope):
     sighash = scope.sighash_type
     if sighash is None:
@@ -438,33 +623,87 @@ def _push_only(data: bytes) -> bool:
     return True
 
 
-def _all_inputs_signed_by_wallet(session, wallet, psbt: PSBT) -> bool:
-    """True when every input already has a signature from each seed this wallet holds.
+def multisig_signature_note(wallet, psbt: PSBT) -> str:
+    """How many more signatures a multisig still needs, from the least-signed input."""
+    if not wallet.multisig:
+        return ""
+    counts = [input_signature_count(scope) for scope in psbt.inputs]
+    least = min(counts) if counts else 0
+    required = int(wallet.threshold)
+    total = len(wallet.fingerprints)
+    if least == 0:
+        noun = "signature" if required == 1 else "signatures"
+        verb = "is" if required == 1 else "are"
+        return (
+            f"Some inputs have no signatures. "
+            f"{required} {noun} {verb} required to complete this {required}-of-{total} transaction."
+        )
+    extra = max(0, required - least)
+    held = "signature" if least == 1 else "signatures"
+    noun = "signature" if extra == 1 else "signatures"
+    verb = "is" if extra == 1 else "are"
+    return (
+        f"Each input already has {least} {held}. "
+        f"{extra} additional {noun} {verb} required to complete this {required}-of-{total} wallet."
+    )
 
-    Other cosigners may still be missing. A watch-only wallet has no seed, so it
-    is not treated as having signed.
-    """
-    if not any(session._seed_for(fingerprint) is not None for fingerprint in wallet.fingerprints):
-        return False
+
+def input_signature_count(scope) -> int:
+    """Signatures already attached to one input, from any cosigner."""
+    partial = len(getattr(scope, "partial_sigs", {}) or {})
+    if partial:
+        return partial
+    witness = getattr(scope, "final_scriptwitness", None)
+    items = [] if witness is None else list(getattr(witness, "items", []) or [])
+    return sum(1 for item in items if item and item[0] == 0x30)
+
+
+def seed_sign_rows(session, wallet, psbt: PSBT) -> list[dict]:
+    """One row per loaded seed in this wallet, in the wallet's fingerprint order."""
     taproot = wallet.role == SINGLESIG_TAPROOT
+    rows = []
+    for fingerprint in wallet.fingerprints:
+        if session._seed_for(fingerprint) is None:
+            continue
+        name = session.fingerprints[fingerprint].nickname
+        rows.append(
+            {
+                "fingerprint": fingerprint.hex(),
+                "name": name,
+                "signed": _fingerprint_signed_all(session, wallet, psbt, fingerprint, taproot),
+                "note": f"Already signed by key {name}",
+                "button": _sign_with_label(name),
+            }
+        )
+    return rows
+
+
+def _sign_with_label(name: str) -> str:
+    words = name.split()
+    if len(words) < 4:
+        return f"Sign Transaction with\n{name}"
+    return f"Sign Transaction with\n{' '.join(words[:2])}\n{' '.join(words[-2:])}"
+
+
+def _fingerprint_signed_all(session, wallet, psbt: PSBT, fingerprint: bytes, taproot: bool) -> bool:
+    if not psbt.inputs:
+        return False
     for scope in psbt.inputs:
-        keys = _our_signing_keys(session, wallet, scope)
-        if not keys or not all(_has_our_signature(scope, key, taproot) for key in keys):
+        pubkey = _pubkey_for_fingerprint(session, wallet, scope, fingerprint)
+        if pubkey is None or not _has_our_signature(scope, pubkey, taproot):
             return False
     return True
 
 
-def _our_signing_keys(session, wallet, scope):
-    keys = []
+def _pubkey_for_fingerprint(session, wallet, scope, fingerprint: bytes):
     for _pubkey, derivation in _derivation_items(scope):
-        fingerprint = derivation.fingerprint
-        if fingerprint not in wallet.fingerprints or session._seed_for(fingerprint) is None:
+        if derivation.fingerprint != fingerprint or session._seed_for(fingerprint) is None:
             continue
         row = _parse_path(list(derivation.derivation))
         if row["branch"] is None:
             continue
-        keys.append(_child_key(session, wallet, fingerprint, row))
-    return keys
+        return _child_key(session, wallet, fingerprint, row)
+    return None
 
 
 def _has_our_signature(scope, pubkey, taproot: bool) -> bool:

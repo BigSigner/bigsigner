@@ -385,39 +385,54 @@ def test_each_psbt_refusal_names_the_unsupported_case():
     _raises(session, foreign, "derived address does not match the PSBT")
 
 
-def test_a_transaction_already_signed_by_this_wallet_is_refused():
+def _seed_rows(session, psbt):
+    from bigsigner.psbt_check import seed_sign_rows
+
+    loaded = check_loaded_psbt(session, 0, psbt)
+    return seed_sign_rows(session, session.wallets[0], loaded)
+
+
+def test_a_transaction_already_signed_by_a_loaded_seed_stays_loaded():
     from embit.descriptor.checksum import checksum
     from embit.script import Witness
 
+    from bigsigner.psbt_check import multisig_signature_note
     from bigsigner.session import _account_path, _public_for
     from test_domain import LEGAL, expression
 
     session = _native()
     _fingerprint, child, _path = _child(session)
-    signed = _psbt(session)
-    signed.inputs[0].partial_sigs[child.key] = b"\x30"
-    _raises(session, signed, "already signed")
+    signed = _sign_loaded(session, _psbt(session))
+    assert _seed_rows(session, signed)[0]["signed"] is True
 
-    partial = _psbt(session, extra_input=True)
-    partial.inputs[0].partial_sigs[child.key] = b"\x30"
-    assert check_loaded_psbt(session, 0, partial).tx.version == 2
-    finalized = _psbt(session)
-    finalized.inputs[0].final_scriptwitness = Witness([b"\x30", child.key.sec()])
-    _raises(session, finalized, "already signed")
+    partial = _sign_loaded(session, _psbt(session, extra_input=True))
+    partial.inputs[1].partial_sigs.clear()
+    assert _seed_rows(session, partial)[0]["signed"] is False
+    finalized = _sign_loaded(session, _psbt(session))
+    raw = next(iter(finalized.inputs[0].partial_sigs.values()))
+    finalized.inputs[0].partial_sigs.clear()
+    finalized.inputs[0].final_scriptwitness = Witness([raw, child.key.sec()])
+    assert _seed_rows(session, finalized)[0]["signed"] is True
 
     taproot = _native_taproot()
-    key_spend = _psbt(taproot, sighash=None)
-    key_spend.inputs[0].final_scriptwitness = Witness([b"\x11" * 64])
-    _raises(taproot, key_spend, "already signed")
-    field = _psbt(taproot, sighash=None)
-    field.inputs[0].unknown = {b"\x13": b"\x22" * 64}
-    _raises(taproot, field, "already signed")
+    key_spend = _sign_loaded(taproot, _psbt(taproot, sighash=None))
+    assert _seed_rows(taproot, key_spend)[0]["signed"] is True
+    field = _sign_loaded(taproot, _psbt(taproot, sighash=None))
+    tap_sig = field.inputs[0].final_scriptwitness.items[0]
+    field.inputs[0].final_scriptwitness = None
+    field.inputs[0].unknown = {b"\x13": tap_sig}
+    assert _seed_rows(taproot, field)[0]["signed"] is True
 
     multi = Session()
     multi.add_mnemonic(ABANDON.split())
+    multi.add_mnemonic(LEGAL.split())
     first = expression(ABANDON, "m/48h/0h/0h/2h")
     second = expression(LEGAL, "m/48h/0h/0h/2h")
-    body = f"wsh(sortedmulti(2,{first},{second}))"
+    third = expression(
+        "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong",
+        "m/48h/0h/0h/2h",
+    )
+    body = f"wsh(sortedmulti(2,{first},{second},{third}))"
     multi.add_text(f"{body}#{checksum(body)}")
     wallet = multi.wallets[0]
     receive = multi.addresses(0, 0, 0, 1)[0]
@@ -425,21 +440,178 @@ def test_a_transaction_already_signed_by_this_wallet_is_refused():
     destination = address_to_scriptpubkey("bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu")
     tx = Transaction(
         version=2,
-        vin=[TransactionInput(b"\x11" * 32, 0, sequence=0xFFFFFFFD)],
+        vin=[
+            TransactionInput(b"\x11" * 32, 0, sequence=0xFFFFFFFD),
+            TransactionInput(b"\x22" * 32, 1, sequence=0xFFFFFFFD),
+        ],
         vout=[TransactionOutput(50_000, destination)],
     )
     psbt = PSBT(tx)
-    psbt.inputs[0].witness_utxo = TransactionOutput(100_000, script)
-    ours = None
+    for index, scope in enumerate(psbt.inputs):
+        scope.witness_utxo = TransactionOutput(100_000, script)
+        for fingerprint in wallet.fingerprints:
+            stored = _public_for(multi, fingerprint, wallet.role, 0)
+            derived = stored.xpub.derive(f"m/0/{index}")
+            path = _account_path("main", wallet.role, 0) + [0, index]
+            scope.bip32_derivations[derived.key] = DerivationPath(fingerprint, path)
+    assert multisig_signature_note(wallet, psbt) == (
+        "Some inputs have no signatures. "
+        "2 signatures are required to complete this 2-of-3 transaction."
+    )
+    ours = [
+        scope.bip32_derivations and next(
+            key for key, origin in scope.bip32_derivations.items()
+            if origin.fingerprint == wallet.fingerprints[0]
+        )
+        for scope in psbt.inputs
+    ]
+    psbt.inputs[0].partial_sigs[ours[0]] = b"\x30"
+    assert multisig_signature_note(wallet, psbt).startswith("Some inputs have no signatures.")
+    psbt.inputs[1].partial_sigs[ours[1]] = b"\x30"
+    assert multisig_signature_note(wallet, psbt) == (
+        "Each input already has 1 signature. "
+        "1 additional signature is required to complete this 2-of-3 wallet."
+    )
+
+    app = App()
+    app.session = multi
+    app.wallet_index = 0
+    one = PSBT(
+        Transaction(
+            version=2,
+            vin=[TransactionInput(b"\x33" * 32, 0, sequence=0xFFFFFFFD)],
+            vout=[TransactionOutput(50_000, destination)],
+        )
+    )
+    one.inputs[0].witness_utxo = TransactionOutput(100_000, script)
     for fingerprint in wallet.fingerprints:
         stored = _public_for(multi, fingerprint, wallet.role, 0)
         derived = stored.xpub.derive("m/0/0")
         path = _account_path("main", wallet.role, 0) + [0, 0]
-        psbt.inputs[0].bip32_derivations[derived.key] = DerivationPath(fingerprint, path)
-        if multi._seed_for(fingerprint) is not None:
-            ours = derived.key
-    psbt.inputs[0].partial_sigs[ours] = b"\x30"
-    _raises(multi, psbt, "already signed")
+        one.inputs[0].bip32_derivations[derived.key] = DerivationPath(fingerprint, path)
+    app._accept_psbt_text(one.serialize(), "file")
+    assert app.screen == "psbt-yaml"
+    app.scroll["psbt-yaml"] = 10**9
+    app.render()
+    assert "Some inputs have no signatures." in " ".join(item["text"] for item in app.texts)
+    sign_hits = [hit for hit in app.hits if hit["action"].startswith("psbt-sign-")]
+    assert len(sign_hits) == 2
+    app._act(sign_hits[0]["action"])
+    app.scroll["psbt-yaml"] = 10**9
+    app.render()
+    shown = " ".join(item["text"] for item in app.texts)
+    assert "Each input already has 1 signature." in shown
+    assert "1 additional signature is required to complete this 2-of-3 wallet." in shown
+    app._act("psbt-continue")
+    assert app.screen == "psbt-share"
+    app._act("back")
+    assert app.screen == "psbt-yaml"
+    app.scroll["psbt-yaml"] = 10**9
+    app.render()
+    restored = " ".join(item["text"] for item in app.texts)
+    assert "Some inputs have no signatures." in restored
+    assert "Each input already has 1 signature." not in restored
+    assert not any(hit["action"] == "psbt-continue" for hit in app.hits)
+
+
+def _sign_loaded(session, psbt):
+    from bigsigner.session import _seed_root
+
+    fingerprint = session.wallets[0].fingerprints[0]
+    psbt.sign_with(_seed_root(session._seed_for(fingerprint)))
+    return psbt
+
+
+def test_a_signature_that_does_not_match_is_rejected():
+    from embit.descriptor import Descriptor
+    from embit.descriptor.checksum import checksum
+    from embit.script import Witness
+
+    from bigsigner.session import _account_path, _descriptor, _public_for, _seed_root
+    from test_domain import LEGAL, expression
+
+    session = _native()
+    signed = _sign_loaded(session, _psbt(session))
+    key = next(iter(signed.inputs[0].partial_sigs))
+    raw = bytearray(signed.inputs[0].partial_sigs[key])
+    raw[5] ^= 1
+    signed.inputs[0].partial_sigs[key] = bytes(raw)
+    try:
+        check_loaded_psbt(session, 0, signed)
+    except ReviewError as exc:
+        assert str(exc) == "A signature on input 0 does not match."
+    else:
+        raise AssertionError("partial")
+
+    _fingerprint, child, _path = _child(session)
+    finalized = _sign_loaded(session, _psbt(session))
+    good = next(iter(finalized.inputs[0].partial_sigs.values()))
+    finalized.inputs[0].partial_sigs.clear()
+    bad = bytearray(good)
+    bad[5] ^= 1
+    finalized.inputs[0].final_scriptwitness = Witness([bytes(bad), child.key.sec()])
+    try:
+        check_loaded_psbt(session, 0, finalized)
+    except ReviewError as exc:
+        assert str(exc) == "A signature on input 0 does not match."
+    else:
+        raise AssertionError("witness")
+
+    taproot = _native_taproot()
+    key_spend = _sign_loaded(taproot, _psbt(taproot, sighash=None))
+    item = bytearray(key_spend.inputs[0].final_scriptwitness.items[0])
+    item[0] ^= 1
+    key_spend.inputs[0].final_scriptwitness = Witness([bytes(item)])
+    try:
+        check_loaded_psbt(taproot, 0, key_spend)
+    except ReviewError as exc:
+        assert str(exc) == "A signature on input 0 does not match."
+    else:
+        raise AssertionError("taproot")
+
+    multi = Session()
+    multi.add_mnemonic(ABANDON.split())
+    multi.add_mnemonic(LEGAL.split())
+    first = expression(ABANDON, "m/48h/0h/0h/2h")
+    second = expression(LEGAL, "m/48h/0h/0h/2h")
+    third = expression(
+        "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong",
+        "m/48h/0h/0h/2h",
+    )
+    body = f"wsh(sortedmulti(2,{first},{second},{third}))"
+    multi.add_text(f"{body}#{checksum(body)}")
+    wallet = multi.wallets[0]
+    derived = Descriptor.from_string(_descriptor(wallet, multi)).derive(0, branch_index=0)
+    destination = address_to_scriptpubkey("bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu")
+    tx = Transaction(
+        version=2,
+        vin=[TransactionInput(b"\x44" * 32, 0, sequence=0xFFFFFFFD)],
+        vout=[TransactionOutput(50_000, destination)],
+    )
+    psbt = PSBT(tx)
+    scope = psbt.inputs[0]
+    scope.witness_utxo = TransactionOutput(100_000, derived.script_pubkey())
+    scope.witness_script = derived.witness_script()
+    scope.sighash_type = SIGHASH.ALL
+    for fingerprint in wallet.fingerprints:
+        stored = _public_for(multi, fingerprint, wallet.role, 0)
+        child_key = stored.xpub.derive("m/0/0")
+        path = _account_path("main", wallet.role, 0) + [0, 0]
+        scope.bip32_derivations[child_key.key] = DerivationPath(fingerprint, path)
+    for fingerprint in wallet.fingerprints[:2]:
+        psbt.sign_with(_seed_root(multi._seed_for(fingerprint)))
+    assert len(scope.partial_sigs) == 2
+    check_loaded_psbt(multi, 0, psbt)
+    first_key = next(iter(scope.partial_sigs))
+    broken = bytearray(scope.partial_sigs[first_key])
+    broken[5] ^= 1
+    scope.partial_sigs[first_key] = bytes(broken)
+    try:
+        check_loaded_psbt(multi, 0, psbt)
+    except ReviewError as exc:
+        assert str(exc) == "A signature on input 0 does not match."
+    else:
+        raise AssertionError("multisig")
 
 
 def _native_taproot():
