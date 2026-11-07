@@ -365,15 +365,11 @@ def _output_card(app, frame, y, paint, offset, card) -> int:
             )
             cursor += 12
     if card["kind"] != "op_return":
-        shown = format_btc(card["amount"])
-        cursor = _card_text(frame, "Amount (BTC):", cursor, paint, offset, TITLE_SIZE, MUTED)
-        cursor = _amount_flow(frame, shown, cursor, paint, offset, INK)
+        cursor = _btc_amount(frame, cursor, paint, offset, card["amount"], INK)
     else:
         fill = RED if card["amount"] else INK
-        shown = format_btc(card["amount"], bare_zero=True)
         cursor += 16
-        cursor = _card_text(frame, "Amount (BTC):", cursor, paint, offset, TITLE_SIZE, MUTED)
-        cursor = _amount_flow(frame, shown, cursor, paint, offset, fill)
+        cursor = _btc_amount(frame, cursor, paint, offset, card["amount"], fill, bare_zero=True)
         cursor += 16
         cursor = _card_button(
             frame, cursor, "Show OP_RETURN Content", f"psbt-opreturn-{card['index']}", paint, offset,
@@ -394,11 +390,9 @@ def _output_card_text(app, frame, start, offset, card, height):
     cursor = start + 16
     if card["kind"] == "op_return":
         cursor = _centered_flow(frame, "OP_RETURN", cursor, True, offset, TITLE_SIZE, INK)
-        shown = format_btc(card["amount"], bare_zero=True)
         fill = RED if card["amount"] else INK
         cursor += 16
-        cursor = _card_text(frame, "Amount (BTC):", cursor, True, offset, TITLE_SIZE, MUTED)
-        cursor = _amount_flow(frame, shown, cursor, True, offset, fill)
+        cursor = _btc_amount(frame, cursor, True, offset, card["amount"], fill, bare_zero=True)
         cursor += 16
         cursor = _card_button(
             frame, cursor, "Show OP_RETURN Content", f"psbt-opreturn-{card['index']}", True, offset,
@@ -424,9 +418,7 @@ def _output_card_text(app, frame, start, offset, card, height):
                 frame, cursor, label, f"psbt-search-{card['index']}-0", True, offset, enabled=enabled,
             )
             cursor += 12
-        shown = format_btc(card["amount"])
-        cursor = _card_text(frame, "Amount (BTC):", cursor, True, offset, TITLE_SIZE, MUTED)
-        cursor = _amount_flow(frame, shown, cursor, True, offset, INK)
+        cursor = _btc_amount(frame, cursor, True, offset, card["amount"], INK)
     return start + height + 12
 
 
@@ -448,9 +440,7 @@ def _change_body(app, frame, card, cursor, paint, offset) -> int:
     cursor += 8
     fill = WARNING if card["receive_change"] else INK
     cursor = _centered_flow(frame, card["place"], cursor, paint, offset, TITLE_SIZE, fill)
-    shown = format_btc(card["amount"])
-    cursor = _card_text(frame, "Amount (BTC):", cursor, paint, offset, TITLE_SIZE, MUTED)
-    return _amount_flow(frame, shown, cursor, paint, offset, INK)
+    return _btc_amount(frame, cursor, paint, offset, card["amount"], INK)
 
 
 def _input_card(app, frame, y, paint, offset, card) -> int:
@@ -475,10 +465,8 @@ def _input_body(app, frame, card, cursor, paint, offset) -> int:
     for row in card["txid_rows"]:
         cursor = _centered_flow(frame, row, cursor, paint, offset, TXID_SIZE, INK, mono=True)
     cursor = _card_text(frame, f"Output Index: {card['vout']}", cursor, paint, offset, TITLE_SIZE, INK)
-    shown = format_btc(card["amount"])
     cursor += 16
-    cursor = _card_text(frame, "Amount (BTC):", cursor, paint, offset, TITLE_SIZE, MUTED)
-    cursor = _amount_flow(frame, shown, cursor, paint, offset, INK)
+    cursor = _btc_amount(frame, cursor, paint, offset, card["amount"], INK)
     cursor += 16
     cursor = _sequence_line(frame, cursor, paint, offset, card["sequence"])
     if card["rbf_disabled"]:
@@ -595,6 +583,29 @@ def _fee_rate_size(view, fee_text: str) -> int:
         sizes.append(_btc_size(format_btc(card["amount"])))
     limit = min(sizes)
     return 40 if limit > 40 else TITLE_SIZE
+
+
+def _btc_amount(frame, y, paint, offset, amount, fill, bare_zero=False) -> int:
+    """A zero amount shares the label line: ``Amount (BTC): 0``."""
+    if int(amount) == 0:
+        return _zero_amount_line(frame, y, paint, offset)
+    shown = format_btc(amount, bare_zero=bare_zero)
+    y = _card_text(frame, "Amount (BTC):", y, paint, offset, TITLE_SIZE, MUTED)
+    return _amount_flow(frame, shown, y, paint, offset, fill)
+
+
+def _zero_amount_line(frame, y, paint, offset) -> int:
+    label = "Amount (BTC): "
+    value = "0"
+    face = font(TITLE_SIZE)
+    x = MARGIN + 16
+    if paint:
+        yy = y - offset
+        if HEADER <= yy < HEIGHT:
+            frame.draw.text((x, yy), label, font=face, fill=MUTED)
+            frame.draw.text((x + frame.draw.textlength(label, font=face), yy), value, font=face, fill=INK)
+            frame.mark(label + value, frame.draw.textbbox((x, yy), label + value, font=face))
+    return y + TITLE_SIZE + 8
 
 
 def _amount_flow(frame, text, y, paint, offset, fill) -> int:

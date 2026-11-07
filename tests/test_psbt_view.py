@@ -141,6 +141,17 @@ def test_warnings_name_op_return_fee_locktime_and_rbf():
     view = describe_psbt(session, 0, zero)
     assert view["warnings"][0]["text"] == OP_RETURN_WARNING
     assert view["outputs"][-1]["ascii"] is True
+    app = App()
+    app.session = session
+    app.wallet_index = 0
+    app._accept_psbt_text(zero.serialize(), "file")
+    seen = set()
+    for _ in range(12):
+        app.render()
+        seen.update(item["text"] for item in app.texts)
+        app.scroll["psbt-yaml"] = app.scroll.get("psbt-yaml", 0) + 220
+    assert "Amount (BTC): 0" in seen
+    assert "0" not in seen
 
     costly = _psbt(session, amount=200_000, output=50_000)
     view = describe_psbt(session, 0, costly)
@@ -216,8 +227,8 @@ def test_change_is_its_own_section_and_a_receive_address_is_warned():
     assert view["outputs"] == []
     card = view["change_outputs"][0]
     assert card["place"] == "Receive Address #0"
-    assert card["receive_change"] is True
-    assert view["warnings"] == [{"text": RECEIVE_CHANGE_ONE, "tone": "yellow"}]
+    assert card["receive_change"] is False
+    assert view["warnings"] == []
 
     several = _psbt(session, output=40_000)
     _pay_this_wallet(several, session, branch=1, index=0, amount=25_000)

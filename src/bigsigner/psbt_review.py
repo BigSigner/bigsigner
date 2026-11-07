@@ -256,7 +256,8 @@ def _warnings(transaction, inputs, outputs, external) -> list[str]:
         warnings.append("There is more than one change output.")
     if len(external) > 1:
         warnings.append("There is more than one external output.")
-    if any(item["change"] and item["branch"] == 0 for item in outputs):
+    external = any(not item["change"] for item in outputs)
+    if external and any(item["change"] and item["branch"] == 0 for item in outputs):
         warnings.append("A change output uses a receive address.")
     if any(item["op_return"] for item in outputs):
         warnings.append("The transaction contains an OP_RETURN output.")

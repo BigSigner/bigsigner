@@ -240,6 +240,9 @@ def describe_psbt(session, wallet_index: int, psbt: PSBT) -> dict:
             change_outputs.append(card)
         else:
             outputs.append(card)
+    if not outputs and _change_returns_to_spending_account(wallet, change_outputs):
+        for card in change_outputs:
+            card["receive_change"] = False
     fee = sum(item["amount"] for item in inputs) - sum(
         int(scope.value if scope.value is not None else psbt.tx.vout[index].value)
         for index, scope in enumerate(psbt.outputs)
@@ -336,6 +339,20 @@ def _scan_accounts(session, wallet, accounts: dict, target: str, start: int, cou
         wallet.accounts.clear()
         wallet.accounts.update(saved)
     return None
+
+
+def _change_returns_to_spending_account(wallet, change_outputs: list[dict]) -> bool:
+    """True when every change output uses the account this transaction spends."""
+    if not change_outputs:
+        return False
+    spending = {fingerprint: int(wallet.accounts[fingerprint]) for fingerprint in wallet.fingerprints}
+    for card in change_outputs:
+        accounts = card.get("accounts") or {}
+        if set(accounts) != set(spending):
+            return False
+        if any(int(accounts[fingerprint]) != spending[fingerprint] for fingerprint in spending):
+            return False
+    return True
 
 
 def _warnings(inputs: list[dict], outputs: list[dict], change_outputs: list[dict], fee: int, locktime: int) -> list[dict]:
@@ -483,6 +500,7 @@ def _output_card(session, wallet_index: int, psbt: PSBT, index: int, scope) -> d
         "owned": None if change else owned,
         "change": change,
         "place": owned["place"] if change else "",
+        "accounts": None if owned is None else owned["accounts"],
         "receive_change": bool(change and owned["branch"] == 0),
         "payload": None,
         "ascii": False,
@@ -504,6 +522,7 @@ def _owned_output(session, script, derivations):
             "wallet_index": index,
             "name": session.wallet_short_name_of(wallet),
             "account_line": account_line(wallet.fingerprints, located["accounts"]),
+            "accounts": located["accounts"],
             "branch": located["branch"],
             "index": located["index"],
             "place": place_line(located["branch"], located["index"]),
