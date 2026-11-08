@@ -55,7 +55,10 @@ class LiveCamera:
         if self._camera is not None:
             return self._camera
         for backend in (_Picamera2, _LegacyPicamera):
-            camera = backend.open()
+            try:
+                camera = backend.open()
+            except Exception:
+                continue
             if camera is not None:
                 self._camera = camera
                 return camera
@@ -76,12 +79,20 @@ class _Picamera2:
         except ImportError:
             return None
         camera = Picamera2()
-        config = camera.create_preview_configuration(
-            main={"size": CAPTURE_SIZE, "format": "RGB888"},
-            buffer_count=2,
-        )
-        camera.configure(config)
-        camera.start()
+        try:
+            config = camera.create_preview_configuration(
+                main={"size": CAPTURE_SIZE, "format": "RGB888"},
+                buffer_count=2,
+            )
+            camera.configure(config)
+            camera.start()
+        except Exception:
+            # A failed modern backend must release resources before fallback.
+            try:
+                camera.close()
+            except Exception:
+                pass
+            raise
         return cls(camera)
 
     def frame(self) -> Image.Image:
@@ -137,6 +148,10 @@ class _LegacyPicamera:
                 buffer = io.BytesIO()
                 try:
                     self._camera.capture(buffer, format="rgb", use_video_port=True)
+                    width, height = CAPTURE_SIZE
+                    image = Image.frombuffer(
+                        "RGB", (width, height), buffer.getvalue(), "raw", "RGB", 0, 1
+                    ).copy()
                 except Exception as exc:
                     misses += 1
                     if misses < 3 and not self._stop.is_set():
@@ -144,10 +159,6 @@ class _LegacyPicamera:
                     self._error = exc
                     return
                 misses = 0
-                width, height = CAPTURE_SIZE
-                image = Image.frombuffer(
-                    "RGB", (width, height), buffer.getvalue(), "raw", "RGB", 0, 1
-                ).copy()
                 with self._lock:
                     self._latest = image
         finally:
