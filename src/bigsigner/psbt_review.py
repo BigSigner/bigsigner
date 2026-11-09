@@ -5,7 +5,7 @@ from embit.psbt import PSBT, PSBTError
 from embit.script import Script
 from embit.transaction import SIGHASH, Transaction, TransactionInput, TransactionOutput, Witness
 
-from .paths import HARDENED, classify_path, format_path, parse_path
+from .paths import HARDENED, classify_path, format_path, parse_path, path_network_mismatch
 from .session import SessionError, _account_path, _seed_root
 
 LOCKTIME_THRESHOLD = 500_000_000
@@ -185,6 +185,9 @@ def _split_wallet_path(path: list[int], role: str, network: str) -> dict:
         if len(path) != 5:
             raise ReviewError("An input derivation does not include the address index.")
         account_path, branch, index = path[:3], path[3], path[4]
+    mismatch = path_network_mismatch(path, network, address=True)
+    if mismatch:
+        raise ReviewError(mismatch)
     try:
         parsed_role, account = classify_path(account_path, network)
     except Exception as exc:

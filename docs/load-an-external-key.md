@@ -24,7 +24,7 @@ A supported multisig descriptor opens the same screen. It says this is a multisi
 
 BigSigner opens a screen titled Error loading key, in red text, and does not store the key when:
 
-- The derivation path is not a supported native-SegWit or Taproot path for this network.
+- The derivation path is not a supported native-SegWit or Taproot path for this network. If the path is otherwise supported and only the coin type is wrong, the error names the selected network and the path’s network. For example: The currently selected network is testnet, but the derivation path belongs to mainnet. Testnet and regtest share coin type `1h` and are compatible here.
 - That fingerprint and path are already loaded.
 - A seed with that fingerprint is already loaded and derives the same extended key. The message names the fingerprint. The external key is unnecessary.
 - A seed with that fingerprint is already loaded but does not derive this extended key. BigSigner treats that as suspicious: a real wallet is less likely to produce it than a bug or malicious code, and less likely than winning the lottery.

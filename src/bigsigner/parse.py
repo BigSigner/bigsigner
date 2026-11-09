@@ -86,6 +86,7 @@ def _key_from_expression(body: str, network: str) -> tuple[ParsedKey, str]:
     fingerprint = bytes.fromhex(match.group(1))
     try:
         path = parse_path(match.group(2))
+        branch_note = _read_suffix(match.group(4) or "")
         role, account = classify_path(path, network)
     except PathError as exc:
         raise ParseError(str(exc)) from exc
@@ -103,7 +104,6 @@ def _key_from_expression(body: str, network: str) -> tuple[ParsedKey, str]:
         raise ParseError(
             "The extended key's depth or last step does not match the derivation path."
         )
-    branch_note = _read_suffix(match.group(4) or "")
     return ParsedKey(fingerprint, path, xpub, account, role, branch_note), branch_note
 
 

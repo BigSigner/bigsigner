@@ -11,7 +11,7 @@ import re
 
 from embit.misc import secp256k1
 
-from .paths import HARDENED, PathError, coin_type, format_path, parse_path
+from .paths import HARDENED, PathError, coin_type, format_path, parse_path, path_network_mismatch
 from .scan import classify_content, wrong_type_message
 from .session import SessionError, _seed_root
 
@@ -144,6 +144,9 @@ def native_sign_path(path_text: str, network: str, account: int) -> tuple[int, i
     coin = coin_type(network) | HARDENED
     if not steps or steps[0] != purpose:
         raise SessionError(BAD_PURPOSE)
+    mismatch = path_network_mismatch(steps, network, address=True)
+    if mismatch:
+        raise SessionError(mismatch)
     if len(steps) < 2 or steps[1] != coin:
         raise SessionError(BAD_NETWORK)
     if len(steps) < 3 or not (steps[2] & HARDENED) or steps[2] != (account | HARDENED):

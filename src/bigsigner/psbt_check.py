@@ -10,7 +10,7 @@ from embit.psbt import PSBT, PSBTError
 from embit.script import Script
 from embit.transaction import SIGHASH
 
-from .paths import HARDENED, SINGLESIG_NATIVE, SINGLESIG_TAPROOT, coin_type, format_path
+from .paths import HARDENED, SINGLESIG_NATIVE, SINGLESIG_TAPROOT, PathError, classify_path, coin_type, format_path, path_network_mismatch
 from .psbt_load import UNREADABLE, psbt_bytes
 from .psbt_review import ReviewError, _tx_weight
 from .session import SessionError, _public_for
@@ -241,23 +241,28 @@ def _input_paths(session, wallet, scope) -> dict:
             f"An input without a master fingerprint and derivation path is {NOT_SUPPORTED}."
         )
     rows = []
+    all_rows = []
     for fingerprint, path in derivations:
+        row = {**_parse_path(path), "fingerprint": fingerprint, "path": path}
+        all_rows.append(row)
         if fingerprint not in wallet.fingerprints and not _wallet_for_fingerprint(session, fingerprint):
             continue
-        rows.append(_parse_path(path))
-        rows[-1]["fingerprint"] = fingerprint
-        rows[-1]["path"] = path
+        mismatch = path_network_mismatch(path, session.network, address=True)
+        if mismatch:
+            raise ReviewError(mismatch)
+        rows.append(row)
     ours = [row for row in rows if row["fingerprint"] in wallet.fingerprints]
     if not ours:
-        raise ReviewError(_other_wallet_message(session, wallet, rows) or _UNRECOGNIZED)
+        raise ReviewError(_other_wallet_message(session, wallet, all_rows) or _UNRECOGNIZED)
     if any(row["out_of_range"] and row["role"] == wallet.role for row in ours):
         raise ReviewError(
             f"An input derivation path that this wallet would not derive is {NOT_SUPPORTED}."
         )
-    return {"rows": ours, "prefix": ours[0]["prefix"]}
+    return {"rows": ours, "all_rows": all_rows, "prefix": ours[0]["prefix"]}
 
 
 _UNRECOGNIZED = f"An unrecognized derivation path is {NOT_SUPPORTED}."
+_DIFFERENT_WALLET = "This transaction does not belong to this wallet."
 
 
 def _parse_path(path: list[int]) -> dict:
@@ -310,26 +315,12 @@ def _known_wallet(session, wallet, parsed: list[dict]):
                 f"An input derivation path that this wallet would not derive is {NOT_SUPPORTED}."
             )
         if row["coin"] != network_coin or row["role"] != wallet.role:
-            other = _matching_wallet(session, item, skip=wallet)
-            if other is not None:
-                current = session.wallet_short_name_of(wallet)
-                name = session.wallet_short_name_of(other)
-                raise ReviewError(
-                    f"This transaction does not belong to wallet {current}. It belongs to wallet {name}."
-                )
-            raise ReviewError(_UNRECOGNIZED)
+            raise ReviewError(_other_wallet_message(session, wallet, item["all_rows"]) or _UNRECOGNIZED)
         if row["fingerprint"] not in wallet.fingerprints:
-            raise ReviewError(_UNRECOGNIZED)
+            raise ReviewError(_other_wallet_message(session, wallet, item["all_rows"]) or _UNRECOGNIZED)
     fingerprints = {row["fingerprint"] for row in item["rows"]}
     if fingerprints != set(wallet.fingerprints):
-        other = _matching_wallet(session, item, skip=wallet)
-        if other is not None:
-            current = session.wallet_short_name_of(wallet)
-            name = session.wallet_short_name_of(other)
-            raise ReviewError(
-                f"This transaction does not belong to wallet {current}. It belongs to wallet {name}."
-            )
-        raise ReviewError(_UNRECOGNIZED)
+        raise ReviewError(_other_wallet_message(session, wallet, item["all_rows"]) or _UNRECOGNIZED)
 
 
 def _selected_accounts(wallet, parsed: list[dict]):
@@ -358,6 +349,10 @@ def _matches_psbt(session, wallet, scope, item: dict):
     utxo = scope.witness_utxo
     script = None if utxo is None else utxo.script_pubkey
     if script is not None and script != derived_script:
+        if any(row["fingerprint"] not in wallet.fingerprints for row in item["all_rows"]):
+            other = _other_wallet_message(session, wallet, item["all_rows"])
+            if other:
+                raise ReviewError(other)
         raise ReviewError(
             f"An input whose derived address does not match the PSBT is {NOT_SUPPORTED}."
         )
@@ -852,6 +847,9 @@ def _output_wallet(session, derivations):
         parsed = _parse_path(path)
         for wallet in session.wallets:
             if fingerprint in wallet.fingerprints and wallet.role == parsed["role"]:
+                mismatch = path_network_mismatch(path, session.network, address=True)
+                if mismatch:
+                    raise ReviewError(mismatch)
                 return wallet
     return None
 
@@ -935,12 +933,23 @@ def _matching_wallet(session, item: dict, skip):
 
 
 def _other_wallet_message(session, wallet, rows: list[dict]) -> str | None:
+    """Identify another wallet for supported origins, preserving network errors."""
     if not rows or any(row["out_of_range"] for row in rows):
         return None
+    for row in rows:
+        if row["branch"] is None:
+            return None
+        mismatch = path_network_mismatch(row["path"], session.network, address=True)
+        if mismatch:
+            raise ReviewError(mismatch)
+        try:
+            classify_path(list(row["prefix"]), session.network)
+        except PathError:
+            return None
     item = {"rows": rows}
     other = _matching_wallet(session, item, skip=wallet)
     if other is None:
-        return None
+        return _DIFFERENT_WALLET
     current = session.wallet_short_name_of(wallet)
     name = session.wallet_short_name_of(other)
     return f"This transaction does not belong to wallet {current}. It belongs to wallet {name}."

@@ -8,7 +8,7 @@ wsh(sortedmulti(2,[fingerprint/48h/0h/0h/2h]xpub.../<0;1>/*,[fingerprint/48h/0h/
 
 `2` is how many signatures are required. Each key has its own account. In the example, one cosigner uses account 0 and the other uses account 7. That is allowed. A wallet has between 2 and 15 keys; m-of-15 is the maximum. Every address still uses the same receive or change step and the same address index on every key. Receive index 5 of that example is `.../0h/2h/0/5` for the first key and `.../7h/2h/0/5` for the second.
 
-On testnet the coin type is `1h`, not `0h`.
+On testnet and regtest the coin type is `1h`, not `0h`. If a supported derivation path is otherwise valid but its coin type belongs to the other network, the error names both the selected network and the path’s network. A `1h` path is described as testnet or regtest because the path cannot distinguish them.
 
 ## Extended keys
 

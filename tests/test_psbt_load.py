@@ -76,7 +76,9 @@ def _raises(session, psbt, snippet):
     except ReviewError as exc:
         assert snippet in str(exc)
         assert "Bad Transaction" not in str(exc)
-        assert NOT_SUPPORTED in str(exc) or "does not belong" in str(exc) or "spends from account" in str(exc)
+        assert any(part in str(exc) for part in (
+            NOT_SUPPORTED, "does not belong", "spends from account",
+        ))
     else:
         raise AssertionError(snippet)
 
@@ -326,7 +328,7 @@ def test_each_psbt_refusal_names_the_unsupported_case():
     taproot_path = [86 | 0x80000000, path[1], path[2], 0, 0]
     other.inputs[0].bip32_derivations.clear()
     other.inputs[0].bip32_derivations[child.key] = DerivationPath(fingerprint, taproot_path)
-    _raises(session, other, "unrecognized derivation path")
+    _raises(session, other, "does not belong to this wallet")
 
     account = _psbt(session, account=2)
     _raises(session, account, "spends from account 2")

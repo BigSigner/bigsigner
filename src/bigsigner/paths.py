@@ -56,6 +56,40 @@ def parse_path(text: str) -> list[int]:
 def classify_path(steps: list[int], network: str) -> tuple[str, int]:
     """Return the role and the account index, or raise PathError."""
     coin = coin_type(network) | HARDENED
+    try:
+        return _classify_account_path(steps, coin)
+    except PathError as exc:
+        mismatch = path_network_mismatch(steps, network)
+        if mismatch:
+            raise PathError(mismatch) from exc
+        raise
+
+
+def path_network_mismatch(steps: list[int], network: str, *, address: bool = False) -> str | None:
+    """Explain a wrong coin type only when the rest is a supported path.
+
+    Account origins are checked by default. PSBTs and message-signing commands
+    also need a valid Receive/Change branch and non-hardened address index.
+    """
+    coin = coin_type(network) | HARDENED
+    if address:
+        if len(steps) < 5 or steps[-2] not in (0, 1) or not 0 <= steps[-1] < HARDENED:
+            return None
+        steps = steps[:-2]
+    if len(steps) < 2 or steps[1] not in (HARDENED, HARDENED | 1) or steps[1] == coin:
+        return None
+    if any(not 0 <= step < 2 * HARDENED for step in steps):
+        return None
+    try:
+        _classify_account_path(steps, steps[1])
+    except PathError:
+        return None
+    selected = {"main": "mainnet", "test": "testnet", "regtest": "regtest"}[network]
+    belonging = "mainnet" if steps[1] == HARDENED else "testnet or regtest"
+    return f"The currently selected network is {selected}, but the derivation path belongs to {belonging}."
+
+
+def _classify_account_path(steps: list[int], coin: int) -> tuple[str, int]:
     purpose = steps[0] if steps else None
     if (
         len(steps) == 4

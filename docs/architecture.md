@@ -31,7 +31,7 @@ Wallets are descriptors built from those keys. Changing the network drops wallet
 | --- | --- |
 | `names.py` | Fingerprint name. See [fingerprint-names.md](fingerprint-names.md). |
 | `parse.py` | Key expressions and wallet descriptors. A multisig `wsh(sortedmulti(...))` accepts 2 through 15 keys (`MAX_MULTISIG_KEYS`); m-of-15 is the maximum. |
-| `paths.py` | The three supported derivation templates and the network coin type. |
+| `paths.py` | The three supported derivation templates and the network coin type. `path_network_mismatch` names both networks only after validating the rest of the account or address path; import, PSBT, and message-signing checks preserve that explanation. |
 | `slip132.py` | `zpub`, `Zpub`, `vpub`, and `Vpub`, converted to `xpub` or `tpub` before comparison. |
 | `bsms.py` | A BSMS 1.0 file, reduced to its descriptor. |
 | `descriptor_files.py` | A Specter-DIY JSON export or a Bitcoin Core descriptor file, reduced to its descriptor. |
@@ -47,6 +47,8 @@ Wallets are descriptors built from those keys. Changing the network drops wallet
 | `psbt_review.py` | Check a PSBT against one loaded wallet, then sign with a seed that is in memory. |
 | `sdcard.py` | Load and export files. The browser page and the tests call `mount_memory`. On the panel, with no memory card mounted, the same helpers use `/mnt/microsd` (override with `BIGSIGNER_SDCARD_PATH`). |
 | `licenses.py` | Notices shown from About → Licenses. |
+
+`psbt_check._input_paths` retains all input origins for ownership diagnostics while keeping only the selected wallet’s origins for derivation and signing checks. Supported origins from an unavailable wallet report This transaction does not belong to this wallet; a matching loaded wallet is named. Invalid paths and network mismatches retain their own diagnostics.
 
 Bitcoin operations go through embit 0.8.0, the release SeedSigner pins. Pillow draws the screen. `qr.py` builds the codes the device displays: through libqrencode when the image has it (milliseconds on a Pi Zero), otherwise through the pure-Python qrcode package (seconds). Each payload is built once and cached. A QR drawn for another device's camera has a Brightness control. It scales every pixel on that screen, including the title bar and the buttons, so the panel does not blind the camera. Black stays black.
 

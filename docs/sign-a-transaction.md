@@ -6,7 +6,7 @@ PSBT version 0 and version 2 are read. A version 0 PSBT that contains a per-inpu
 
 ## What has to match
 
-Every input must belong to the selected wallet. Each input needs a derivation path. For a multisig input, every cosigner must use the same receive-or-change step and the same address index. One key ending in `/0/5` and another in `/1/5`, or `/0/6`, is rejected.
+Every input must belong to the selected wallet. Each input needs a derivation path. If its paths are supported but its fingerprints or wallet type do not match the selected wallet, the error identifies the other loaded wallet when possible. If that wallet is not loaded, it says This transaction does not belong to this wallet. This also covers MultiSig wallets whose participant sets only partly match. If a supported path is otherwise valid but uses the other network’s coin type, the error names the currently selected network and the network indicated by that path. A mainnet path uses `0h`; testnet and regtest share `1h`, so that path is described as belonging to testnet or regtest. For a multisig input, every cosigner must use the same receive-or-change step and the same address index. One key ending in `/0/5` and another in `/1/5`, or `/0/6`, is rejected.
 
 All inputs in the transaction must use the same combination of accounts. If that combination is not the one currently selected, but every input agrees, BigSigner can switch to it when you confirm. Inputs that disagree with each other about the accounts are rejected.
 

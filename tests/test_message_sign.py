@@ -107,8 +107,11 @@ def test_the_path_must_match_this_network_and_account():
         ("84h/0h/0h/0/0", "main", 0, BAD_PATH),
         ("m/86h/0h/0h/0/0", "main", 0, BAD_PURPOSE),
         ("m/48h/0h/0h/2h/0/0", "main", 0, BAD_PURPOSE),
-        ("m/84h/1h/0h/0/0", "main", 0, BAD_NETWORK),
-        ("m/84h/0h/0h/0/0", "test", 0, BAD_NETWORK),
+        ("m/84h/1h/0h/0/0", "main", 0,
+         "The currently selected network is mainnet, but the derivation path belongs to testnet or regtest."),
+        ("m/84h/0h/0h/0/0", "test", 0,
+         "The currently selected network is testnet, but the derivation path belongs to mainnet."),
+        ("m/84h/2h/0h/0/0", "main", 0, BAD_NETWORK),
         ("m/84h/0h/2h/0/0", "main", 0, "This command is for account index 2, but the account index you selected is 0."),
         ("m/84h/0h/0h/2/0", "main", 0, BAD_ADDRESS),
         ("m/84h/0h/0h/0", "main", 0, BAD_ADDRESS),
@@ -246,7 +249,9 @@ def test_a_bad_qr_or_file_stays_on_the_choice_screen():
 
     _tap(app, "Dismiss")
     _scan(app, _command("m/84h/1h/0h/0/0", "hello"))
-    assert app.notice == BAD_NETWORK
+    assert app.notice == (
+        "The currently selected network is mainnet, but the derivation path belongs to testnet or regtest."
+    )
     _tap(app, "Dismiss")
     _scan(app, _command("m/84h/0h/0h/0/0", "héllo"))
     assert app.notice == NOT_ASCII
