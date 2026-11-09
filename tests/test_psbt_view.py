@@ -69,10 +69,14 @@ def test_a_found_address_notice_names_receive_account_or_wallet():
         "branch": 0,
         "name": "2-of-3 aa,bb,cc",
         "account_indexes": [0],
+        "index": 1,
+        "address_index": 120,
     }
-    assert app._found_address_message() == "Address found in Receive addresses"
+    assert app._found_address_message() == "Address found in Receive addresses: #120"
     app.psbt_search_hit["branch"] = 1
-    assert app._found_address_message() == "Address found in Change addresses"
+    assert app._found_address_message() == "Address found in Change addresses: #120"
+    app.psbt_search_hit["address_index"] = 0
+    assert app._found_address_message() == "Address found in Change addresses: #0"
     app.psbt_search_hit["account_indexes"] = [3]
     assert app._found_address_message() == "Address found in account #3"
     app.psbt_search_hit["account_indexes"] = [0, 2, 0]

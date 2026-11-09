@@ -6020,7 +6020,7 @@ class App:
         spending = [int(wallet.accounts[fingerprint]) for fingerprint in wallet.fingerprints]
         if indexes == spending:
             kind = "Receive" if hit.get("branch") == 0 else "Change"
-            return f"Address found in {kind} addresses"
+            return f"Address found in {kind} addresses: #{hit['address_index']}"
         if len(indexes) > 1:
             return "Address found in account-sequence " + ", ".join(str(index) for index in indexes)
         number = indexes[0] if indexes else 0

@@ -477,7 +477,7 @@ def _search_hidden_address(record, app):
     assert app._psbt_heights == {}
     record.shot(app, "search-found")
     assert app.confirm == "psbt-found"
-    assert app._confirm_message() == "Address found in Receive addresses"
+    assert app._confirm_message() == f"Address found in Receive addresses: #{HIDDEN_INDEX}"
     app._act("confirm-no")
     assert app.scroll["psbt-yaml"] == 0
     place = f"Receive Address #{HIDDEN_INDEX}"
