@@ -292,6 +292,10 @@ def read_points(handle, width, height, x_range, y_range, wait=None, rpc=None):
                 released = coalesce(contact.finish_lift())
                 if released:
                     yield from released
+                else:
+                    # A host timer still gets its turn while the lift is being
+                    # debounced (for example, one address-search step).
+                    yield None
                 continue
             # The pen is still down and the controller has gone quiet. Keep the
             # gesture alive so a long hold is not mistaken for the end of a tap.

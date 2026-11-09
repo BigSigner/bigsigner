@@ -63,10 +63,52 @@ const initial = {};
   await chain;
   assert.deepEqual(sent.map(body => body.phase), ["up", "down", "up"]);
   assert.equal(tapInputBlocked(), true);
+  now = tapBlockedUntil + 1;
+  const previousFrame = tapFrame;
+  const previousTime = now;
+  await showFrame({tap_guard: false, delay: 0, png: null, interactive: true});
+  clearTimeout(refreshTimer);
+  assert.equal(tapInputBlocked(), false); // Stop and Back remain available.
+  assert.equal(tapFrame, previousFrame);
+  assert.equal(now, previousTime); // An unchanged search step skips PNG decoding.
+  handlers.get("pointerdown")(event);
+  await chain;
+  assert.equal(sent.at(-1).phase, "down");
+  await showFrame({tap_guard: false, delay: 0, png: null, interactive: false});
+  clearTimeout(refreshTimer);
+  assert.equal(tapInputBlocked(), true); // PSBT loading retains its input block.
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """
     result = subprocess.run([node], input=script, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_worker_polls_search_once_per_request_and_accepts_stop(monkeypatch):
+    import sys
+
+    from test_address_search import _app
+
+    app = _app()
+    app._act("psbt-search-start")
+    app.render()
+    worker = Path("web/worker.js").read_text(encoding="utf-8")
+    driver = worker.split("const DRIVER = `", 1)[1].rsplit("`;", 1)[0]
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    namespace = {}
+    exec(compile(driver, "web/worker.js:DRIVER", "exec"), namespace)
+    namespace["app"] = app
+    tick = namespace["tick"]
+    job = app.psbt_search
+    frame = json.loads(tick('{"kind":"frame"}'))
+    assert len(job.creators) == 1
+    assert frame["png"] is None and frame["interactive"] and frame["delay"] == 0
+    frame = json.loads(tick('{"kind":"frame"}'))
+    assert len(job.creators) == 2
+    assert frame["png"] is None and not frame["tap_guard"]
+    frame = json.loads(tick('{"kind":"tap","x":240,"y":750}'))
+    assert job.done and not app.psbt_search_active()
+    assert frame["png"] is not None and frame["delay"] is None
+    assert not frame["interactive"]
 
 
 def test_the_static_page_reads_the_bundle_and_checks_downloads():

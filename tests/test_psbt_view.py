@@ -532,45 +532,31 @@ def test_back_from_op_return_drains_taps_that_landed_during_the_return():
     assert not app._search_touch_guard
 
 
-def test_a_press_during_searching_addresses_does_not_click_after():
-    """Stale taps after search are ignored; one deliberate tap after the gap works."""
-    import time
-
-    from bigsigner.ui.app import SEARCH_TOUCH_GAP
-
+def test_a_press_during_searching_addresses_does_not_click_after(monkeypatch):
+    """A held Stop press cannot dismiss a result that appears before the lift."""
+    clock = [100.0]
+    monkeypatch.setattr("bigsigner.ui.app.time.monotonic", lambda: clock[0])
     app = App()
-    app.screen = "psbt-yaml"
-    app.psbt_search = {"index": 0, "start": 0}
-    app.psbt_search_shown = True
-    app.pointer_down(240, 400)
+    app.session = _native()
+    app.wallet_index = 0
+    app._accept_psbt_text(_psbt(app.session).serialize(), "file")
+    app._act("psbt-search-0-0")
+    app._act("psbt-search-start")
+    app.render()
+    app.pointer_down(240, 750)
+    assert app._press is not None  # Search permits Stop/Back input.
+    while app.psbt_search_active():
+        app._advance_psbt_search()
     assert app._press is None
-    assert app._discard_gesture
-    app.psbt_search = None
-    app.psbt_search_shown = False
-    app.confirm = "psbt-miss"
-    app.pointer_up(240, 400)
-    assert app.confirm == "psbt-miss"
-
-    app.psbt_search = {"index": 0, "start": 0}
-    app.psbt_search_shown = True
-    app._press = (240, 400, 0, False, "")
-    app._advance_psbt_search()
-    assert app.psbt_search is None
+    assert app._search_touch_guard and app._discard_queued_touch
+    assert app.confirm == "psbt-found"
+    clock[0] += 10  # Slow result painting must not consume the gap.
+    app.render()
+    app.frame_presented()
+    app.pointer_up(240, 750)
+    assert app.confirm == "psbt-found"
+    assert not app.pointer_down(240, 400)
     assert app._press is None
-    assert app._search_touch_guard
-    assert app._discard_queued_touch
-    assert app._discard_gesture
-    app.confirm = "psbt-miss"
-    app.hits = [{"action": "confirm-yes", "box": (0, 0, 480, 800), "label": "OK"}]
-    # Slow paint would expire an arm-time gap; ready restarts it after the frame.
-    time.sleep(SEARCH_TOUCH_GAP + 0.15)
-    app.mark_search_touch_ready()
+    clock[0] += 0.25
     app.pointer_down(240, 400)
-    app.pointer_up(240, 400)
-    assert app.confirm == "psbt-miss"
-    assert app._search_touch_guard
-    time.sleep(SEARCH_TOUCH_GAP + 0.05)
-    app.pointer_down(240, 400)
-    app.pointer_up(240, 400)
-    assert app.confirm is None
-    assert not app._search_touch_guard
+    assert app._press is not None

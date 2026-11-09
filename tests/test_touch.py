@@ -245,3 +245,22 @@ def test_a_coordinate_during_the_lift_wait_keeps_the_gesture():
     )) == [("move", 100, 240)]
     assert contact.finish_lift(sec=2, usec=140_000) == []
     assert contact.touching == 3
+
+
+def test_search_timer_runs_between_down_and_debounced_up(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr("bigsigner.hardware.touch.time.monotonic", lambda: clock[0])
+    reader, writer = os.pipe()
+    try:
+        os.write(writer, _packet(
+            (EV_KEY, BTN_TOUCH, 1), (EV_ABS, ABS_X, 30),
+            (EV_ABS, ABS_Y, 40), (EV_KEY, BTN_TOUCH, 0),
+        ))
+        points = read_points(reader, 480, 800, (0, 479), (0, 799), wait=lambda: 0)
+        assert next(points) == ("down", 30, 40)
+        assert next(points) is None  # Background work can run without ending the press.
+        clock[0] += 0.1
+        assert next(points) == ("up", 30, 40)
+    finally:
+        os.close(reader)
+        os.close(writer)

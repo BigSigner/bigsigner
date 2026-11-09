@@ -192,3 +192,44 @@ def test_panel_guards_after_the_write_and_does_not_repaint_rejected_taps(guarded
     assert len(writes) == 3  # Boot plus two accepted actions.
     assert drains == writes[1:]
     assert app._search_touch_at == writes[-1]
+
+
+def test_panel_checks_input_between_search_steps_and_handles_a_held_stop(monkeypatch):
+    from test_address_search import _app
+
+    app = _app()
+    app._act("psbt-search-start")
+    job = app.psbt_search
+    writes = []
+
+    def points(*_args, wait, **_kwargs):
+        assert wait() == 0
+        yield None
+        assert len(job.creators) == 1
+        yield ("down", 240, 750)
+        yield ("hold", 240, 750)
+        assert len(job.creators) == 2
+        yield None  # A pending lift still allows one bounded search step.
+        assert len(job.creators) == 3
+        yield ("up", 240, 750)
+        assert not app.psbt_search_active()
+
+    monkeypatch.setattr(panel, "App", lambda: app)
+    monkeypatch.setattr(panel, "LiveCamera", lambda: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(panel, "os", SimpleNamespace(
+        open=lambda *_args: 10, O_RDWR=os.O_RDWR, O_RDONLY=os.O_RDONLY,
+        O_NONBLOCK=os.O_NONBLOCK, SEEK_SET=os.SEEK_SET, environ={},
+        lseek=lambda *_args: None, write=lambda *_args: writes.append(True),
+    ))
+    monkeypatch.setattr(panel, "framebuffer_info", lambda _fd: (480, 800, 1920, 32, ()))
+    monkeypatch.setattr(panel, "find_touch", lambda: "/fake/touch")
+    monkeypatch.setattr(panel, "axis_range", lambda *_args: (0, 799))
+    monkeypatch.setattr(panel, "open_rpc_pipe", lambda: None)
+    monkeypatch.setattr(panel, "silence_console", lambda: None)
+    monkeypatch.setattr(panel, "_kmsg", lambda _message: None)
+    monkeypatch.setattr(panel, "_with_camera", lambda app, _camera: app.render())
+    monkeypatch.setattr(panel, "pack_image", lambda *_args: b"frame")
+    monkeypatch.setattr(panel, "read_points", points)
+    monkeypatch.setattr(panel, "flush_touch", lambda _fd: 0)
+    panel.run_panel()
+    assert len(writes) == 2  # Initial search UI and stopped UI; unchanged steps skip painting.

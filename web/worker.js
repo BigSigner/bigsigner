@@ -185,17 +185,25 @@ def tick(raw):
         raise RuntimeError("Unknown emulator request.")
     if app is None:
         raise RuntimeError("The emulator has not started.")
-    buffer = io.BytesIO()
-    app.render().save(buffer, format="PNG")
-    tap_guard = app.frame_presented()
-    app.take_queued_touch_discard()
+    repaint = True
+    if kind == "frame" and app.psbt_search_active():
+        repaint = app._advance_psbt_search()
+    png = None
+    tap_guard = False
+    if repaint:
+        buffer = io.BytesIO()
+        app.render().save(buffer, format="PNG")
+        tap_guard = app.frame_presented()
+        app.take_queued_touch_discard()
+        png = base64.b64encode(buffer.getvalue()).decode("ascii")
     delay = app.notice_delay()
     changed = consume_memory_change()
     return json.dumps({
         "screen": app.screen,
         "delay": delay,
         "tap_guard": tap_guard,
-        "png": base64.b64encode(buffer.getvalue()).decode("ascii"),
+        "interactive": app.psbt_search_active(),
+        "png": png,
         "card": changed,
     })
 

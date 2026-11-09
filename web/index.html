@@ -950,13 +950,13 @@ async function showFrame(msg) {
     tapFrame += 1;
     press = null;
   }
-  await paintPanel(msg.png, msg.screen || "");
+  if (msg.png !== null) await paintPanel(msg.png, msg.screen || "");
   if (msg.tap_guard) tapBlockedUntil = performance.now() + 250;
   // null waits for a click. 0 asks for the next frame now; that frame does the work.
-  // While that frame is outstanding, Loading is on screen and taps are ignored.
+  // Loading blocks taps; address search keeps Stop and Back available.
   const delay = msg.delay;
   const numeric = typeof delay === "number" && Number.isFinite(delay);
-  holdInput = numeric && delay === 0;
+  holdInput = numeric && delay === 0 && !msg.interactive;
   if (numeric) {
     const slack = delay > 0 ? 80 : 0;
     refreshTimer = setTimeout(loadFrame, delay * 1000 + slack);

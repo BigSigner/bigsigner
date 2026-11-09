@@ -19,8 +19,9 @@ from hashlib import sha256
 from pathlib import Path
 from random import Random
 
+import pytest
 from embit.psbt import DerivationPath, OutputScope, PSBT
-from embit.script import Script, address_to_scriptpubkey
+from embit.script import Script, address_to_scriptpubkey, p2tr, p2wpkh
 from embit.transaction import SIGHASH, Transaction, TransactionInput, TransactionOutput
 
 from bigsigner.psbt_check import (
@@ -31,10 +32,11 @@ from bigsigner.psbt_check import (
 )
 from bigsigner.psbt_review import ReviewError, _tx_weight
 from bigsigner.psbt_view import describe_psbt
-from bigsigner.session import Session
+from bigsigner.paths import SINGLESIG_NATIVE, SINGLESIG_TAPROOT
+from bigsigner.session import Session, _public_for
 from bigsigner.ui.app import App
 from bigsigner.ui.canvas import HEADER, HEIGHT, WIDTH
-from test_domain import LEGAL
+from test_domain import ABANDON, LEGAL, expression, root_of
 from test_psbt_load import _child, _native, _psbt
 from test_psbt_view import _pay_this_wallet
 from test_ui import ScreenRecord
@@ -58,6 +60,8 @@ COMBINED_WARNINGS_VECTOR = VECTORS / "native_segwit_combined_warnings.psbt"
 # addresses wide, so 0–49 and 50–99 miss and 100–149 finds it.
 HIDDEN_CHANGE_INDEX = 120
 HIDDEN_CHANGE_VECTOR = VECTORS / "native_segwit_hidden_change_120.psbt"
+HIDDEN_ACCOUNT_RECEIVE_VECTOR = VECTORS / "native_segwit_hidden_account3_receive_120.psbt"
+HIDDEN_TAPROOT_RECEIVE_VECTOR = VECTORS / "native_segwit_hidden_taproot_receive_120.psbt"
 # Sequences for the combined-warnings vector: RBF-enabled, RBF-disabled,
 # block relative locktimes, and time relative locktimes (including the max).
 COMBINED_SEQUENCES = (
@@ -259,6 +263,16 @@ def _hidden_change(session):
     return psbt
 
 
+def _hidden_receive(session, *, account=0, taproot=False):
+    """Keep the native-segwit input, hiding the second output's Receive origin."""
+    psbt = _hidden_change(session)
+    fingerprint = session.wallets[0].fingerprints[0]
+    role = SINGLESIG_TAPROOT if taproot else SINGLESIG_NATIVE
+    public = _public_for(session, fingerprint, role, account).xpub.derive([0, HIDDEN_CHANGE_INDEX]).key
+    psbt.outputs[1].script_pubkey = p2tr(public) if taproot else p2wpkh(public)
+    return psbt
+
+
 def write_psbt_vectors(folder: Path | None = None) -> list[Path]:
     """Write the committed PSBT binaries. Returns the paths that were written."""
     folder = VECTORS if folder is None else folder
@@ -270,6 +284,8 @@ def write_psbt_vectors(folder: Path | None = None) -> list[Path]:
         (folder / HUNDRED_VECTOR.name, _native_bulk(session, COUNT)),
         (folder / COMBINED_WARNINGS_VECTOR.name, _combined_warnings(session)),
         (folder / HIDDEN_CHANGE_VECTOR.name, _hidden_change(session)),
+        (folder / HIDDEN_ACCOUNT_RECEIVE_VECTOR.name, _hidden_receive(session, account=3)),
+        (folder / HIDDEN_TAPROOT_RECEIVE_VECTOR.name, _hidden_receive(session, taproot=True)),
     ):
         path.write_bytes(psbt.serialize())
         written.append(path)
@@ -325,6 +341,8 @@ def test_the_committed_psbt_vectors_match_the_builders():
     assert HUNDRED_VECTOR.read_bytes() == _native_bulk(session, COUNT).serialize()
     assert COMBINED_WARNINGS_VECTOR.read_bytes() == _combined_warnings(session).serialize()
     assert HIDDEN_CHANGE_VECTOR.read_bytes() == _hidden_change(session).serialize()
+    assert HIDDEN_ACCOUNT_RECEIVE_VECTOR.read_bytes() == _hidden_receive(session, account=3).serialize()
+    assert HIDDEN_TAPROOT_RECEIVE_VECTOR.read_bytes() == _hidden_receive(session, taproot=True).serialize()
 
 
 def test_a_hidden_change_address_is_found_in_addresses_100_to_149():
@@ -345,6 +363,86 @@ def test_a_hidden_change_address_is_found_in_addresses_100_to_149():
     assert found["branch"] == 1
     assert found["index"] == HIDDEN_CHANGE_INDEX
     assert found["place"] == f"Change Address #{HIDDEN_CHANGE_INDEX}"
+
+
+@pytest.mark.parametrize("vector,account,taproot", [(HIDDEN_ACCOUNT_RECEIVE_VECTOR, 3, False),
+                                                   (HIDDEN_TAPROOT_RECEIVE_VECTOR, 0, True)])
+def test_hidden_receive_vectors_have_the_requested_origin_and_are_found(vector, account, taproot):
+    session = _native()
+    psbt = PSBT.parse(vector.read_bytes())
+    original = PSBT.parse(HIDDEN_CHANGE_VECTOR.read_bytes())
+    assert psbt.inputs[0].serialize() == original.inputs[0].serialize()
+    assert psbt.tx.vin[0].serialize() == original.tx.vin[0].serialize()
+    assert psbt.outputs[0].serialize() == original.outputs[0].serialize()
+    assert [output.value for output in psbt.outputs] == [50_000, 40_000]
+    hidden = psbt.outputs[1]
+    assert not hidden.bip32_derivations and not hidden.taproot_bip32_derivations
+    assert hidden.taproot_internal_key is None
+    purpose = 86 if taproot else 84
+    path = f"m/{purpose}h/0h/{account}h/0/120"
+    child = root_of(ABANDON).derive(path).to_public().key
+    assert hidden.script_pubkey == (p2tr(child) if taproot else p2wpkh(child))
+    if taproot:
+        session.add_text(f"tr({expression(ABANDON, 'm/86h/0h/0h')})")
+    app = App()
+    app.session = session
+    app.wallet_index = 0
+    app._accept_psbt_text(psbt.serialize(), "file")
+    assert app.screen == "psbt-yaml"
+    assert app.psbt_view["fee"] == 10_000
+    assert app.psbt_view["outputs"][1]["owned"] is None
+    app._act("psbt-search-1-0")
+    app.psbt_search_first = app.psbt_search_last = account
+    app.psbt_search_start = 119
+    app._act("psbt-search-start")
+    for _ in range(10):
+        if not app.psbt_search_active():
+            break
+        app._advance_psbt_search()
+    assert app.confirm == "psbt-found"
+    hit = app.psbt_search_hit
+    assert (hit["wallet_index"], hit["account_indexes"], hit["branch"], hit["address_index"]) == (
+        1 if taproot else 0, [account], 0, 120,
+    )
+    assert app.screen == "psbt-yaml"
+    assert app.psbt_view["change_outputs"] == []
+    assert app.psbt_view["outputs_note"] == ""
+    found_output = app.psbt_view["outputs"][1]
+    assert found_output["index"] == 1 and not found_output["change"]
+    assert not found_output["receive_change"]
+    assert found_output["owned"]["wallet_index"] == hit["wallet_index"]
+    assert found_output["owned"]["place"] == "Receive Address #120"
+    assert found_output["owned"]["account_line"] == (
+        "Account: 0 (default)" if taproot else "Account: 3 (non-default)"
+    )
+    from bigsigner.ui.canvas import Frame
+    from bigsigner.ui.psbt_screen import _output_card
+    frame = Frame()
+    _output_card(app, frame, HEADER + 16, True, 0, found_output)
+    text = {mark["text"] for mark in frame.marks}
+    assert "Receive Address #120" in text
+    assert found_output["owned"]["account_line"] in text
+    assert "External Address" not in text
+    assert not any(hit["action"].startswith("psbt-search-") for hit in frame.hits)
+    view = app.psbt_view
+    # Origins are written as soon as search matches, before acknowledging it.
+    for enriched in (app.psbt_checked, PSBT.parse(app.psbt_loaded)):
+        scope = enriched.outputs[1]
+        if taproot:
+            public, (_, origin) = next(iter(scope.taproot_bip32_derivations.items()))
+            assert public.xonly() == child.xonly()
+        else:
+            public, origin = next(iter(scope.bip32_derivations.items()))
+            assert public == child
+        from bigsigner.paths import parse_path
+        assert origin.derivation == parse_path(path)
+        assert origin.fingerprint == root_of(ABANDON).my_fingerprint
+    app._act("confirm-no")
+    assert app.psbt_view is view
+    # The enriched result also survives restoring the loaded PSBT.
+    app._restore_loaded_psbt()
+    assert app.psbt_view["change_outputs"] == []
+    assert app.psbt_view["outputs"][1]["owned"]["place"] == "Receive Address #120"
 
 
 def test_the_combined_warnings_vector_loads_every_warning():

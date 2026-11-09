@@ -145,6 +145,10 @@ def run_panel():
         logged_touch = False
         for point in read_points(touch, width, height, x_range, y_range, wait=wait, rpc=rpc_fd):
             if point is None:
+                if app.psbt_search_active():
+                    if app._advance_psbt_search():
+                        blit()
+                    continue
                 app.pointer_idle()
                 blit()
                 continue
@@ -170,6 +174,9 @@ def run_panel():
                         blit()
                     else:
                         pending = True
+                if phase == "hold" and app.psbt_search_active():
+                    if app._advance_psbt_search():
+                        blit()
             elif phase == "up":
                 if app.pointer_up(x, y):
                     blit()

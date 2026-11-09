@@ -460,28 +460,26 @@ def _scroll_until(app, phrase: str):
 
 
 def _search_hidden_address(record, app):
-    """The address is index 73, so the first window misses and 50–99 finds it."""
+    """The search runs continuously through index 73 and finds the hidden output."""
     _scroll_until(app, "Search for Address in Loaded Wallets")
     record.shot(app, "search-before")
     app._act("psbt-search-0-0")
-    record.shot(app, "search-0-49")
-    assert "Searching addresses 0-49" in _joined(app)
-    assert not any(hit["label"] in ("Cancel", "OK") for hit in app.hits)
-    record.shot(app, "search-miss")
-    assert app.confirm == "psbt-miss"
-    assert "50-99" in app._confirm_message()
-    assert any(hit["label"] == "Cancel" for hit in app.hits)
-    assert any(hit["label"] == "OK" for hit in app.hits)
-    app._act("confirm-yes")
-    record.shot(app, "search-50-99")
-    assert "Searching addresses 50-99" in _joined(app)
+    record.shot(app, "search-settings")
+    app._act("psbt-search-start")
+    record.shot(app, "search-preparing")
+    for _ in range(100000):
+        if not app.psbt_search_active():
+            break
+        app._advance_psbt_search()
+    else:
+        raise AssertionError("Address search did not finish")
+    assert app._psbt_sheet is None
+    assert app._psbt_heights == {}
     record.shot(app, "search-found")
     assert app.confirm == "psbt-found"
     assert app._confirm_message() == "Address found in Receive addresses"
     app._act("confirm-no")
     assert app.scroll["psbt-yaml"] == 0
-    assert app._psbt_sheet is None
-    assert app._psbt_heights == {}
     place = f"Receive Address #{HIDDEN_INDEX}"
     assert any(card["place"] == place and card["receive_change"] for card in app.psbt_view["change_outputs"])
     assert any("receive address" in item["text"] for item in app.psbt_view["warnings"])
@@ -531,12 +529,13 @@ def test_taproot_nonzero_account_saves_screenshots():
     app.wallet_index = 0
     record.note(
         "Taproot wallet on account 3. One output is this wallet's receive address 73 "
-        "with no derivation, found by searching 50-99. One change output is account 1. "
+        "with no derivation, found by continuous address search. Another output pays account 1. "
         "One output is the other loaded wallet and keeps its derivation."
     )
     _load(app, _gallery_psbt(session, 0, 3))
     assert app.psbt_view["account_line"] == "Account: 3 (non-default)"
-    assert [card["place"] for card in app.psbt_view["change_outputs"]] == ["Change Address #4"]
+    assert app.psbt_view["change_outputs"] == []
+    assert app.psbt_view["outputs"][2]["owned"]["account_line"] == "Account: 1 (non-default)"
     _scroll_all(record, app, "signing")
     _search_hidden_address(record, app)
     app.scroll["psbt-yaml"] = 10**9
@@ -552,15 +551,16 @@ def test_multisig_sign_with_saves_screenshots():
     app.wallet_index = 0
     record.note(
         "2-of-3 native-segwit wallet with all three seeds loaded. "
-        "Receive address 73 has no derivation and is found in the 50-99 search. "
-        "Account 1 change keeps its derivation. Another output belongs to the "
+        "Receive address 73 has no derivation and is found by continuous address search. "
+        "The payment to account 1 keeps its derivation. Another output belongs to the "
         "singlesig wallet and keeps its derivation. Each loaded seed has its own "
         "Sign Transaction with button."
     )
     _load(app, _gallery_psbt(session, 0, 0))
     assert app.psbt_view["account_line"] == "Account: 0, 0, 0 (default)"
     assert "Some inputs have no signatures." in app.psbt_view["signature_note"]
-    assert [card["place"] for card in app.psbt_view["change_outputs"]] == ["Change Address #4"]
+    assert app.psbt_view["change_outputs"] == []
+    assert app.psbt_view["outputs"][2]["owned"]["account_line"] == "Account: 1, 1, 1 (non-default)"
     _scroll_all(record, app, "signing")
     _search_hidden_address(record, app)
     _scroll_until(app, "Some inputs have no signatures.")

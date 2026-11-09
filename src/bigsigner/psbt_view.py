@@ -7,13 +7,12 @@ divides the amount by 1e8.
 
 from datetime import datetime, timezone
 
-from embit.descriptor import Descriptor
 from embit.networks import NETWORKS
 from embit.psbt import PSBT
 
 from .psbt_check import _input_amount, multisig_signature_note, seed_sign_rows
 from .psbt_review import LOCKTIME_THRESHOLD, _derivations, _estimate_vsize, _locate
-from .session import _descriptor
+from .session import SessionError
 
 OP_RETURN_WARNING = (
     "This transaction contains an OP_RETURN. "
@@ -282,64 +281,31 @@ def describe_psbt(session, wallet_index: int, psbt: PSBT) -> dict:
 
 
 def search_address(session, spending_index: int, address: str, start: int, count: int = SEARCH_WINDOW):
-    """Look for an address on receive and change.
+    """A bounded search for callers that do not drive an interactive screen."""
+    from .address_search import AddressSearch, MAX_INDEX
 
-    Other wallets use the account they already have selected. This wallet
-    tries each key from account 0 through its selected account plus 3, leaving
-    the other keys at their selected accounts.
-    """
-    target = address.lower()
-    for index, wallet in enumerate(session.wallets):
-        trials = _account_trials(wallet, index == spending_index)
-        seen = set()
-        for trial in trials:
-            key = tuple(sorted(trial.items()))
-            if key in seen:
-                continue
-            seen.add(key)
-            found = _scan_accounts(session, wallet, trial, target, start, count)
-            if found is None:
-                continue
-            found["wallet_index"] = index
-            found["name"] = session.wallet_short_name_of(wallet)
-            found["account_line"] = account_line(wallet.fingerprints, trial)
-            found["account_indexes"] = [int(trial[fingerprint]) for fingerprint in wallet.fingerprints]
-            found["address_index"] = found["index"]
-            found["place"] = place_line(found["branch"], found["index"])
-            return found
-    return None
-
-
-def _account_trials(wallet, current: bool) -> list[dict]:
-    selected = {fingerprint: int(wallet.accounts[fingerprint]) for fingerprint in wallet.fingerprints}
-    if not current:
-        return [selected]
-    trials = []
-    for fingerprint in wallet.fingerprints:
-        limit = selected[fingerprint] + 3
-        for account in range(0, limit + 1):
-            trial = dict(selected)
-            trial[fingerprint] = account
-            trials.append(trial)
-    return trials
-
-
-def _scan_accounts(session, wallet, accounts: dict, target: str, start: int, count: int):
-    saved = dict(wallet.accounts)
-    wallet.accounts.clear()
-    wallet.accounts.update(accounts)
+    if count <= 0:
+        return None
+    wallet = session.wallets[spending_index]
+    selected = min(wallet.accounts.values())
+    first = max(0, selected - 2)
     try:
-        parsed = Descriptor.from_string(_descriptor(wallet, session))
-        network = _network(session.network)
-        for branch, _label in ((0, "receive"), (1, "change")):
-            for index in range(start, start + count):
-                candidate = parsed.derive(index, branch_index=branch).address(network=network)
-                if candidate.lower() == target:
-                    return {"branch": branch, "index": index, "address": candidate}
+        search = AddressSearch(session, address, first, min(first + 5, MAX_INDEX), start, min(start + count - 1, MAX_INDEX))
+    except SessionError:
+        return None
+    try:
+        while not search.done:
+            search.step()
+        found = search.result
+        if found is not None:
+            wallet = session.wallets[found["wallet_index"]]
+            accounts = dict(zip(wallet.fingerprints, found["account_indexes"]))
+            found["name"] = session.wallet_short_name_of(wallet)
+            found["account_line"] = account_line(wallet.fingerprints, accounts)
+            found["place"] = place_line(found["branch"], found["address_index"])
+        return found
     finally:
-        wallet.accounts.clear()
-        wallet.accounts.update(saved)
-    return None
+        search.close()
 
 
 def _change_section_open(change_outputs: list[dict]) -> bool:
@@ -496,8 +462,12 @@ def _output_card(session, wallet_index: int, psbt: PSBT, index: int, scope) -> d
             "hex_lines": hex_lines(payload),
         }
     owned = _owned_output(session, script, _derivations(scope))
-    # Money returning to this wallet is change, on the change branch or the receive branch.
-    change = bool(owned and owned["wallet_index"] == wallet_index)
+    # Either branch can return change, but another account is a payment.
+    change = bool(
+        owned
+        and owned["wallet_index"] == wallet_index
+        and owned["accounts"] == session.wallets[wallet_index].accounts
+    )
     address = ""
     if script is not None:
         try:

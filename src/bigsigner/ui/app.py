@@ -21,7 +21,8 @@ from ..paths import HARDENED, MULTISIG_NATIVE, SINGLESIG_NATIVE, SINGLESIG_TAPRO
 from ..psbt_check import check_loaded_psbt, iter_check_loaded_psbt, psbt_yaml
 from ..psbt_load import TOO_LARGE, UNREADABLE, SpecterParts, explain_not_psbt, is_binary_psbt, psbt_bytes, psbt_text
 from ..psbt_qr import psbt_qr_parts
-from ..psbt_view import SEARCH_WINDOW, describe_psbt, search_address
+from ..address_search import AddressSearch, MAX_INDEX
+from ..psbt_view import account_line, describe_psbt, place_line
 from ..psbt_review import ReviewError, review_psbt, sign_with
 from ..qr import qr_matrix
 from ..session import (
@@ -375,8 +376,14 @@ class App:
         self.psbt_continue = False
         self.psbt_found = {}
         self.psbt_search = None
-        self.psbt_search_shown = False
         self.psbt_search_hit = None
+        self.psbt_search_output = None
+        self.psbt_search_first = 0
+        self.psbt_search_last = 5
+        self.psbt_search_start = 0
+        self.psbt_search_last_checked = None
+        self._psbt_search_painted = None
+        self._psbt_search_painted_at = 0.0
         self.psbt_op_index = 0
         self.psbt_op_mode = "ascii"
         self.signed_psbt = None
@@ -601,6 +608,7 @@ class App:
             "psbt-progress": self._psbt_progress_screen,
             "psbt-error": self._psbt_error,
             "psbt-yaml": self._psbt_yaml,
+            "address-search": self._psbt_address_search,
             "psbt-opreturn": self._psbt_opreturn,
             "psbt-share": self._psbt_share,
             "psbt-export-format": self._psbt_export_format,
@@ -657,8 +665,8 @@ class App:
             delays.append(0.5)
         if self.address_search_pending is not None and self.address_search_shown:
             delays.append(0.05)
-        if self.psbt_search is not None and self.psbt_search_shown:
-            delays.append(0.05)
+        if self.psbt_search_active():
+            delays.append(0)
         if self._addresses_loading and self._addresses_loading_shown:
             delays.append(0)
         if self._psbt_signing and self._psbt_signing_shown:
@@ -696,7 +704,6 @@ class App:
         self._expire_notice()
         self._advance_boot()
         self._advance_address_search()
-        self._advance_psbt_search()
         self._advance_psbt_qr()
         self._advance_addresses_open()
         self._advance_psbt_check()
@@ -709,14 +716,10 @@ class App:
             self._toast(frame)
         if self.confirm:
             self._confirm(frame)
-        if self.psbt_search is not None:
-            self._psbt_search_popup(frame)
         self.hits = frame.hits
         self.texts = list(frame.marks)
         if self.address_search_pending is not None:
             self.address_search_shown = True
-        if self.psbt_search is not None:
-            self.psbt_search_shown = True
         if self._addresses_loading:
             self._addresses_loading_shown = True
         if self._psbt_signing:
@@ -732,8 +735,6 @@ class App:
         if self._discard_gesture:
             return True
         if self.screen == "psbt-progress":
-            return True
-        if self.psbt_search is not None:
             return True
         if self._psbt_signing and self._psbt_signing_shown:
             return True
@@ -824,9 +825,6 @@ class App:
             self._discard_gesture = True
             return
         if self._psbt_signing and self._psbt_signing_shown:
-            self._discard_gesture = True
-            return
-        if self.psbt_search is not None:
             self._discard_gesture = True
             return
         if self._ignore_search_touch():
@@ -1025,7 +1023,6 @@ class App:
             and not self.add_menu
             and self.confirm is None
             and self.open_dropdown is None
-            and self.psbt_search is None
         )
 
     def _scroll_offset(self, screen: str, content_end: int, clearance: int = 96) -> int:
@@ -1058,6 +1055,8 @@ class App:
         if self.screen == "seed" or destination == "seed":
             self._seed_title_count = 0
         leaving = self.screen
+        if leaving == "address-search":
+            self._stop_psbt_search()
         self.screen = self.back.pop() if self.back else "keys"
         if leaving == "psbt-share" and self.screen == "psbt-yaml":
             self._restore_loaded_psbt()
@@ -1241,9 +1240,6 @@ class App:
         self.confirm = None
         self._account_warning_action = None
         if kind == "psbt-found" and self.psbt_search_hit:
-            self._include_found_derivation(self.psbt_search_hit)
-            self.psbt_search_hit = None
-        elif kind == "psbt-miss":
             self.psbt_search_hit = None
 
     def _act_delete_key(self):
@@ -1475,6 +1471,8 @@ class App:
         "address-message-scan": lambda self: self._open_address_message_scan(),
         "address-verify-text": lambda self: self._verify_entered_address(self.address_text),
         "address-go": lambda self: self._open_found_address(),
+        "psbt-search-start": lambda self: self._start_psbt_search(),
+        "psbt-search-stop": lambda self: self._stop_psbt_search(),
         "sign-transaction": lambda self: self._open_sign_transaction(),
         "psbt-scan": lambda self: self._open_psbt_scan(),
         "psbt-sd": lambda self: self._open_sd("psbt"),
@@ -1516,6 +1514,15 @@ class App:
             self._choose_export_file(action[len("sd-write:") :])
         elif action.startswith("export-format-"):
             self._choose_export_format(int(action[len("export-format-") :]))
+        elif action.startswith("search-field-"):
+            field, operation = action[len("search-field-"):].rsplit("-", 1)
+            if self.psbt_search_active():
+                return
+            if operation == "edit":
+                self._edit_search_index(field)
+            else:
+                value = getattr(self, "psbt_search_" + field)
+                self._set_search_index(field, max(0, min(MAX_INDEX, value + (1 if operation == "inc" else -1))))
         elif action.startswith("psbt-search-"):
             self._begin_psbt_search(action[len("psbt-search-") :])
         elif action.startswith("psbt-opreturn-"):
@@ -3185,6 +3192,9 @@ class App:
         down: str = "derive-dec",
         up: str = "derive-inc",
         edit: str = "derive-edit",
+        enabled: bool = True,
+        minimum: int = 0,
+        maximum: int = MAX_INDEX,
     ) -> int:
         if paint:
             frame.text(caption, MARGIN, y - offset, size=TITLE_SIZE, fill=MUTED)
@@ -3193,30 +3203,32 @@ class App:
         gap = 12
         top = y - offset
         if paint and top + 64 > HEADER and top < HEIGHT:
-            self._brightness_button(frame, (MARGIN, top, MARGIN + side, top + 64), "-", value > 0, down)
+            self._brightness_button(frame, (MARGIN, top, MARGIN + side, top + 64), "-", enabled and value > minimum, down)
             self._brightness_button(
                 frame,
                 (WIDTH - MARGIN - side, top, WIDTH - MARGIN, top + 64),
                 "+",
-                value < 0x7FFFFFFF,
+                enabled and value < maximum,
                 up,
             )
             # A press on this panel is reported a little above the drawn key.
             reach = 24
-            if value > 0:
+            if enabled and value > minimum:
                 minus = (0, top - reach, MARGIN + side + gap // 2, top + 64)
                 frame.hit(minus, down, "-")
                 self._still_boxes.append(minus)
-            if value < 0x7FFFFFFF:
+            if enabled and value < maximum:
                 plus = (WIDTH - (MARGIN + side + gap // 2), top - reach, WIDTH, top + 64)
                 frame.hit(plus, up, "+")
                 self._still_boxes.append(plus)
             box = self._account_textbox(
                 frame, top, str(value), left=MARGIN + side + gap, right=WIDTH - MARGIN - side - gap,
+                enabled=enabled,
             )
             if edit == "derive-edit":
                 self._derive_account_box = box
-            frame.hit(box, edit, caption)
+            if enabled:
+                frame.hit(box, edit, caption)
             # The number is wide and sits in the middle, so a drag on it scrolls.
             self._still_boxes.append((MARGIN, top, MARGIN + side, top + 64))
             self._still_boxes.append((WIDTH - MARGIN - side, top, WIDTH - MARGIN, top + 64))
@@ -3978,14 +3990,14 @@ class App:
         except SessionError as exc:
             self.set_error(str(exc))
 
-    def _account_textbox(self, frame: Frame, y: int, value: str, outline=LINE, left: int = MARGIN, right: int | None = None):
+    def _account_textbox(self, frame: Frame, y: int, value: str, outline=LINE, left: int = MARGIN, right: int | None = None, enabled=True):
         height = 64
         box = (left, y, WIDTH - MARGIN if right is None else right, y + height)
-        frame.draw.rounded_rectangle(box, radius=14, fill=WHITE, outline=outline, width=2)
+        frame.draw.rounded_rectangle(box, radius=14, fill=WHITE if enabled else LINE, outline=outline, width=2)
         face = font(TITLE_SIZE, mono=True)
         _left, top, _right, bottom = frame.draw.textbbox((0, 0), value or "0", font=face)
         text_y = y + (height - (bottom - top)) / 2 - top
-        frame.draw.text((box[0] + 20, text_y), value, font=face, fill=INK)
+        frame.draw.text((box[0] + 20, text_y), value, font=face, fill=INK if enabled else MUTED)
         return box
 
     def _edit_account(self, fingerprint: bytes):
@@ -4014,10 +4026,14 @@ class App:
             return
         if not self.account_text.isdigit():
             self.set_error(
-                "Enter an index." if self.account_for in ("bip85", "address-find") else "Enter an account index."
+                "Enter an index." if self.account_for in ("bip85", "address-find", "search-start") else "Enter an account index."
             )
             return
         account = int(self.account_text)
+        if self.account_for.startswith("search-"):
+            if self._set_search_index(self.account_for[len("search-"):], account):
+                self.back_one()
+            return
         if self.account_for in ("derive", "bip85", "address-find"):
             if account >= 0x80000000:
                 self.set_error(
@@ -4048,7 +4064,7 @@ class App:
             self.set_error(str(exc))
 
     def _account(self, frame: Frame):
-        choosing_index = self.account_for in ("bip85", "address-find")
+        choosing_index = self.account_for in ("bip85", "address-find", "search-start")
         title = "Index" if choosing_index else "Account"
         save_label = "Use This Index" if choosing_index else "Use This Account"
         frame.header(title, "back")
@@ -5993,13 +6009,6 @@ class App:
             return MESSAGE_MORE
         if self.confirm == "psbt-found" and self.psbt_search_hit:
             return self._found_address_message()
-        if self.confirm == "psbt-miss" and self.psbt_search_hit:
-            start = self.psbt_search_hit["next"]
-            end = start + SEARCH_WINDOW - 1
-            return (
-                "This address was not found. "
-                f"Continue the search in addresses {start}-{end}?"
-            )
         return "Delete this key?"
 
     def _found_address_message(self) -> str:
@@ -6016,29 +6025,6 @@ class App:
             return "Address found in account-sequence " + ", ".join(str(index) for index in indexes)
         number = indexes[0] if indexes else 0
         return f"Address found in account #{number}"
-
-    def _psbt_search_popup(self, frame: Frame):
-        """Dimmed status while a range of addresses is being searched. No buttons."""
-        start = int(self.psbt_search["start"])
-        end = start + SEARCH_WINDOW - 1
-        message = f"Searching addresses {start}-{end}"
-        overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 110))
-        base = frame.image.convert("RGBA")
-        frame.image = Image.alpha_composite(base, overlay).convert("RGB")
-        frame.draw = ImageDraw.Draw(frame.image)
-        face = font(BODY_SIZE)
-        lines = wrap(frame.draw, message, face, WIDTH - 88) or [""]
-        line_h = BODY_SIZE + 8
-        text_h = line_h * len(lines)
-        box_top = 268
-        box_bottom = box_top + 24 + text_h + 24
-        box = (24, box_top, WIDTH - 24, box_bottom)
-        frame.draw.rounded_rectangle(box, radius=18, fill=WHITE, outline=LINE)
-        y = box_top + 24
-        for line in lines:
-            frame.draw.text((44, y), line, font=face, fill=INK)
-            frame.mark(line, frame.draw.textbbox((44, y), line, font=face))
-            y += line_h
 
     def _confirm(self, frame: Frame):
         overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 110))
@@ -6074,16 +6060,6 @@ class App:
         self._confirm_buttons(frame, box)
 
     def _confirm_buttons(self, frame: Frame, box):
-        if self.confirm == "psbt-miss":
-            gap = 12
-            height = BODY_SIZE + 36
-            y = box[3] - 24 - height
-            left = box[0] + 20
-            right = box[2] - 20
-            width = (right - left - gap) // 2
-            self._dialog_button(frame, (left, y, left + width, y + height), "Cancel", "confirm-no", (132, 138, 148))
-            self._dialog_button(frame, (left + width + gap, y, right, y + height), "OK", "confirm-yes", BLUE)
-            return
         if self.confirm in ("message-more", "psbt-found"):
             height = BODY_SIZE + 36
             y = box[3] - 24 - height
@@ -6137,11 +6113,6 @@ class App:
             self._accept_account_warning()
         elif kind == "replace-file":
             self._write_export()
-        elif kind == "psbt-miss" and self.psbt_search_hit is not None:
-            index = self.psbt_search_hit["index"]
-            start = self.psbt_search_hit["next"]
-            self.psbt_search_hit = None
-            self._begin_psbt_search(f"{index}-{start}")
 
     def _descriptor_choice_message(self) -> str:
         if self.descriptor_choice and self.descriptor_choice.get("multisig"):
@@ -7544,41 +7515,145 @@ class App:
         self.psbt_txid_open = not self.psbt_txid_open
 
     def _begin_psbt_search(self, text: str):
-        index, _, start = text.partition("-")
-        if self.psbt_search is not None:
+        index = int(text.partition("-")[0])
+        card = next((item for item in (self.psbt_view or {}).get("outputs", []) if item["index"] == index), None)
+        if card is None or not card.get("address"):
             return
-        self.psbt_search = {"index": int(index), "start": int(start or 0)}
-        self.psbt_search_shown = False
+        self._stop_psbt_search()
+        self.psbt_search_output = index
+        self.psbt_search_hit = None
+        wallet = self.session.wallets[self.wallet_index]
+        self.psbt_search_last_checked = None
+        self.psbt_search_first = max(0, min(wallet.accounts.values()) - 2)
+        self.psbt_search_last = min(MAX_INDEX, self.psbt_search_first + 5)
+        self.psbt_search_start = 0
+        self.go("address-search")
 
-    def _advance_psbt_search(self):
-        if self.psbt_search is None or not self.psbt_search_shown:
+    def _set_search_index(self, field: str, value: int) -> bool:
+        if self.psbt_search_active():
+            return False
+        if not 0 <= value <= MAX_INDEX:
+            self.set_error(f"The index must be between 0 and {MAX_INDEX}.")
+            return False
+        if field == "last" and value < self.psbt_search_first:
+            self.set_error("The account range end must be at least its start.")
+            return False
+        if field in ("first", "last") and value != getattr(self, "psbt_search_" + field):
+            self.psbt_search_last_checked = None
+        setattr(self, "psbt_search_" + field, value)
+        if field == "first":
+            self.psbt_search_last = max(self.psbt_search_last, value)
+        return True
+
+    def _edit_search_index(self, field: str):
+        wallet = self.session.wallets[self.wallet_index]
+        self.account_fp = wallet.fingerprints[0]
+        self.account_for = "search-" + field
+        self.account_text = str(getattr(self, "psbt_search_" + field))
+        self.go("account")
+
+    def psbt_search_active(self) -> bool:
+        return self.psbt_search is not None
+
+    def _start_psbt_search(self):
+        if self.screen != "address-search" or self.psbt_search_active():
             return
-        if self.screen != "psbt-yaml" or not self.psbt_view:
-            self.psbt_search = None
-            self.psbt_search_shown = False
-            self._press = None
-            self._arm_search_touch_quiet()
-            return
-        job = self.psbt_search
-        self.psbt_search = None
-        self.psbt_search_shown = False
-        self._press = None
-        card = next((item for item in self.psbt_view["outputs"] if item["index"] == job["index"]), None)
+        self.psbt_search_last_checked = None
+        card = next((item for item in (self.psbt_view or {}).get("outputs", [])
+                     if item["index"] == self.psbt_search_output), None)
         if card is None:
-            self._arm_search_touch_quiet()
             return
-        found = search_address(
-            self.session, self.wallet_index, card["address"], job["start"], SEARCH_WINDOW,
+        try:
+            self.psbt_search = AddressSearch(
+                self.session, card["address"], self.psbt_search_first,
+                self.psbt_search_last, self.psbt_search_start,
+            )
+        except SessionError as exc:
+            self.set_error(str(exc))
+
+    def _stop_psbt_search(self):
+        if self.psbt_search is not None:
+            self.psbt_search_last_checked = self.psbt_search.last_index
+            self.psbt_search.close()
+            self.psbt_search = None
+
+    def _psbt_address_search(self, frame: Frame):
+        frame.header("Address Search", "back")
+        y = frame.text("Search loaded wallets by account index:", MARGIN, HEADER + 16)
+        active = self.psbt_search_active()
+        for field, caption in (("first", "From Account Index"), ("last", "To Account Index"),
+                               ("start", "Starting Address Index")):
+            y = self._account_selector(
+                frame, y, getattr(self, "psbt_search_" + field), True, 0, caption,
+                down=f"search-field-{field}-dec", up=f"search-field-{field}-inc",
+                edit=f"search-field-{field}-edit", enabled=not active,
+                minimum=self.psbt_search_first if field == "last" else 0,
+            )
+        label = "Stop Search" if active else "Start Search"
+        button_y = HEIGHT - 16 - frame.button_height(label)
+        progress_label = None
+        progress_index = self.psbt_search_last_checked
+        if active:
+            search = self.psbt_search
+            if search.phase == "preparing":
+                frame.text("Preparing address search…", MARGIN, y)
+            else:
+                progress_label = "Searching Address Index:"
+                progress_index = search.address_index
+            self._psbt_search_painted = (search.phase, search.address_index)
+            self._psbt_search_painted_at = time.monotonic()
+        elif progress_index is not None:
+            progress_label = "Last Searched Address Index:"
+        if progress_label:
+            size = TITLE_SIZE
+            while frame.draw.textlength(progress_label, font=font(size)) > WIDTH - 2 * MARGIN:
+                size -= 1
+            width = frame.draw.textlength(progress_label, font=font(size))
+            y = frame.text(progress_label, (WIDTH - width) / 2, y, size=size, width=WIDTH - 2 * MARGIN)
+            self._centered_mono(frame, str(progress_index), y, BODY_SIZE, INK)
+        frame.button(button_y, label, "psbt-search-stop" if active else "psbt-search-start",
+                     color=RED if active else BLUE)
+
+    def _advance_psbt_search(self) -> bool:
+        """One creator per call; the display host polls input before the next call."""
+        search = self.psbt_search
+        if search is None:
+            return False
+        if self.screen != "address-search":
+            self._stop_psbt_search()
+            return True
+        try:
+            search.step()
+        except Exception as exc:
+            self._stop_psbt_search()
+            self.set_error(f"Address search failed: {exc}")
+            self._arm_search_touch_quiet()
+            return True
+        if search.done:
+            found = search.result
+            self._stop_psbt_search()
+            if found:
+                wallet = self.session.wallets[found["wallet_index"]]
+                accounts = dict(zip(wallet.fingerprints, found["account_indexes"]))
+                found.update(
+                    index=self.psbt_search_output, name=self.session.wallet_short_name_of(wallet),
+                    account_line=account_line(wallet.fingerprints, accounts),
+                    place=place_line(found["branch"], found["address_index"]),
+                )
+                self._include_found_derivation(found)
+                self.back_one()
+                self.psbt_search_hit = found
+                self.confirm = "psbt-found"
+            else:
+                self.set_error("Address not found before the maximum address index.")
+            self._arm_search_touch_quiet()
+            return True
+        progress = (search.phase, search.address_index)
+        # Poll each creator, but avoid re-rendering/encoding unchanged frames.
+        return progress != self._psbt_search_painted and (
+            search.phase != (self._psbt_search_painted or (None,))[0]
+            or time.monotonic() - self._psbt_search_painted_at >= 0.1
         )
-        if found:
-            found["index"] = job["index"]
-            self.psbt_search_hit = found
-            self.confirm = "psbt-found"
-            self._arm_search_touch_quiet()
-            return
-        self.psbt_search_hit = {"index": job["index"], "next": job["start"] + SEARCH_WINDOW}
-        self.confirm = "psbt-miss"
-        self._arm_search_touch_quiet()
 
     def _open_psbt_opreturn(self, index: int):
         card = next((item for item in (self.psbt_view or {}).get("outputs", []) if item["index"] == index), None)
