@@ -1049,7 +1049,7 @@ class App:
         self.open_dropdown = None
 
     def back_one(self):
-        leaving_lit_qr = self.screen == "seed-show" or (
+        leaving_lit_qr = self.screen in ("seed-show", "address") or (
             self.screen == "qr" and self.qr_kind in ("key", "descriptor")
         )
         leaving_wallet = self.screen == "wallet"
@@ -4475,6 +4475,13 @@ class App:
             sheet = self._build_address_sheet(title, address, label, path_lines, key)
         offset = self._scroll_offset("address", sheet["end"], clearance=8)
         self._paste_address_sheet(frame, sheet, offset)
+        brightness_y = sheet["brightness_y"] - offset
+        if brightness_y + 52 > HEADER and brightness_y < HEIGHT:
+            first_hit = len(frame.hits)
+            self._brightness_control(frame, brightness_y)
+            for hit in frame.hits[first_hit:]:
+                hit["box"] = (hit["box"][0], max(HEADER, hit["box"][1]),
+                              hit["box"][2], min(HEIGHT, hit["box"][3]))
         frame.header(title, "back")
         self._hit_address_control(frame, sheet.get("button"), offset, "export-address", "Export to SD Card")
         self._hit_address_control(frame, sheet.get("sign"), offset, "address-sign", "Sign Message")
@@ -4495,7 +4502,7 @@ class App:
         button_h = metrics.button_height("Export to SD Card")
         sign_h = metrics.button_height("Sign Message")
         note_h = self._text_height(metrics, note, TITLE_SIZE) if note else 0
-        end = HEADER + 12 + ADDRESS_QR + 4 + self._grouped_address_height(metrics, address) + 8
+        end = HEADER + 12 + ADDRESS_QR + 8 + 52 + 12 + self._grouped_address_height(metrics, address) + 8
         end += self._text_height(metrics, label, TITLE_SIZE)
         end += len(path_lines) * (ADDRESS_PATH_SIZE + 8)
         end += 4 + button_h + 12 + sign_h + 12 + note_h
@@ -4506,7 +4513,8 @@ class App:
         y = HEADER + 12
         image = _qr_image(address, ADDRESS_QR)
         sheet.image.paste(image, ((WIDTH - image.width) // 2, y))
-        y += image.height + 4
+        brightness_y = y + image.height + 8
+        y = brightness_y + 52 + 12
         y = self._grouped_address(sheet, address, y)
         y = sheet.text(label, MARGIN, y + 8, size=TITLE_SIZE, fill=MUTED)
         for line in path_lines:
@@ -4528,6 +4536,7 @@ class App:
             "key": key,
             "image": sheet.image,
             "end": y,
+            "brightness_y": brightness_y,
             "button": button,
             "sign": sign_button,
             "note": note,
@@ -7162,7 +7171,7 @@ class App:
             return bool(self.message_signature)
         if self.screen == "seed-show":
             return SEED_FORMATS[self.seed_format] != "words"
-        if self.screen in ("psbt-qr", "psbt-input-qr"):
+        if self.screen in ("address", "psbt-qr", "psbt-input-qr"):
             return True
         return self.screen == "qr" and self.qr_kind in ("key", "descriptor")
 
