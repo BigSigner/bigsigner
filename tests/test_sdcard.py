@@ -50,7 +50,7 @@ def test_sd_card_folder_lists_subdirectories_and_loads_a_seed():
     app = App()
     app.screen = "keys"
     _tap(app, "plus")
-    _tap(app, "Load from SD Card")
+    _tap(app, "Load from File")
     assert app.screen == "sd"
     app.render()
     assert any(hit["label"] == "seeds/" for hit in app.hits)
@@ -77,7 +77,7 @@ def test_a_file_that_is_not_a_key_opens_an_error_screen():
     app = App()
     app.screen = "keys"
     _tap(app, "plus")
-    _tap(app, "Load from SD Card")
+    _tap(app, "Load from File")
     _tap(app, "note.txt")
     assert app.screen == "load-error"
     assert app.load_error == "That file is not a seed, key expression or wallet descriptor."
@@ -100,7 +100,7 @@ def test_a_binary_psbt_loaded_as_a_seed_names_the_type():
     app = App()
     app.screen = "keys"
     _tap(app, "plus")
-    _tap(app, "Load from SD Card")
+    _tap(app, "Load from File")
     _tap(app, "wallet.psbt")
     assert app.screen == "load-error"
     assert app.load_error == (
@@ -144,7 +144,7 @@ def test_disk_card_lists_and_loads_a_seed(monkeypatch, tmp_path):
     app = App()
     app.screen = "keys"
     _tap(app, "plus")
-    _tap(app, "Load from SD Card")
+    _tap(app, "Load from File")
     assert app.screen == "sd"
     _tap(app, "seeds/")
     assert app.sd_dir == "seeds"
@@ -193,7 +193,7 @@ def test_a_singlesig_descriptor_from_keys_asks_before_loading_both():
     app = App()
     app.screen = "keys"
     _tap(app, "plus")
-    _tap(app, "Load from SD Card")
+    _tap(app, "Load from File")
     _tap(app, "wallet.txt")
     assert app.screen == "descriptor-choice"
     assert app.confirm is None
@@ -224,7 +224,7 @@ def test_a_singlesig_descriptor_from_keys_asks_before_loading_both():
     both = App()
     both.screen = "keys"
     _tap(both, "plus")
-    _tap(both, "Load from SD Card")
+    _tap(both, "Load from File")
     _tap(both, "wallet.txt")
     _tap(both, "Both Wallet and Key")
     assert both.screen == "external-review"
@@ -251,7 +251,7 @@ def test_descriptor_load_rejects_a_seed_file():
     app = App()
     app.screen = "wallets"
     _tap(app, "plus")
-    _tap(app, "Load from SD Card")
+    _tap(app, "Load from File")
     assert app.sd_expect == "descriptor"
     _tap(app, "seed.txt")
     assert app.screen == "load-error"
@@ -345,7 +345,7 @@ def test_a_long_filename_wraps_at_the_overflowing_character():
     app = App()
     app.screen = "keys"
     _tap(app, "plus")
-    _tap(app, "Load from SD Card")
+    _tap(app, "Load from File")
     image = app.render()
     draw = ImageDraw.Draw(image)
     face = font(TITLE_SIZE)
@@ -404,7 +404,7 @@ def test_a_memory_card_lists_folders_and_loads_a_seed():
     app = App()
     app.screen = "keys"
     _tap(app, "plus")
-    _tap(app, "Load from SD Card")
+    _tap(app, "Load from File")
     _tap(app, "seeds/")
     _tap(app, "abandon.txt")
     assert app.screen == "key"
@@ -552,13 +552,13 @@ def test_export_seed_writes_words_that_load_from_the_card():
     fresh = App()
     fresh.screen = "keys"
     _tap(fresh, "plus")
-    _tap(fresh, "Load from SD Card")
+    _tap(fresh, "Load from File")
     _tap(fresh, app.filename)
     assert fresh.notice == "The seed was added successfully."
     again = App()
     again.screen = "keys"
     _tap(again, "plus")
-    _tap(again, "Load from SD Card")
+    _tap(again, "Load from File")
     _tap(again, "spaced.txt")
     assert again.notice == "The seed was added successfully."
 

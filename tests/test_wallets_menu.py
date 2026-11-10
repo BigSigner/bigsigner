@@ -224,7 +224,7 @@ def test_wallets_plus_opens_the_descriptor_menu():
     labels = {hit["label"] for hit in app.hits}
     assert "Scan QR Code" in labels
     assert "Manual entry of descriptor" not in labels
-    assert "Load from SD Card" in labels
+    assert "Load from File" in labels
     assert "Select from Existing SingleSig Key" in labels
     assert "Select from Existing MultiSig Keys" in labels
     singlesig = next(hit for hit in app.hits if hit["action"] == "wallet-singlesig")

@@ -183,7 +183,7 @@ def test_a_native_segwit_wallet_offers_message_signing():
         "go back and select the address you want to sign a message with."
     ) in shown
     assert any(hit["label"] == "Scan QR Code" for hit in app.hits)
-    assert any(hit["label"] == "Load from SD Card" for hit in app.hits)
+    assert any(hit["label"] == "Load from File" for hit in app.hits)
 
 
 def _assert_message_signing_is_disabled(app):
@@ -259,7 +259,7 @@ def test_a_bad_qr_or_file_stays_on_the_choice_screen():
     mount_memory({"files": {"note.txt": _command("m/84h/0h/0h/0/0", "hello\n")}})
     try:
         _tap(app, "Dismiss")
-        _tap(app, "Load from SD Card")
+        _tap(app, "Load from File")
         _tap(app, "note.txt")
         assert app.screen == "message-edit"
         assert app.message_text == "hello\n"
@@ -571,7 +571,7 @@ def test_a_native_address_signs_with_its_own_path():
     _tap(app, "Sign Message")
     assert app.screen == "address-message"
     app.render()
-    labels = ["Manual Entry", "Scan QR Code", "Load from SD Card"]
+    labels = ["Manual Entry", "Scan QR Code", "Load from File"]
     tops = []
     for label in labels:
         hit = next(item for item in app.hits if item["label"] == label)
@@ -613,17 +613,17 @@ def test_a_native_address_signs_with_its_own_path():
     )
     try:
         _tap(app, "Dismiss")
-        _tap(app, "Load from SD Card")
+        _tap(app, "Load from File")
         _tap(app, "bad.txt")
         assert app.screen == "address-message"
         assert app.notice == NOT_ASCII
         _tap(app, "Dismiss")
-        _tap(app, "Load from SD Card")
+        _tap(app, "Load from File")
         _tap(app, "command.txt")
         assert app.screen == "address-message"
         assert app.notice == ADDRESS_MESSAGE_COMMAND
         _tap(app, "Dismiss")
-        _tap(app, "Load from SD Card")
+        _tap(app, "Load from File")
         _tap(app, "note.txt")
     finally:
         unmount_memory()
@@ -811,7 +811,7 @@ def test_loading_a_signmessage_command_longer_than_1024_bytes_is_refused():
     mount_memory({"files": {"long.txt": command}})
     try:
         _tap(app, "Dismiss")
-        _tap(app, "Load from SD Card")
+        _tap(app, "Load from File")
         _tap(app, "long.txt")
         assert app.screen == "message-source"
         assert app.notice == TOO_LONG

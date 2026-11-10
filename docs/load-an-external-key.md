@@ -2,7 +2,7 @@
 
 An external key is a watch-only key expression. It lets BigSigner show addresses for that key. It does not let BigSigner sign or send.
 
-Load one from Bitcoin Keys, with the plus button, then either Scan QR Code or Load from SD Card. The text is a key expression:
+Load one from Bitcoin Keys, with the plus button, then either Scan QR Code or Load from File. The text is a key expression:
 
 ```text
 [fingerprint/84h/0h/0h]xpub.../<0;1>/*

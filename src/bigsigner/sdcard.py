@@ -1,4 +1,4 @@
-"""SD card files for Load from SD Card and Export to SD Card.
+"""SD card files for Load from File and Export to SD Card.
 
 The browser page and the tests call mount_memory. An empty mounted card is
 inserted. A text file is a string. A non-text file is stored as bytes, from a

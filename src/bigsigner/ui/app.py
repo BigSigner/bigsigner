@@ -1648,7 +1648,7 @@ class App:
             self.set_notice("")
 
     def _generate(self, frame: Frame):
-        frame.header("New seed", "back")
+        frame.header("New Seed", "back")
         y = frame.text(
             "Seed generation needs a safe source of randomness. BigSigner does not use a hardware random-number chip (TRNG). Choose dice, coin flips, or the camera.",
             MARGIN,
@@ -2660,10 +2660,10 @@ class App:
             self._speed_dial(
                 frame,
                 (
-                    ("Manual Entry", "add-manual"),
-                    ("Scan QR Code", "add-scan"),
-                    ("Load from SD Card", "add-sd"),
-                    ("Generate New Seed", "add-generate"),
+                    ("Manual Entry", "add-manual", None),
+                    ("Scan QR Code", "add-scan", Icons.CAMERA),
+                    ("Load from File", "add-sd", Icons.FILE),
+                    ("Generate New Seed", "add-generate", None),
                 ),
             )
         self._plus(frame, "toggle-add", Icons.CLOSE if self.add_menu else Icons.PLUS)
@@ -3272,10 +3272,10 @@ class App:
             self._speed_dial(
                 frame,
                 (
-                    ("Scan QR Code", "wallet-scan"),
-                    ("Load from SD Card", "wallet-sd"),
-                    ("Select from Existing SingleSig Key", "wallet-singlesig"),
-                    ("Select from Existing MultiSig Keys", "wallet-multisig"),
+                    ("Scan QR Code", "wallet-scan", Icons.CAMERA),
+                    ("Load from File", "wallet-sd", Icons.FILE),
+                    ("Select from Existing SingleSig Key", "wallet-singlesig", None),
+                    ("Select from Existing MultiSig Keys", "wallet-multisig", None),
                 ),
             )
         self._plus(frame, "toggle-add", Icons.CLOSE if self.add_menu else Icons.PLUS)
@@ -4657,8 +4657,8 @@ class App:
             size=TITLE_SIZE,
         )
         y = frame.button(y + 8, "Manual Entry", "address-type")
-        y = frame.button(y, "Scan QR Code", "address-scan")
-        frame.button(y, "Load from SD Card", "address-sd")
+        y = frame.button(y, "Scan QR Code", "address-scan", icon=Icons.CAMERA, awesome=True)
+        frame.button(y, "Load from File", "address-sd", icon=Icons.FILE, awesome=True)
 
     def _address_type(self, frame: Frame):
         frame.header("Manual Entry", "back")
@@ -6640,21 +6640,28 @@ class App:
         gap = 12
         text_width = 380
         prepared = []
-        for label, action in items:
-            lines = wrap(frame.draw, label, face, text_width)
+        icon_size = BODY_SIZE
+        icon_gap = 12
+        for label, action, icon in items:
+            label_width = text_width - (icon_size + icon_gap if icon else 0)
+            lines = wrap(frame.draw, label, face, label_width)
             height = max(BODY_SIZE + 28, 16 + line_h * len(lines))
-            prepared.append((action, lines, height, label))
+            prepared.append((action, lines, height, label, icon))
         rows = []
         y = HEIGHT - _PLUS_CLEARANCE - 16
-        for action, lines, height, label in reversed(prepared):
+        for action, lines, height, label, icon in reversed(prepared):
             y -= height
             box = (WIDTH - 24 - (text_width + 36), y, WIDTH - 24, y + height)
             frame.draw.rounded_rectangle(box, radius=16, fill=WHITE)
             _left, top, _right, bottom = frame.draw.textbbox((0, 0), lines[0], font=face)
             block = (bottom - top) + line_h * (len(lines) - 1)
             text_y = y + (height - block) / 2 - top
+            text_x = box[0] + 18
+            if icon:
+                frame.glyph(icon, text_x + icon_size / 2, y + height / 2, icon_size, INK, awesome=True)
+                text_x += icon_size + icon_gap
             for line in lines:
-                frame.draw.text((box[0] + 18, text_y), line, font=face, fill=INK)
+                frame.draw.text((text_x, text_y), line, font=face, fill=INK)
                 text_y += line_h
             rows.append((y, y + height, action, label))
             y -= gap
@@ -7205,8 +7212,8 @@ class App:
 
     def _load_psbt(self, frame: Frame):
         frame.header("Load Transaction", "back")
-        y = frame.button(HEADER + 24, "Scan QR Code", "psbt-scan")
-        frame.button(y, "Load from SD Card", "psbt-sd")
+        y = frame.button(HEADER + 24, "Scan QR Code", "psbt-scan", icon=Icons.CAMERA, awesome=True)
+        frame.button(y, "Load from File", "psbt-sd", icon=Icons.FILE, awesome=True)
 
     def _open_psbt_scan(self):
         self.scan_kind = "psbt"
@@ -7947,8 +7954,8 @@ class App:
     def _address_message(self, frame: Frame):
         frame.header("Sign Message", "back")
         y = frame.button(HEADER + 24, "Manual Entry", "address-message-manual")
-        y = frame.button(y, "Scan QR Code", "address-message-scan")
-        frame.button(y, "Load from SD Card", "address-message-sd")
+        y = frame.button(y, "Scan QR Code", "address-message-scan", icon=Icons.CAMERA, awesome=True)
+        frame.button(y, "Load from File", "address-message-sd", icon=Icons.FILE, awesome=True)
 
     def _open_address_message_scan(self):
         self.scan_kind = "address-message"
@@ -8037,8 +8044,8 @@ class App:
 
     def _message_source(self, frame: Frame):
         frame.header("Sign Message", "back")
-        y = frame.button(HEADER + 24, "Scan QR Code", "message-scan")
-        y = frame.button(y, "Load from SD Card", "message-sd")
+        y = frame.button(HEADER + 24, "Scan QR Code", "message-scan", icon=Icons.CAMERA, awesome=True)
+        y = frame.button(y, "Load from File", "message-sd", icon=Icons.FILE, awesome=True)
         frame.text(MESSAGE_ADDRESS_HINT, MARGIN, y + 8, size=MESSAGE_HINT_SIZE, fill=MUTED)
 
     def _message_is_address_command(self) -> bool:

@@ -61,7 +61,7 @@ The hash is a query string, so a seed in it is not sent to the server. A reload 
 http://127.0.0.1:8780/#seed=abandon,abandon,abandon,abandon,abandon,abandon,abandon,abandon,abandon,abandon,abandon,about
 ```
 
-SD Card, beside the picture, keeps files in the browser. Load from SD Card reads those files. New Folder adds a directory, and Delete removes a file or a directory and what is inside it. A file saved from the picture is added to that same card.
+SD Card, beside the picture, keeps files in the browser. Load from File reads those files. New Folder adds a directory, and Delete removes a file or a directory and what is inside it. A file saved from the picture is added to that same card.
 
 These variables are for the panel and the tests. Do not set them on a device that holds real funds.
 

@@ -18,4 +18,4 @@ A technical token keeps its own spelling. The export choice stays `xpub only`. P
 
 The passphrase keyboard modes stay the literal strings `abc`, `ABC`, `.?123`, and `#+=`.
 
-Examples: Show Full Details, Export to SD Card, Both Wallet and Key, Only the Key, Enter a Passphrase, Load from SD Card, Derive a Native-Segwit SingleSig Key, Go to Native-Segwit SingleSig Wallet, Use This Account, Create a Copy of This Seed with a Passphrase.
+Examples: Show Full Details, Export to SD Card, Both Wallet and Key, Only the Key, Enter a Passphrase, Load from File, Derive a Native-Segwit SingleSig Key, Go to Native-Segwit SingleSig Wallet, Use This Account, Create a Copy of This Seed with a Passphrase.

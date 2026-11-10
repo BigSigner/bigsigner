@@ -246,7 +246,7 @@ def _load_key_file(app, record, name, text):
     mount_memory({"files": {name: text + "\n"}})
     app.screen = "keys"
     record.click(app, "plus")
-    record.click(app, "Load from SD Card")
+    record.click(app, "Load from File")
     record.click(app, name)
 
 
@@ -334,7 +334,7 @@ def test_sd_card_key_expression_opens_the_review_saves_screenshots():
     record.note("Loaded a taproot key expression from a file on the SD card.")
     app.render()
     record.click(app, "plus")
-    record.click(app, "Load from SD Card")
+    record.click(app, "Load from File")
     record.click(app, "key.txt")
     record.shot(app, "warning")
     assert app.screen == "external-review"
