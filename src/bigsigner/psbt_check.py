@@ -1,12 +1,11 @@
 """Stop before signing when a PSBT asks for something this signer will not do.
 
-The checks run in the order a person listed them. Each refusal says the case is
-not supported by this hardware wallet, and names the wallets or accounts when
-that is what distinguishes it.
+The checks refuse unsupported cases and mismatched ownership claims, naming
+wallets or accounts when that distinguishes the problem.
 """
 
 from embit.ec import PublicKey, SchnorrSig, Signature
-from embit.psbt import PSBT, PSBTError
+from embit.psbt import OutputScope, PSBT, PSBTError
 from embit.script import Script
 from embit.transaction import SIGHASH
 
@@ -16,6 +15,10 @@ from .psbt_review import ReviewError, _tx_weight
 from .session import SessionError, _public_for
 
 NOT_SUPPORTED = "not supported by this hardware wallet"
+SPOOFED_CHANGE = (
+    "An output claims to belong to this wallet{account_note}, but its address does not match "
+    "the supplied derivation path. This may be an attempt to spoof a change output."
+)
 
 
 def require_psbt_version(psbt) -> None:
@@ -62,13 +65,13 @@ NATIVE_DUST_SATS = 294
 WITNESS_SCRIPT_DUST_SATS = 330
 
 
-def check_loaded_psbt(session, wallet_index: int, text: str, progress=None) -> PSBT:
+def check_loaded_psbt(session, wallet_index: int, text: str, progress=None, *, output_info=None, accounts=None) -> PSBT:
     """The parsed PSBT, after every refusal below has been passed.
 
     ``progress`` is ``progress(message, done, total)``. ``done`` runs from 0 to
     ``total``. The caller may treat ``total`` as the check's share of a longer bar.
     """
-    steps = iter_check_loaded_psbt(session, wallet_index, text)
+    steps = iter_check_loaded_psbt(session, wallet_index, text, output_info=output_info, accounts=accounts)
     try:
         while True:
             message, done, total = next(steps)
@@ -77,7 +80,7 @@ def check_loaded_psbt(session, wallet_index: int, text: str, progress=None) -> P
         return stop.value
 
 
-def iter_check_loaded_psbt(session, wallet_index: int, text: str):
+def iter_check_loaded_psbt(session, wallet_index: int, text: str, *, output_info=None, accounts=None):
     """Yield ``(message, done, total)`` while checking; return the parsed PSBT.
 
     The browser emulator advances one paint's worth of work per frame. The panel
@@ -127,9 +130,8 @@ def iter_check_loaded_psbt(session, wallet_index: int, text: str):
         if key in seen:
             raise ReviewError(f"Two inputs that spend the same output are {NOT_SUPPORTED}.")
         seen.add(key)
-    amounts = [_input_amount(psbt, index) for index in range(len(transaction.vin))]
-    if any(amount is None for amount in amounts):
-        raise ReviewError(f"An input without an amount is {NOT_SUPPORTED}.")
+    utxos = [_input_utxo(scope) for scope in psbt.inputs]
+    amounts = [int(utxo.value) for utxo in utxos]
     output_total = sum(int(vout.value) for vout in transaction.vout)
     if output_total > sum(amounts):
         raise ReviewError(f"Outputs that add up to more than the inputs are {NOT_SUPPORTED}.")
@@ -147,19 +149,21 @@ def iter_check_loaded_psbt(session, wallet_index: int, text: str):
             done + index,
             total,
         )
-        parsed.append(_input_paths(session, wallet, psbt.inputs[index]))
+        item = _input_paths(session, wallet, psbt.inputs[index])
+        _known_wallet(session, wallet, item)
+        parsed.append(item)
     done += input_count
     _same_prefix(parsed)
-    _known_wallet(session, wallet, parsed)
-    _selected_accounts(wallet, parsed)
+    for item in parsed:
+        _selected_accounts(wallet, item, accounts)
     for index, item in enumerate(parsed):
         yield (
             f"Checking input {index + 1} of {input_count}",
             done + index,
             total,
         )
-        _matches_psbt(session, wallet, psbt.inputs[index], item)
-        _scripts(wallet, psbt.inputs[index], session, item)
+        _matches_psbt(session, wallet, psbt.inputs[index], item, utxos[index])
+        _scripts(wallet, psbt.inputs[index], item)
         _sighash(wallet, psbt.inputs[index])
         _sequence(psbt.inputs[index], transaction.vin[index])
     done += input_count
@@ -169,7 +173,7 @@ def iter_check_loaded_psbt(session, wallet_index: int, text: str):
             done + index,
             total,
         )
-        _check_output(session, wallet, psbt, index)
+        _check_output(session, wallet, psbt, index, output_info, accounts=accounts)
     done += output_count
     yield ("Checking signatures\u2026", done, total)
     verify_existing_signatures(psbt)
@@ -226,12 +230,35 @@ def _input_amount(psbt: PSBT, index: int):
     scope = psbt.inputs[index]
     if scope.witness_utxo is not None:
         return int(scope.witness_utxo.value)
-    if scope.non_witness_utxo is not None:
-        try:
-            return int(scope.non_witness_utxo.vout[psbt.tx.vin[index].vout].value)
-        except Exception:
-            return None
     return None
+
+
+def _input_utxo(scope):
+    """Require a witness UTXO; check a full previous transaction if supplied.
+
+    BIP 174 requires checking its txid when supplied, even for Segwit. It must
+    describe the same amount and script as the required witness UTXO.
+    """
+    witness = scope.witness_utxo
+    if witness is None:
+        raise ReviewError(
+            f"An input without witness UTXO data (amount and locking script) is {NOT_SUPPORTED}."
+        )
+    previous = scope.non_witness_utxo
+    if previous is None:
+        return witness
+    if previous.txid() != scope.txid:
+        raise ReviewError(
+            f"An input whose previous transaction does not match its transaction id is {NOT_SUPPORTED}."
+        )
+    if scope.vout is None or not 0 <= scope.vout < len(previous.vout):
+        raise ReviewError(f"An input whose previous output does not exist is {NOT_SUPPORTED}.")
+    output = previous.vout[scope.vout]
+    if witness.serialize() != output.serialize():
+        raise ReviewError(
+            f"An input whose witness UTXO does not match its previous output is {NOT_SUPPORTED}."
+        )
+    return witness
 
 
 def _input_paths(session, wallet, scope) -> dict:
@@ -257,6 +284,24 @@ def _input_paths(session, wallet, scope) -> dict:
     if any(row["out_of_range"] and row["role"] == wallet.role for row in ours):
         raise ReviewError(
             f"An input derivation path that this wallet would not derive is {NOT_SUPPORTED}."
+        )
+    unique = {}
+    for row in ours:
+        fingerprint = row["fingerprint"]
+        if fingerprint in unique and unique[fingerprint]["path"] != row["path"]:
+            raise ReviewError(
+                f"An input with more than one derivation for the same key is {NOT_SUPPORTED}."
+            )
+        unique[fingerprint] = row
+        if row["role"] == wallet.role:
+            try:
+                classify_path(list(row["prefix"]), session.network)
+            except PathError as exc:
+                raise ReviewError(_UNRECOGNIZED) from exc
+    ours = list(unique.values())
+    if len({(row["branch"], row["index"]) for row in ours}) != 1:
+        raise ReviewError(
+            f"A MultiSig input whose keys do not use the same branch and address index is {NOT_SUPPORTED}."
         )
     return {"rows": ours, "all_rows": all_rows, "prefix": ours[0]["prefix"]}
 
@@ -299,15 +344,17 @@ def _parse_path(path: list[int]) -> dict:
 
 
 def _same_prefix(parsed: list[dict]):
-    prefixes = {tuple(row["prefix"] for row in item["rows"]) for item in parsed}
+    prefixes = {
+        tuple(sorted((row["fingerprint"], row["prefix"]) for row in item["rows"]))
+        for item in parsed
+    }
     if len(prefixes) != 1:
         raise ReviewError(
             f"A transaction that spends from more than one account or wallet is {NOT_SUPPORTED}."
         )
 
 
-def _known_wallet(session, wallet, parsed: list[dict]):
-    item = parsed[0]
+def _known_wallet(session, wallet, item: dict):
     network_coin = coin_type(session.network) | HARDENED
     for row in item["rows"]:
         if row["role"] == "multisig_native" and len(row["prefix"]) >= 4 and row["prefix"][3] != (2 | HARDENED):
@@ -323,9 +370,9 @@ def _known_wallet(session, wallet, parsed: list[dict]):
         raise ReviewError(_other_wallet_message(session, wallet, item["all_rows"]) or _UNRECOGNIZED)
 
 
-def _selected_accounts(wallet, parsed: list[dict]):
-    found = {row["fingerprint"]: row["account"] for row in parsed[0]["rows"]}
-    selected = {fingerprint: wallet.accounts[fingerprint] for fingerprint in wallet.fingerprints}
+def _selected_accounts(wallet, item: dict, accounts=None):
+    found = _accounts(item)
+    selected = dict(wallet.accounts if accounts is None else accounts)
     if found == selected:
         return
     if len(wallet.fingerprints) == 1:
@@ -344,11 +391,12 @@ def _selected_accounts(wallet, parsed: list[dict]):
     )
 
 
-def _matches_psbt(session, wallet, scope, item: dict):
-    derived_script = _script_at(session, wallet, _accounts(item), item["rows"][0]["branch"], item["rows"][0]["index"])
-    utxo = scope.witness_utxo
-    script = None if utxo is None else utxo.script_pubkey
-    if script is not None and script != derived_script:
+def _matches_psbt(session, wallet, scope, item: dict, utxo):
+    row = item["rows"][0]
+    derived = session._parsed_descriptor(wallet, _accounts(item)).derive(
+        row["index"], branch_index=row["branch"],
+    )
+    if utxo.script_pubkey != derived.script_pubkey():
         if any(row["fingerprint"] not in wallet.fingerprints for row in item["all_rows"]):
             other = _other_wallet_message(session, wallet, item["all_rows"])
             if other:
@@ -356,29 +404,48 @@ def _matches_psbt(session, wallet, scope, item: dict):
         raise ReviewError(
             f"An input whose derived address does not match the PSBT is {NOT_SUPPORTED}."
         )
+    _check_public_keys(wallet, scope, item, derived, "input")
+    item["derived"] = derived
+
+
+def _check_public_keys(wallet, scope, item, derived, kind):
+    """The descriptor comes from loaded keys, never from PSBT-supplied xpubs."""
+    keys = {key.origin.fingerprint: key.get_public_key() for key in derived.keys}
     for pubkey, derivation in _derivation_items(scope):
         fingerprint = derivation.fingerprint
         path = list(derivation.derivation)
         row = next((candidate for candidate in item["rows"] if candidate["fingerprint"] == fingerprint and candidate["path"] == path), None)
         if row is None:
             continue
-        expected = _child_key(session, wallet, fingerprint, row)
+        expected = keys[fingerprint]
         if not _same_key(pubkey, expected, wallet.role == SINGLESIG_TAPROOT):
             raise ReviewError(
-                f"An input whose public key does not match its derivation path is {NOT_SUPPORTED}."
+                f"An {kind} whose public key does not match its derivation path is {NOT_SUPPORTED}."
             )
 
 
-def _scripts(wallet, scope, session, item: dict):
-    del session, item
+def _scripts(wallet, scope, item: dict, *, kind="input"):
     if scope.redeem_script is not None or (
         wallet.role != "multisig_native" and scope.witness_script is not None
     ):
         raise ReviewError(f"An unexpected redeem script or witness script is {NOT_SUPPORTED}.")
-    if wallet.role == "multisig_native" and scope.witness_script is not None:
-        # The witness program is the SHA256 of the witness script. A different
-        # script would already have failed the address check above.
-        return
+    derived = item["derived"]
+    if wallet.role == "multisig_native":
+        expected = derived.witness_script()
+        if scope.witness_script is not None and scope.witness_script != expected:
+            raise ReviewError(f"An {kind} whose witness script does not match the wallet is {NOT_SUPPORTED}.")
+        # embit needs the full script for the Segwit sighash, not its hash.
+        if kind == "input":
+            scope.witness_script = expected
+    if wallet.role == SINGLESIG_TAPROOT:
+        expected = derived.keys[0].get_public_key()
+        if scope.taproot_internal_key is not None and not _same_key(scope.taproot_internal_key, expected, True):
+            raise ReviewError(f"An {kind} whose Taproot internal key does not match the wallet is {NOT_SUPPORTED}.")
+        tree = scope.unknown.get(b"\x06") if kind == "output" else None
+        if (tree or getattr(scope, "taproot_merkle_root", None)
+                or getattr(scope, "taproot_scripts", None) or getattr(scope, "taproot_sigs", None)
+                or any(leaves for leaves, _origin in scope.taproot_bip32_derivations.values())):
+            raise ReviewError(f"A Taproot script tree in a key-path-only wallet is {NOT_SUPPORTED}.")
 
 
 def verify_existing_signatures(psbt: PSBT) -> None:
@@ -812,45 +879,82 @@ def _outputs(session, wallet, psbt: PSBT):
         _check_output(session, wallet, psbt, index)
 
 
-def _check_output(session, wallet, psbt: PSBT, index: int):
+def output_scope(psbt: PSBT, index: int, output_info=None):
+    """Fill missing participant origins without overriding PSBT-supplied claims.
+
+    The extra information is bound to this output's actual locking script.
+    Keep it separate from the PSBT and preserve any supplied script metadata.
+    """
     scope = psbt.outputs[index]
+    info = (output_info or {}).get(index)
+    if info is None:
+        return scope
+    discovered = {fingerprint for fingerprint, _path in _derivations(info)}
+    supplied = {fingerprint for fingerprint, _path in _derivations(scope)}
+    if discovered.issubset(supplied):
+        return scope
     vout = psbt.tx.vout[index]
-    script = scope.script_pubkey or vout.script_pubkey
+    if info.script_pubkey != vout.script_pubkey:
+        raise ReviewError(f"Additional address information does not match PSBT output {index}.")
+    merged = OutputScope(unknown={}, vout=vout)
+    merged.update(info)
+    merged.update(scope)
+    return merged
+
+
+def _check_output(session, wallet, psbt: PSBT, index: int, output_info=None, *, accounts=None):
+    scope = output_scope(psbt, index, output_info)
+    return output_ownership(session, wallet, scope, psbt.tx.vout[index].script_pubkey, accounts=accounts)
+
+
+def output_ownership(session, spending_wallet, scope, script, *, accounts=None):
+    """Return proven ownership, or refuse a complete but false wallet claim.
+
+    Try every matching policy: wallets can share participants and accounts but
+    have different MultiSig thresholds. A partial participant list is external.
+    """
     derivations = _derivations(scope)
     if not derivations or script is None:
-        return
-    owner = _output_wallet(session, derivations)
-    if owner is None:
-        return
-    try:
-        item = _input_paths(session, owner, scope)
-    except ReviewError as exc:
-        if "would not derive" in str(exc):
-            raise
-        return
-    derived = _script_at(session, owner, _accounts(item), item["rows"][0]["branch"], item["rows"][0]["index"])
-    if derived == script:
-        return
-    if owner is wallet:
-        raise ReviewError(
-            f"A change output whose derived address does not match the PSBT is {NOT_SUPPORTED}."
-        )
-    name = session.wallet_short_name_of(owner)
-    raise ReviewError(
-        f"An output matches {name}, but the derived address does not match the PSBT. "
-        f"That is {NOT_SUPPORTED}."
-    )
-
-
-def _output_wallet(session, derivations):
-    for fingerprint, path in derivations:
-        parsed = _parse_path(path)
-        for wallet in session.wallets:
-            if fingerprint in wallet.fingerprints and wallet.role == parsed["role"]:
-                mismatch = path_network_mismatch(path, session.network, address=True)
-                if mismatch:
-                    raise ReviewError(mismatch)
-                return wallet
+        return None
+    fingerprints = {fingerprint for fingerprint, _path in derivations}
+    spending_accounts = spending_wallet.accounts if accounts is None else accounts
+    failures = []
+    for index, wallet in enumerate(session.wallets):
+        matching = [(fingerprint, path) for fingerprint, path in derivations
+                    if fingerprint in wallet.fingerprints and _parse_path(path)["role"] == wallet.role]
+        if not matching:
+            continue
+        for _fingerprint, path in matching:
+            mismatch = path_network_mismatch(path, session.network, address=True)
+            if mismatch:
+                raise ReviewError(mismatch)
+        if not set(wallet.fingerprints).issubset(fingerprints):
+            continue
+        try:
+            item = _input_paths(session, wallet, scope)
+            if any(row["role"] != wallet.role for row in item["rows"]):
+                raise ReviewError(f"An output derivation path that this wallet would not derive is {NOT_SUPPORTED}.")
+            row = item["rows"][0]
+            derived = session._parsed_descriptor(wallet, _accounts(item)).derive(
+                row["index"], branch_index=row["branch"],
+            )
+            if derived.script_pubkey() != script:
+                if wallet is spending_wallet:
+                    note = " (on a different account)" if _accounts(item) != spending_accounts else ""
+                    raise ReviewError(SPOOFED_CHANGE.format(account_note=note))
+                raise ReviewError(f"An output whose derived address does not match the PSBT is {NOT_SUPPORTED}.")
+            _check_public_keys(wallet, scope, item, derived, "output")
+            item["derived"] = derived
+            _scripts(wallet, scope, item, kind="output")
+            return {"wallet_index": index, "accounts": _accounts(item),
+                    "branch": row["branch"], "index": row["index"]}
+        except ReviewError as exc:
+            failures.append(exc)
+        except SessionError:
+            # An account-specific external key cannot prove another account.
+            continue
+    if failures:
+        raise failures[0]
     return None
 
 

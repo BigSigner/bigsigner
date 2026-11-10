@@ -282,11 +282,14 @@ def test_result_is_applied_to_the_original_psbt_output_after_search():
     _tap(app, "psbt-search-start")
     while app.psbt_search_active():
         app._advance_psbt_search()
-    assert app.screen == "psbt-yaml" and app.confirm == "psbt-found"
+    assert app.screen == "address-search" and app.confirm == "psbt-found"
     assert app.psbt_search_hit["address_index"] == 61
+    assert app.psbt_view["change_outputs"] == []
+    app._act("psbt-search-confirm")
+    assert app.screen == "psbt-yaml"
     assert app.psbt_view["change_outputs"][0]["place"] == "Change Address #61"
-    assert next(iter(app.psbt_checked.outputs[0].bip32_derivations.values())).derivation[-2:] == [1, 61]
-    app._act("confirm-no")
+    assert not app.psbt_checked.outputs[0].bip32_derivations
+    assert next(iter(app.psbt_output_info[0].bip32_derivations.values())).derivation[-2:] == [1, 61]
 
 
 def test_address_search_saves_screenshots():

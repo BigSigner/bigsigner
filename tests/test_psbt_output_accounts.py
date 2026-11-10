@@ -47,7 +47,7 @@ def _spend(session, destination):
 
 
 @pytest.mark.parametrize("spending,receiving", [
-    ((0,), (0,)), ((0,), (3,)), ((3,), (0,)), ((3,), (3,)),
+    ((0,), (0,)), ((0,), (1,)), ((0,), (3,)), ((3,), (0,)), ((3,), (3,)),
     ((0, 4, 0), (0, 4, 0)), ((0, 4, 0), (1, 4, 0)),
     ((0, 4, 0), (0, 5, 0)), ((0, 4, 0), (1, 5, 0)),
 ])
@@ -106,7 +106,9 @@ def test_another_wallet_with_matching_accounts_is_a_known_payment(other, branch)
         if not app.psbt_search_active():
             break
         app._advance_psbt_search()
-    assert app.screen == "psbt-yaml" and app.confirm == "psbt-found"
+    assert app.screen == "address-search" and app.confirm == "psbt-found"
+    app._act("psbt-search-confirm")
+    assert app.screen == "psbt-yaml"
     view = app.psbt_view
     assert view["change_outputs"] == []
     assert view["outputs_note"] == ""

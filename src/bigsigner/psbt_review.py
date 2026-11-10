@@ -17,7 +17,7 @@ class ReviewError(ValueError):
     pass
 
 
-def review_psbt(session, wallet_index: int, raw: str | bytes) -> dict:
+def review_psbt(session, wallet_index: int, raw: str | bytes, *, output_info=None) -> dict:
     try:
         psbt = PSBT.from_string(raw) if isinstance(raw, str) else PSBT.parse(raw)
     except (PSBTError, Exception) as exc:
@@ -34,7 +34,7 @@ def review_psbt(session, wallet_index: int, raw: str | bytes) -> dict:
     inputs = [_read_input(session, wallet, psbt, index) for index in range(len(psbt.inputs))]
     accounts = _one_account_tuple(wallet, inputs)
     switched = accounts != {fp: wallet.accounts[fp] for fp in wallet.fingerprints}
-    outputs = [_read_output(session, wallet, psbt, index, accounts) for index in range(len(psbt.outputs))]
+    outputs = [_read_output(session, wallet, psbt, index, accounts, output_info) for index in range(len(psbt.outputs))]
     fee = sum(item["amount"] for item in inputs) - sum(item["amount"] for item in outputs)
     if fee < 0:
         raise ReviewError("The outputs are larger than the inputs.")
@@ -69,43 +69,46 @@ def review_psbt(session, wallet_index: int, raw: str | bytes) -> dict:
 
 
 def _read_input(session, wallet, psbt, index: int) -> dict:
+    from .psbt_check import _accounts, _input_paths, _input_utxo, _known_wallet, _matches_psbt, _scripts
+
     scope = psbt.inputs[index]
     vin = psbt.tx.vin[index]
-    if scope.witness_utxo is None:
-        raise ReviewError("An input is missing its previous output.")
+    utxo = _input_utxo(scope)
     sighash = scope.sighash_type
     _check_sighash(sighash, wallet.role == "singlesig_taproot")
     sequence = scope.sequence if scope.sequence is not None else vin.sequence
     _check_sequence_range(sequence)
-    derivations = _derivations(scope)
-    if not derivations:
-        raise ReviewError("An input is missing its derivation path.")
-    located = _locate(session, wallet, derivations, scope.witness_utxo.script_pubkey)
+    item = _input_paths(session, wallet, scope)
+    _known_wallet(session, wallet, item)
+    _matches_psbt(session, wallet, scope, item, utxo)
+    _scripts(wallet, scope, item)
+    row = item["rows"][0]
     return {
-        "amount": scope.witness_utxo.value,
+        "amount": utxo.value,
         "sequence": sequence,
         "sighash": sighash,
-        "script": scope.witness_utxo.script_pubkey,
+        "script": utxo.script_pubkey,
         "prev": f"{vin.txid.hex()}:{vin.vout}",
-        **located,
+        "accounts": _accounts(item),
+        "branch": row["branch"],
+        "index": row["index"],
     }
 
 
-def _read_output(session, wallet, psbt, index: int, accounts: dict) -> dict:
-    scope = psbt.outputs[index]
+def _read_output(session, wallet, psbt, index: int, accounts: dict, output_info=None) -> dict:
+    from .psbt_check import output_ownership, output_scope
+
+    scope = output_scope(psbt, index, output_info)
     vout = psbt.tx.vout[index]
     script = scope.script_pubkey or vout.script_pubkey
     amount = scope.value if scope.value is not None else vout.value
     op_return = bytes(script.data).startswith(b"\x6a") if script is not None else False
     payload = _op_return_payload(script) if op_return else None
-    derivations = _derivations(scope)
     change = None
-    if derivations and not op_return:
-        try:
-            located = _locate(session, wallet, derivations, script, accounts=accounts, required=False)
-        except ReviewError:
-            located = None
-        if located and located["accounts"] == accounts:
+    if not op_return:
+        located = output_ownership(session, wallet, scope, script, accounts=accounts)
+        if (located and session.wallets[located["wallet_index"]] is wallet
+                and located["accounts"] == accounts):
             change = located
     address = None
     if script is not None and not op_return:

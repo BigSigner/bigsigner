@@ -366,6 +366,8 @@ class App:
         self.descriptor_format = 0
         self.review = None
         self.psbt_checked = None
+        self.psbt_accounts = None
+        self.psbt_output_info = {}
         self.psbt_loaded = None
         self.psbt_view = None
         self.psbt_outputs_open = True
@@ -1473,6 +1475,7 @@ class App:
         "address-go": lambda self: self._open_found_address(),
         "psbt-search-start": lambda self: self._start_psbt_search(),
         "psbt-search-stop": lambda self: self._stop_psbt_search(),
+        "psbt-search-confirm": lambda self: self._confirm_psbt_search(),
         "sign-transaction": lambda self: self._open_sign_transaction(),
         "psbt-scan": lambda self: self._open_psbt_scan(),
         "psbt-sd": lambda self: self._open_sd("psbt"),
@@ -6017,7 +6020,8 @@ class App:
             return f"Address was found in wallet {hit['name']}"
         wallet = self.session.wallets[self.wallet_index]
         indexes = [int(index) for index in hit.get("account_indexes") or []]
-        spending = [int(wallet.accounts[fingerprint]) for fingerprint in wallet.fingerprints]
+        accounts = self.psbt_accounts if self.psbt_accounts is not None else wallet.accounts
+        spending = [int(accounts[fingerprint]) for fingerprint in wallet.fingerprints]
         if indexes == spending:
             kind = "Receive" if hit.get("branch") == 0 else "Change"
             return f"Address found in {kind} addresses: #{hit['address_index']}"
@@ -6065,7 +6069,8 @@ class App:
             y = box[3] - 24 - height
             left = box[0] + 20
             right = box[2] - 20
-            self._dialog_button(frame, (left, y, right, y + height), "OK", "confirm-no", BLUE)
+            action = "psbt-search-confirm" if self.confirm == "psbt-found" else "confirm-no"
+            self._dialog_button(frame, (left, y, right, y + height), "OK", action, BLUE)
             return
         gap = 12
         height = BODY_SIZE + 36
@@ -7237,7 +7242,10 @@ class App:
             return payload
         return text
 
-    def _accept_psbt_text(self, text: str | bytes, source: str):
+    def _accept_psbt_text(self, text: str | bytes, source: str, *, output_info=None, accounts=None):
+        wallet = self.session.wallets[self.wallet_index]
+        self.psbt_accounts = dict(wallet.accounts if accounts is None else accounts)
+        self.psbt_output_info = dict(output_info or {})
         self._begin_psbt_progress("Reading transaction\u2026")
         if self.defer_psbt_progress:
             # Browser: show progress, then each delay-0 frame advances the check.
@@ -7268,7 +7276,10 @@ class App:
             except SessionError as exc:
                 self._fail_psbt_text(exc, text, self._psbt_load_source)
                 return
-            self._psbt_check_gen = iter_check_loaded_psbt(self.session, self.wallet_index, payload)
+            self._psbt_check_gen = iter_check_loaded_psbt(
+                self.session, self.wallet_index, payload,
+                output_info=self.psbt_output_info, accounts=self.psbt_accounts,
+            )
         try:
             while True:
                 message, done, total = next(self._psbt_check_gen)
@@ -7298,6 +7309,8 @@ class App:
                 self.wallet_index,
                 psbt_text(text),
                 progress=self._on_psbt_check_progress,
+                output_info=self.psbt_output_info,
+                accounts=self.psbt_accounts,
             )
         except SessionError as exc:
             self._fail_psbt_text(exc, text, source)
@@ -7332,7 +7345,10 @@ class App:
         self._set_psbt_progress("Preparing review\u2026", check_total, check_total + 1, force=True)
         self.psbt_loaded = checked.serialize()
         self.psbt_checked = checked
-        self.psbt_view = describe_psbt(self.session, self.wallet_index, checked)
+        self.psbt_view = describe_psbt(
+            self.session, self.wallet_index, checked,
+            output_info=self.psbt_output_info, accounts=self.psbt_accounts,
+        )
         self._psbt_heights = {}
         self._psbt_sheet = None
         self.psbt_yaml_text = psbt_yaml(checked)
@@ -7524,7 +7540,8 @@ class App:
         self.psbt_search_hit = None
         wallet = self.session.wallets[self.wallet_index]
         self.psbt_search_last_checked = None
-        self.psbt_search_first = max(0, min(wallet.accounts.values()) - 2)
+        accounts = self.psbt_accounts if self.psbt_accounts is not None else wallet.accounts
+        self.psbt_search_first = max(0, min(accounts.values()) - 2)
         self.psbt_search_last = min(MAX_INDEX, self.psbt_search_first + 5)
         self.psbt_search_start = 0
         self.go("address-search")
@@ -7640,8 +7657,7 @@ class App:
                     account_line=account_line(wallet.fingerprints, accounts),
                     place=place_line(found["branch"], found["address_index"]),
                 )
-                self._include_found_derivation(found)
-                self.back_one()
+                found["output_info"] = self._found_output_info(found)
                 self.psbt_search_hit = found
                 self.confirm = "psbt-found"
             else:
@@ -7741,34 +7757,27 @@ class App:
         self.psbt_view["signature_note"] = multisig_signature_note(wallet, signed)
         self.psbt_continue = True
 
-    def _include_found_derivation(self, hit):
-        """Treat a searched address as if its derivation had been in the loaded PSBT."""
-        if self.psbt_checked is None:
+    def _confirm_psbt_search(self):
+        """Reload the entire review with the accumulated, still-untrusted origins."""
+        hit = self.psbt_search_hit
+        if self.confirm != "psbt-found" or hit is None or self.psbt_checked is None:
             return
-        self._write_output_origin(self.psbt_checked, hit)
-        if self.psbt_loaded is not None:
-            from embit.psbt import PSBT
+        extra = dict(self.psbt_output_info)
+        extra[hit["index"]] = hit["output_info"]
+        raw = self.psbt_checked.serialize()
+        self.psbt_search_hit = None
+        self.back = [screen for screen in self.back if screen not in ("address-search", "psbt-yaml")]
+        self._accept_psbt_text(raw, "file", output_info=extra, accounts=self.psbt_accounts)
 
-            loaded = PSBT.parse(self.psbt_loaded)
-            self._write_output_origin(loaded, hit)
-            self.psbt_loaded = loaded.serialize()
-        self.psbt_view = describe_psbt(self.session, self.wallet_index, self.psbt_checked)
-        self._psbt_heights = {}
-        self._psbt_sheet = None
-        self.psbt_found.pop(hit["index"], None)
-        self.psbt_change_open = bool(self.psbt_view["change_open"])
-        # The card may have grown, or moved from Outputs into Change Outputs.
-        # The old scroll offset would point at a different part.
-        self.scroll["psbt-yaml"] = 0
-
-    def _write_output_origin(self, psbt, hit):
-        from embit.psbt import DerivationPath
+    def _found_output_info(self, hit):
+        """Keep discovered public keys and full paths outside the original PSBT."""
+        from embit.psbt import DerivationPath, OutputScope
 
         from ..paths import SINGLESIG_TAPROOT
         from ..session import _public_for
 
         wallet = self.session.wallets[hit["wallet_index"]]
-        scope = psbt.outputs[hit["index"]]
+        scope = OutputScope(unknown={}, vout=self.psbt_checked.tx.vout[hit["index"]])
         branch = int(hit["branch"])
         address_index = int(hit["address_index"])
         for fingerprint, account in zip(wallet.fingerprints, hit["account_indexes"]):
@@ -7779,6 +7788,7 @@ class App:
                 scope.taproot_bip32_derivations[child.key] = ([], origin)
             else:
                 scope.bip32_derivations[child.key] = origin
+        return scope
 
     def _restore_loaded_psbt(self):
         """Back from the signed result shows the PSBT that was loaded, not the one just signed."""

@@ -10,8 +10,8 @@ from datetime import datetime, timezone
 from embit.networks import NETWORKS
 from embit.psbt import PSBT
 
-from .psbt_check import _input_amount, multisig_signature_note, seed_sign_rows
-from .psbt_review import LOCKTIME_THRESHOLD, _derivations, _estimate_vsize, _locate
+from .psbt_check import _input_amount, multisig_signature_note, output_ownership, output_scope, seed_sign_rows
+from .psbt_review import LOCKTIME_THRESHOLD, ReviewError, _estimate_vsize
 from .session import SessionError
 
 OP_RETURN_WARNING = (
@@ -226,20 +226,21 @@ def txid_rows(txid: str) -> list[str]:
     return [text[index : index + 16] for index in range(0, 64, 16)]
 
 
-def describe_psbt(session, wallet_index: int, psbt: PSBT) -> dict:
+def describe_psbt(session, wallet_index: int, psbt: PSBT, *, output_info=None, accounts=None) -> dict:
     """Everything the Transaction Signing screen says about one checked PSBT."""
     wallet = session.wallets[wallet_index]
+    accounts = dict(wallet.accounts if accounts is None else accounts)
     transaction = psbt.tx
     inputs = [_input_card(psbt, index) for index in range(len(psbt.inputs))]
     outputs = []
     change_outputs = []
     for index, scope in enumerate(psbt.outputs):
-        card = _output_card(session, wallet_index, psbt, index, scope)
+        card = _output_card(session, wallet_index, psbt, index, scope, output_info, accounts)
         if card["change"]:
             change_outputs.append(card)
         else:
             outputs.append(card)
-    if not outputs and _change_returns_to_spending_account(wallet, change_outputs):
+    if not outputs and _change_returns_to_spending_account(wallet, change_outputs, accounts):
         for card in change_outputs:
             card["receive_change"] = False
     fee = sum(item["amount"] for item in inputs) - sum(
@@ -255,7 +256,7 @@ def describe_psbt(session, wallet_index: int, psbt: PSBT) -> dict:
     txid = transaction.txid().hex()
     return {
         "wallet_name": session.wallet_short_name_of(wallet),
-        "account_line": account_line(wallet.fingerprints, wallet.accounts),
+        "account_line": account_line(wallet.fingerprints, accounts),
         "txid": txid,
         "txid_rows": txid_rows(txid),
         "locktime": locktime,
@@ -319,11 +320,12 @@ def _change_section_open(change_outputs: list[dict]) -> bool:
     return any(card.get("receive_change") for card in change_outputs)
 
 
-def _change_returns_to_spending_account(wallet, change_outputs: list[dict]) -> bool:
+def _change_returns_to_spending_account(wallet, change_outputs: list[dict], accounts=None) -> bool:
     """True when every change output uses the account this transaction spends."""
     if not change_outputs:
         return False
-    spending = {fingerprint: int(wallet.accounts[fingerprint]) for fingerprint in wallet.fingerprints}
+    selected = wallet.accounts if accounts is None else accounts
+    spending = {fingerprint: int(selected[fingerprint]) for fingerprint in wallet.fingerprints}
     for card in change_outputs:
         accounts = card.get("accounts") or {}
         if set(accounts) != set(spending):
@@ -443,7 +445,7 @@ def _relative(sequence: int):
     return None
 
 
-def _output_card(session, wallet_index: int, psbt: PSBT, index: int, scope) -> dict:
+def _output_card(session, wallet_index: int, psbt: PSBT, index: int, scope, output_info=None, accounts=None) -> dict:
     vout = psbt.tx.vout[index]
     script = scope.script_pubkey or vout.script_pubkey
     amount = int(scope.value if scope.value is not None else vout.value)
@@ -461,12 +463,17 @@ def _output_card(session, wallet_index: int, psbt: PSBT, index: int, scope) -> d
             "ascii": is_ascii(payload),
             "hex_lines": hex_lines(payload),
         }
-    owned = _owned_output(session, script, _derivations(scope))
+    wallet = session.wallets[wallet_index]
+    try:
+        effective = output_scope(psbt, index, output_info)
+        owned = _owned_output(session, wallet, script, effective, accounts)
+    except (ReviewError, SessionError):
+        owned = None
     # Either branch can return change, but another account is a payment.
     change = bool(
         owned
         and owned["wallet_index"] == wallet_index
-        and owned["accounts"] == session.wallets[wallet_index].accounts
+        and owned["accounts"] == (wallet.accounts if accounts is None else accounts)
     )
     address = ""
     if script is not None:
@@ -490,26 +497,17 @@ def _output_card(session, wallet_index: int, psbt: PSBT, index: int, scope) -> d
     }
 
 
-def _owned_output(session, script, derivations):
-    if script is None or not derivations:
+def _owned_output(session, spending_wallet, script, scope, accounts=None):
+    located = output_ownership(session, spending_wallet, scope, script, accounts=accounts)
+    if located is None:
         return None
-    for index, wallet in enumerate(session.wallets):
-        try:
-            located = _locate(session, wallet, derivations, script, required=False)
-        except Exception:
-            continue
-        if not located:
-            continue
-        return {
-            "wallet_index": index,
-            "name": session.wallet_short_name_of(wallet),
-            "account_line": account_line(wallet.fingerprints, located["accounts"]),
-            "accounts": located["accounts"],
-            "branch": located["branch"],
-            "index": located["index"],
-            "place": place_line(located["branch"], located["index"]),
-        }
-    return None
+    wallet = session.wallets[located["wallet_index"]]
+    return {
+        **located,
+        "name": session.wallet_short_name_of(wallet),
+        "account_line": account_line(wallet.fingerprints, located["accounts"]),
+        "place": place_line(located["branch"], located["index"]),
+    }
 
 
 def _network(name: str):

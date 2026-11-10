@@ -474,11 +474,12 @@ def _search_hidden_address(record, app):
     else:
         raise AssertionError("Address search did not finish")
     assert app._psbt_sheet is None
-    assert app._psbt_heights == {}
     record.shot(app, "search-found")
+    assert app.screen == "address-search"
     assert app.confirm == "psbt-found"
     assert app._confirm_message() == f"Address found in Receive addresses: #{HIDDEN_INDEX}"
-    app._act("confirm-no")
+    app._act("psbt-search-confirm")
+    assert app._psbt_heights == {}
     assert app.scroll["psbt-yaml"] == 0
     place = f"Receive Address #{HIDDEN_INDEX}"
     assert any(card["place"] == place and card["receive_change"] for card in app.psbt_view["change_outputs"])

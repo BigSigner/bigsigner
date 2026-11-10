@@ -77,7 +77,7 @@ def _raises(session, psbt, snippet):
         assert snippet in str(exc)
         assert "Bad Transaction" not in str(exc)
         assert any(part in str(exc) for part in (
-            NOT_SUPPORTED, "does not belong", "spends from account",
+            NOT_SUPPORTED, "does not belong", "spends from account", "spoof a change output",
         ))
     else:
         raise AssertionError(snippet)
@@ -308,7 +308,7 @@ def test_each_psbt_refusal_names_the_unsupported_case():
 
     missing_amount = _psbt(session)
     missing_amount.inputs[0].witness_utxo = None
-    _raises(session, missing_amount, "without an amount")
+    _raises(session, missing_amount, "without witness UTXO data")
 
     too_much = _psbt(session, amount=100_000, output=150_000)
     _raises(session, too_much, "more than the inputs")

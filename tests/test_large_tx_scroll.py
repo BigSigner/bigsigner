@@ -404,6 +404,8 @@ def test_hidden_receive_vectors_have_the_requested_origin_and_are_found(vector, 
     assert (hit["wallet_index"], hit["account_indexes"], hit["branch"], hit["address_index"]) == (
         1 if taproot else 0, [account], 0, 120,
     )
+    assert app.screen == "address-search"
+    app._act("psbt-search-confirm")
     assert app.screen == "psbt-yaml"
     assert app.psbt_view["change_outputs"] == []
     assert app.psbt_view["outputs_note"] == ""
@@ -425,21 +427,22 @@ def test_hidden_receive_vectors_have_the_requested_origin_and_are_found(vector, 
     assert "External Address" not in text
     assert not any(hit["action"].startswith("psbt-search-") for hit in frame.hits)
     view = app.psbt_view
-    # Origins are written as soon as search matches, before acknowledging it.
-    for enriched in (app.psbt_checked, PSBT.parse(app.psbt_loaded)):
-        scope = enriched.outputs[1]
-        if taproot:
-            public, (_, origin) = next(iter(scope.taproot_bip32_derivations.items()))
-            assert public.xonly() == child.xonly()
-        else:
-            public, origin = next(iter(scope.bip32_derivations.items()))
-            assert public == child
-        from bigsigner.paths import parse_path
-        assert origin.derivation == parse_path(path)
-        assert origin.fingerprint == root_of(ABANDON).my_fingerprint
-    app._act("confirm-no")
+    # The discovered origins stay separate from both PSBT copies.
+    for unchanged in (app.psbt_checked, PSBT.parse(app.psbt_loaded)):
+        assert not unchanged.outputs[1].bip32_derivations
+        assert not unchanged.outputs[1].taproot_bip32_derivations
+    scope = app.psbt_output_info[1]
+    if taproot:
+        public, (_, origin) = next(iter(scope.taproot_bip32_derivations.items()))
+        assert public.xonly() == child.xonly()
+    else:
+        public, origin = next(iter(scope.bip32_derivations.items()))
+        assert public == child
+    from bigsigner.paths import parse_path
+    assert origin.derivation == parse_path(path)
+    assert origin.fingerprint == root_of(ABANDON).my_fingerprint
     assert app.psbt_view is view
-    # The enriched result also survives restoring the loaded PSBT.
+    # The additional address information survives restoring the loaded PSBT.
     app._restore_loaded_psbt()
     assert app.psbt_view["change_outputs"] == []
     assert app.psbt_view["outputs"][1]["owned"]["place"] == "Receive Address #120"
