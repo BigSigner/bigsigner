@@ -2872,7 +2872,13 @@ class App:
                     frame.text(note, MARGIN, y - offset, size=TITLE_SIZE, fill=MUTED)
                 y += self._text_height(frame, note, TITLE_SIZE)
                 copy = "Create a Copy of This Seed with a Passphrase"
-            y = self._flow_button(frame, y, "Show/Export", "show-export", paint, offset)
+            if key.passphrase:
+                y = self._flow_button(frame, y, "Show/Export", "show-export", paint, offset)
+            else:
+                height = frame.button_height("Show")
+                if paint and y - offset + height > HEADER and y - offset < HEIGHT:
+                    self._pair_buttons(frame, y - offset, ("Show", "show-seed", True), ("Export", "export-seed", True))
+                y += height + 12
             y = self._flow_button(frame, y, "Derive an Extended Public Key", "derive-menu", paint, offset)
             y = self._flow_button(frame, y, copy, "copy-passphrase", paint, offset)
             return self._flow_button(

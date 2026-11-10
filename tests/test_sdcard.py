@@ -1,4 +1,5 @@
 import base64
+from pathlib import Path
 
 import pytest
 
@@ -445,15 +446,74 @@ def test_memory_card_rejects_a_bad_shape():
         mount_memory({"dirs": "seeds", "files": {}})
 
 
-def test_show_export_omits_the_passphrase_button_when_there_is_none():
+def test_seed_key_has_show_and_export_on_one_row_without_a_passphrase_button():
     app = App()
     added = app.session.add_mnemonic(ABANDON.split())
     app.selected_fp = added["fingerprint"]
     app.screen = "key"
-    app._act("show-export")
     app.render()
     labels = [hit["label"] for hit in app.hits if hit["action"] in ("show-seed", "show-passphrase", "export-seed")]
-    assert labels == ["Show Seed", "Export Seed to SD Card"]
+    assert labels == ["Show", "Export"]
+    show, export = [hit for hit in app.hits if hit["action"] in ("show-seed", "export-seed")]
+    assert show["box"][1] == export["box"][1]
+    assert show["box"][3] == export["box"][3]
+    assert show["box"][2] < export["box"][0]
+
+
+@pytest.mark.parametrize("passphrase", [None, "secret"])
+def test_seed_show_keeps_the_privacy_warning_and_returns_to_the_right_screen(passphrase):
+    app = App()
+    added = app.session.add_mnemonic(ABANDON.split(), passphrase=passphrase)
+    app.selected_fp = added["fingerprint"]
+    app.screen = "key"
+    if passphrase:
+        _tap(app, "Show/Export")
+    origin = "show-export" if passphrase else "key"
+    _tap(app, "Show Seed" if passphrase else "Show")
+    assert app.screen == origin and app.confirm == "show-seed"
+    app._act("confirm-yes")
+    assert app.screen == "seed-show" and app.qr_text == ABANDON
+    app.back_one()
+    assert app.screen == origin
+    if passphrase:
+        _tap(app, "Show Passphrase")
+        assert app.confirm == "show-passphrase"
+        app._act("confirm-yes")
+        assert app.screen == "passphrase-view"
+        app.back_one()
+        assert app.screen == "show-export"
+
+
+def test_export_seed_without_passphrase_returns_directly_to_seed_key():
+    mount_memory({"files": {}})
+    app = App()
+    added = app.session.add_mnemonic(ABANDON.split())
+    app.selected_fp = added["fingerprint"]
+    app.screen = "key"
+    _tap(app, "Export")
+    assert app.screen == "seed-backup" and app.export_return == "key"
+    assert app.back == ["key"]
+    _tap(app, "Continue")
+    app._act("export-new")
+    app._act("export-save-new")
+    assert read_text(app.filename) == ABANDON
+    assert app.screen == "key"
+    assert "show-export" not in app.back
+
+
+def test_seed_key_show_export_saves_screenshots():
+    from test_ui import ScreenRecord
+
+    record = ScreenRecord(Path("artifacts/screenshots/test_seed_key_show_export_saves_screenshots"))
+    for passphrase, name in ((None, "without-passphrase"), ("secret", "with-passphrase")):
+        app = App()
+        added = app.session.add_mnemonic(ABANDON.split(), passphrase=passphrase)
+        app.selected_fp = added["fingerprint"]
+        app.screen = "key"
+        record.shot(app, name)
+        if passphrase:
+            _tap(app, "Show/Export")
+            record.shot(app, "passphrase-options")
 
 
 def test_export_seed_writes_words_that_load_from_the_card():
