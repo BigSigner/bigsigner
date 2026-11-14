@@ -304,9 +304,10 @@ def test_export_address_writes_the_address_to_the_card():
     app.back = ["addresses"]
     app.scroll["address"] = 10_000
     app.render()
-    assert any(hit["label"] == "Export to SD Card" for hit in app.hits)
+    assert any(hit["label"] == "Export to File" for hit in app.hits)
     address = app.session.addresses(app.wallet_index, 0, 0, 1)[0]
     app._act("export-address")
+    app._act("storage-sd")
     assert app.screen == "sd"
     app._act("export-new")
     fingerprint = app.session.wallets[app.wallet_index].fingerprints[0].hex()

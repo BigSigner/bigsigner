@@ -298,7 +298,7 @@ def paint_share(app, frame):
         frame.text("This transaction has not been signed.", MARGIN, HEADER + 24, size=TITLE_SIZE)
         return
     y = frame.button(HEADER + 24, "Show QR Code", "psbt-show-qr")
-    frame.button(y, "Export to SD Card", "psbt-export")
+    frame.button(y, "Export to File", "psbt-export")
     back_h = frame.button_height("Back to Wallet")
     frame.button(HEIGHT - 16 - back_h, "Back to Wallet", "psbt-back-wallet")
 

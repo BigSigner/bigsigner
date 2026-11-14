@@ -45,6 +45,7 @@ def test_the_seedsigner_bsms_file_loads_a_multisig_wallet():
     app.screen = "wallets"
     _tap(app, "plus")
     _tap(app, "Load from File")
+    _tap(app, "SD Card")
     _tap(app, SAMPLE_NAME)
     _finish_wallet_wizard(app)
     assert app.screen == "wallet"
@@ -62,6 +63,7 @@ def test_a_bsms_multisig_on_the_keys_page_offers_the_wallet_or_one_key():
     app.screen = "keys"
     _tap(app, "plus")
     _tap(app, "Load from File")
+    _tap(app, "SD Card")
     _tap(app, SAMPLE_NAME)
     assert app.screen == "descriptor-choice"
     assert app.notice == ""
@@ -83,6 +85,7 @@ def test_a_bsms_multisig_on_the_keys_page_offers_the_wallet_or_one_key():
     both.screen = "keys"
     _tap(both, "plus")
     _tap(both, "Load from File")
+    _tap(both, "SD Card")
     _tap(both, SAMPLE_NAME)
     _tap(both, "Load Both Wallet and All Keys")
     _finish_wallet_wizard(both)
@@ -138,6 +141,7 @@ def test_a_singlesig_bsms_file_is_a_descriptor():
     app.screen = "wallets"
     _tap(app, "plus")
     _tap(app, "Load from File")
+    _tap(app, "SD Card")
     _tap(app, "single.bsms")
     _finish_wallet_wizard(app)
     assert app.screen == "wallet"
@@ -164,6 +168,7 @@ def test_exporting_a_wallet_writes_a_bsms_file():
     ]
     assert labels == ["Addresses", "Show", "Export", "Delete Wallet"]
     _tap(app, "Export")
+    _tap(app, "SD Card")
     assert app.screen == "sd"
     _tap(app, "New File")
     assert app.filename == "2-of-2-native-segwit.bsms"

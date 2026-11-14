@@ -61,7 +61,7 @@ The hash is a query string, so a seed in it is not sent to the server. A reload 
 http://127.0.0.1:8780/#seed=abandon,abandon,abandon,abandon,abandon,abandon,abandon,abandon,abandon,abandon,abandon,about
 ```
 
-SD Card, beside the picture, keeps files in the browser. Load from File reads those files. New Folder adds a directory, and Delete removes a file or a directory and what is inside it. A file saved from the picture is added to that same card.
+Every Load from File and export flow offers SD Card or Temporary FS. SD Card, beside the picture, keeps files in the browser. Select SD Card to use those files. New Folder adds a directory, and Delete removes a file or a directory and what is inside it. Exports to SD Card appear in that same card. Temporary FS uses separate memory, cleared when the page reloads. On the panel it is `/tmp/bigsigner` on the RAM filesystem, cleared on reboot. Export browsers show a compact Used / Total and Free space line above the directory name.
 
 These variables are for the panel and the tests. Do not set them on a device that holds real funds.
 

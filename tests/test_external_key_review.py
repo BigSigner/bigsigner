@@ -247,6 +247,7 @@ def _load_key_file(app, record, name, text):
     app.screen = "keys"
     record.click(app, "plus")
     record.click(app, "Load from File")
+    record.click(app, "SD Card")
     record.click(app, name)
 
 
@@ -335,6 +336,7 @@ def test_sd_card_key_expression_opens_the_review_saves_screenshots():
     app.render()
     record.click(app, "plus")
     record.click(app, "Load from File")
+    record.click(app, "SD Card")
     record.click(app, "key.txt")
     record.shot(app, "warning")
     assert app.screen == "external-review"

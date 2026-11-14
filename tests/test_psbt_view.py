@@ -466,11 +466,14 @@ def test_the_signing_screen_offers_a_signed_qr_and_an_sd_file():
     mount_memory({"files": {}})
     try:
         app._act("psbt-export-binary")
+        app._act("storage-sd")
         app._act("export-new")
         assert app.filename == "transaction-signed.psbt"
         app.back_one()
         app.back_one()
+        app.back_one()
         app._act("psbt-export-base64")
+        app._act("storage-sd")
         app._act("export-new")
         assert app.filename == "transaction-signed-base64.psbt"
     finally:
@@ -496,7 +499,7 @@ def test_back_to_wallet_leaves_the_signed_psbt_flow():
     app.render()
     labels = [hit["label"] for hit in app.hits]
     assert "Show QR Code" in labels
-    assert "Export to SD Card" in labels
+    assert "Export to File" in labels
     assert "Back to Wallet" in labels
     back = next(hit for hit in app.hits if hit["action"] == "psbt-back-wallet")
     assert back["box"][1] > 600

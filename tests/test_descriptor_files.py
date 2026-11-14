@@ -114,6 +114,7 @@ def test_specter_and_bitcoin_core_files_load_as_the_combined_descriptor():
         core_app.screen = "wallets"
         _tap(core_app, "plus")
         _tap(core_app, "Load from File")
+        _tap(core_app, "SD Card")
         _tap(core_app, "core.txt")
         assert core_app.screen == "external-review"
         assert core_app.wallet_plan["parsed"].keys[0].branch_note == "both"
@@ -123,6 +124,7 @@ def test_specter_and_bitcoin_core_files_load_as_the_combined_descriptor():
         specter_file.screen = "wallets"
         _tap(specter_file, "plus")
         _tap(specter_file, "Load from File")
+        _tap(specter_file, "SD Card")
         _tap(specter_file, "specter.txt")
         assert specter_file.screen == "external-review"
         assert specter_file.wallet_plan["parsed"].keys[0].branch_note == "both"
@@ -132,6 +134,7 @@ def test_specter_and_bitcoin_core_files_load_as_the_combined_descriptor():
         refused.screen = "wallets"
         _tap(refused, "plus")
         _tap(refused, "Load from File")
+        _tap(refused, "SD Card")
         _tap(refused, "extra.txt")
         assert refused.screen == "load-error"
         assert refused.load_error == "That file is not a wallet descriptor."

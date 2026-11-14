@@ -48,7 +48,10 @@ from ..message_sign import (
     starts_with_signmessage_command,
 )
 from ..scan import QrSequence, import_scanned, read_address, wrong_type_message
-from ..sdcard import SdError, child_path, file_exists, list_folder, parent_path, read_bytes, read_text, write_bytes, write_text
+from ..sdcard import (
+    SdError, child_path, disk_usage, file_exists, human_bytes, list_folder,
+    parent_path, read_bytes, read_text, write_bytes, write_text,
+)
 from ..licenses import NOTICES
 from ..seedqr import compact_bytes
 from ..slip132 import display_form, label_of
@@ -485,6 +488,7 @@ class App:
         self.flush_display = None
         self.camera_unavailable = False
         self.sd_dir = ""
+        self.sd_storage = "sd"
         self.sd_expect = "key"
         self.sd_mode = "load"
         self.export_text = ""
@@ -626,6 +630,7 @@ class App:
             "camera": self._camera,
             "scan": self._scan,
             "sd": self._sd,
+            "storage": self._storage,
             "export-format": self._export_format,
             "export-name": self._export_name,
             "multisig": self._multisig,
@@ -1358,6 +1363,8 @@ class App:
         "ms-create": lambda self: self._create_selected_multisig(),
         "add-sd": lambda self: self._open_sd("key"),
         "sd-up": _act_sd_up,
+        "storage-sd": lambda self: self._choose_storage("sd"),
+        "storage-temporary": lambda self: self._choose_storage("temporary"),
         "export-address": lambda self: self._open_address_export(),
         "show-export": lambda self: self._open_show_export(),
         "export-seed": lambda self: self._open_seed_export(),
@@ -1848,6 +1855,22 @@ class App:
         self.sd_mode = "load"
         self.sd_dir = ""
         self.scroll["sd"] = 0
+        self.go("storage")
+
+    def _storage(self, frame: Frame):
+        frame.header("Export" if self.sd_mode == "export" else "Load from File", "back")
+        y = frame.button(HEADER + 24, "SD Card", "storage-sd")
+        frame.button(y, "Temporary FS", "storage-temporary")
+
+    def _choose_storage(self, storage: str):
+        try:
+            list_folder("", storage=storage)
+        except SdError as exc:
+            self.set_error(str(exc))
+            return
+        self.sd_storage = storage
+        self.sd_dir = ""
+        self.scroll["sd"] = 0
         self.go("sd")
 
     def _read_sd_file(self, relative: str):
@@ -1855,7 +1878,7 @@ class App:
             self._read_psbt_file(relative)
             return
         try:
-            text = read_text(relative, raw=self.sd_expect in ("message", "address-message"))
+            text = read_text(relative, raw=self.sd_expect in ("message", "address-message"), storage=self.sd_storage)
         except SdError as exc:
             message = str(exc)
             if message == "That file is not text." and self.sd_expect in (
@@ -1865,7 +1888,7 @@ class App:
                 "message",
             ):
                 try:
-                    data = read_bytes(relative)
+                    data = read_bytes(relative, storage=self.sd_storage)
                 except SdError:
                     data = b""
                 if is_binary_psbt(data):
@@ -1901,7 +1924,7 @@ class App:
 
     def _read_psbt_file(self, relative: str):
         try:
-            data = read_bytes(relative)
+            data = read_bytes(relative, storage=self.sd_storage)
         except SdError as exc:
             self.set_error(str(exc))
             self._return_to_load_psbt()
@@ -1947,7 +1970,7 @@ class App:
         self.sd_mode = "export"
         self.sd_dir = ""
         self.scroll["sd"] = 0
-        self.go("sd")
+        self.go("storage")
 
     def _seed_backup(self, frame: Frame):
         _record, key = self._stored_key()
@@ -1957,7 +1980,7 @@ class App:
             return
         paragraphs = [
             "A seed backup should include a physical copy, not only a file. Keep the words on paper or on metal as well.",
-            "Wipe this SD card thoroughly before it is used in any device connected to the internet. Deleting the file is not enough.",
+            "If you export to an SD card, wipe it thoroughly before it is used in any device connected to the internet. Deleting the file is not enough.",
         ]
         if key.passphrase:
             paragraphs.append("This file does not include the passphrase.")
@@ -1993,7 +2016,7 @@ class App:
         self.sd_mode = "export"
         self.sd_dir = ""
         self.scroll["sd"] = 0
-        self.go("sd")
+        self.go("storage")
 
     def _open_address_export(self):
         if self.wallet_index >= len(self.session.wallets):
@@ -2012,7 +2035,7 @@ class App:
         self.sd_mode = "export"
         self.sd_dir = ""
         self.scroll["sd"] = 0
-        self.go("sd")
+        self.go("storage")
 
     def _choose_export_format(self, index: int):
         formats = self._key_qr_formats()
@@ -2027,7 +2050,7 @@ class App:
         self.sd_mode = "export"
         self.sd_dir = ""
         self.scroll["sd"] = 0
-        self.go("sd")
+        self.go("storage")
 
     def _choose_export_file(self, relative: str):
         self.export_path = relative
@@ -2042,7 +2065,7 @@ class App:
     def _unused_export_name(self, name: str) -> str:
         """Keep the suggested name, or add `` (1)``, `` (2)``, … before its extension."""
         try:
-            entries = list_folder(self.sd_dir)
+            entries = list_folder(self.sd_dir, storage=self.sd_storage)
         except SdError:
             return name
         return _unused_filename(name, {entry["name"] for entry in entries})
@@ -2077,7 +2100,7 @@ class App:
             return
         relative = child_path(self.sd_dir, name)
         try:
-            exists = file_exists(relative)
+            exists = file_exists(relative, storage=self.sd_storage)
         except SdError as exc:
             self.set_error(str(exc))
             return
@@ -2090,9 +2113,9 @@ class App:
     def _write_export(self):
         try:
             if self.export_binary:
-                write_bytes(self.export_path, self.export_bytes)
+                write_bytes(self.export_path, self.export_bytes, storage=self.sd_storage)
             else:
-                write_text(self.export_path, self.export_text)
+                write_text(self.export_path, self.export_text, storage=self.sd_storage)
         except SdError as exc:
             self.set_error(str(exc))
             return
@@ -2120,13 +2143,15 @@ class App:
         self._passphrase_keyboard(frame)
 
     def _sd(self, frame: Frame):
+        exporting = self.sd_mode == "export"
+        title = "SD Card" if self.sd_storage == "sd" else "Temporary FS"
         try:
-            entries = list_folder(self.sd_dir)
+            entries = list_folder(self.sd_dir, storage=self.sd_storage)
+            usage = disk_usage(storage=self.sd_storage) if exporting else None
         except SdError as exc:
-            frame.header("Choose a file" if self.sd_mode == "export" else "SD card", "back")
+            frame.header(title, "back")
             frame.text(str(exc), MARGIN, HEADER + 24, size=TITLE_SIZE)
             return
-        exporting = self.sd_mode == "export"
         rows = []
         if self.sd_dir:
             rows.append(("..", "sd-up"))
@@ -2137,7 +2162,8 @@ class App:
             else:
                 verb = "sd-write" if exporting else "sd-read"
                 rows.append((entry["name"], f"{verb}:{relative}"))
-        list_top = HEADER + 60
+        usage_height = 32 if exporting else 0
+        list_top = HEADER + 60 + usage_height
         name_width = WIDTH - 2 * MARGIN - 32
         face = font(TITLE_SIZE)
         placed = []
@@ -2150,26 +2176,35 @@ class App:
         end = top if placed else list_top
         button_h = frame.button_height("New File") if exporting else 0
         clearance = button_h + 28 if exporting else 96
+        list_bottom = HEIGHT - clearance if exporting else HEIGHT
         offset = self._scroll_offset("sd", end, clearance=clearance)
         for row_top, height, lines, label, action in placed:
-            self._sd_row(frame, row_top - offset, list_top, height, lines, label, action)
+            self._sd_row(frame, row_top - offset, list_top, list_bottom, height, lines, label, action)
         if exporting:
+            frame.draw.rectangle((0, list_bottom, WIDTH, HEIGHT), fill=PAPER)
             frame.button(HEIGHT - 16 - button_h, "New File", "export-new")
-        frame.header("Choose a file" if exporting else "SD card", "back")
+        frame.header(title, "back")
         frame.draw.rectangle((0, HEADER, WIDTH, list_top), fill=PAPER)
-        shown = _one_line(frame, self.sd_dir or "/", TITLE_SIZE, WIDTH - 2 * MARGIN)
-        frame.text(shown, MARGIN, HEADER + 12, size=TITLE_SIZE, fill=MUTED, mono=True)
+        if usage is not None:
+            total, used, free = usage
+            usage_text = f"Used: {human_bytes(used)} / {human_bytes(total)} Free: {human_bytes(free)}"
+            usage_size = 24
+            while usage_size > 8 and frame.draw.textlength(usage_text, font=font(usage_size)) > WIDTH - 2 * MARGIN:
+                usage_size -= 1
+            frame.text(usage_text, MARGIN, HEADER + 12, size=usage_size, fill=MUTED)
+        shown = _one_line(frame, "/" + self.sd_dir.lstrip("/"), TITLE_SIZE, WIDTH - 2 * MARGIN)
+        frame.text(shown, MARGIN, HEADER + 12 + usage_height, size=TITLE_SIZE, fill=MUTED, mono=True)
         if not entries:
             if placed:
                 row_top, height, _lines, _label, _action = placed[0]
                 message_y = row_top - offset + height + 12
             else:
                 message_y = list_top
-            message = "This folder is empty." if self.sd_dir else "This SD card is empty."
+            message = "This folder is empty." if self.sd_dir else f"This {title} is empty."
             frame.text(message, MARGIN, message_y, size=TITLE_SIZE)
 
-    def _sd_row(self, frame: Frame, top: int, list_top: int, height: int, lines: list[str], label: str, action: str):
-        if top >= HEIGHT or top + height <= list_top:
+    def _sd_row(self, frame: Frame, top: int, list_top: int, list_bottom: int, height: int, lines: list[str], label: str, action: str):
+        if top >= list_bottom or top + height <= list_top:
             return
         frame.draw.rounded_rectangle((MARGIN, top, WIDTH - MARGIN, top + height), radius=14, fill=WHITE, outline=LINE)
         y = top + 20
@@ -2178,7 +2213,7 @@ class App:
             if y + TITLE_SIZE > list_top:
                 frame.draw.text((MARGIN + 16, y), line, font=face, fill=INK)
             y += TITLE_SIZE + 8
-        frame.hit((MARGIN, max(top, list_top), WIDTH - MARGIN, min(top + height, HEIGHT)), action, label)
+        frame.hit((MARGIN, max(top, list_top), WIDTH - MARGIN, min(top + height, list_bottom)), action, label)
 
     def camera_preview_box(self):
         """Where the live camera picture is drawn, in screen pixels. None hides it."""
@@ -2891,7 +2926,7 @@ class App:
         y = self._flow_value_below(frame, y, "Derivation Path:", format_path(list(key.path)), paint, offset, text_size)
         y = self._flow_value_below(frame, y, "Extended Public Key:", preview, paint, offset, text_size)
         y = self._flow_button(frame, y, "Show Full Details", "show-qr", paint, offset)
-        y = self._flow_button(frame, y, "Export to SD Card", "export-key", paint, offset)
+        y = self._flow_button(frame, y, "Export to File", "export-key", paint, offset)
         if key.role == SINGLESIG_NATIVE:
             return self._flow_button(
                 frame, y, self._seed_wallet_label(SINGLESIG_NATIVE, "Native-Segwit"), "make-xpub-wallet", paint, offset,
@@ -2918,7 +2953,7 @@ class App:
         y = frame.button(HEADER + 24, "Show Seed", "show-seed")
         if key.passphrase:
             y = frame.button(y, "Show Passphrase", "show-passphrase")
-        frame.button(y, "Export Seed to SD Card", "export-seed")
+        frame.button(y, "Export Seed to File", "export-seed")
 
     def _flow_text(self, frame: Frame, y: int, value: str, paint: bool, offset: int, size: int, fill=INK, mono: bool = False) -> int:
         if paint:
@@ -3184,7 +3219,7 @@ class App:
         y = self._flow_value_below(frame, y, "Extended Public Key:", preview, paint, offset, text_size)
         self._derive_xpub_box = self._flow_value_box
         y = self._flow_button(frame, y, "Show Full Details", "derive-details", paint, offset)
-        y = self._flow_button(frame, y, "Export to SD Card", "export-derived", paint, offset)
+        y = self._flow_button(frame, y, "Export to File", "export-derived", paint, offset)
         if key.role not in (SINGLESIG_NATIVE, SINGLESIG_TAPROOT):
             return y
         script = "Taproot" if key.role == SINGLESIG_TAPROOT else "Native-Segwit"
@@ -4489,7 +4524,7 @@ class App:
                 hit["box"] = (hit["box"][0], max(HEADER, hit["box"][1]),
                               hit["box"][2], min(HEIGHT, hit["box"][3]))
         frame.header(title, "back")
-        self._hit_address_control(frame, sheet.get("button"), offset, "export-address", "Export to SD Card")
+        self._hit_address_control(frame, sheet.get("button"), offset, "export-address", "Export to File")
         self._hit_address_control(frame, sheet.get("sign"), offset, "address-sign", "Sign Message")
         note = sheet.get("note") or ""
         note_y = sheet.get("note_y")
@@ -4505,7 +4540,7 @@ class App:
         can_sign = key[4] == SINGLESIG_NATIVE
         note = "" if can_sign else ADDRESS_SIGN_ONLY
         metrics = Frame()
-        button_h = metrics.button_height("Export to SD Card")
+        button_h = metrics.button_height("Export to File")
         sign_h = metrics.button_height("Sign Message")
         note_h = self._text_height(metrics, note, TITLE_SIZE) if note else 0
         end = HEADER + 12 + ADDRESS_QR + 8 + 52 + 12 + self._grouped_address_height(metrics, address) + 8
@@ -4525,7 +4560,7 @@ class App:
         y = sheet.text(label, MARGIN, y + 8, size=TITLE_SIZE, fill=MUTED)
         for line in path_lines:
             y = self._centered_mono(sheet, line, y, ADDRESS_PATH_SIZE, MUTED)
-        y = sheet.button(y + 4, "Export to SD Card", "export-address")
+        y = sheet.button(y + 4, "Export to File", "export-address")
         y = sheet.button(y, "Sign Message", "address-sign", enabled=can_sign)
         button = None
         sign_button = None
@@ -4754,7 +4789,7 @@ class App:
         if self.screen == "address-verify":
             return
         self.back = [
-            screen for screen in self.back if screen not in ("scan", "sd", "address-type", "address-verify-result")
+            screen for screen in self.back if screen not in ("scan", "sd", "storage", "address-type", "address-verify-result")
         ]
         if self.back and self.back[-1] == "address-verify":
             self.back.pop()
@@ -4785,7 +4820,7 @@ class App:
         if self.verify_found:
             self.back = ["addresses"]
         else:
-            self.back = [screen for screen in self.back if screen not in ("scan", "sd", "address-type")]
+            self.back = [screen for screen in self.back if screen not in ("scan", "sd", "storage", "address-type")]
             if not self.back or self.back[-1] != "address-verify":
                 self.back.append("address-verify")
         self.screen = "address-verify-result"
@@ -7222,7 +7257,7 @@ class App:
         self.go("scan")
 
     def _return_to_load_psbt(self):
-        self.back = [screen for screen in self.back if screen not in ("scan", "sd")]
+        self.back = [screen for screen in self.back if screen not in ("scan", "sd", "storage")]
         if self.back and self.back[-1] == "load-psbt":
             self.back.pop()
         self.screen = "load-psbt"
@@ -7883,7 +7918,7 @@ class App:
         self.sd_mode = "export"
         self.sd_dir = ""
         self.scroll["sd"] = 0
-        self.go("sd")
+        self.go("storage")
 
     def _step_psbt_qr(self, delta: int):
         self.psbt_qr_format = (self.psbt_qr_format + delta) % 5
@@ -7963,7 +7998,7 @@ class App:
         self.go("scan")
 
     def _return_to_address_message(self):
-        self.back = [screen for screen in self.back if screen not in ("scan", "sd")]
+        self.back = [screen for screen in self.back if screen not in ("scan", "sd", "storage")]
         if self.back and self.back[-1] == "address-message":
             self.back.pop()
         self.screen = "address-message"
@@ -8003,7 +8038,7 @@ class App:
         self.go("scan")
 
     def _return_to_message_source(self):
-        self.back = [screen for screen in self.back if screen not in ("scan", "sd")]
+        self.back = [screen for screen in self.back if screen not in ("scan", "sd", "storage")]
         if self.back and self.back[-1] == "message-source":
             self.back.pop()
         self.screen = "message-source"
@@ -8348,7 +8383,7 @@ class App:
         y += 52 + 12
         y = self._flow_text(frame, y, self.message_signature, paint, offset, TITLE_SIZE, mono=True)
         y += 8
-        y = self._flow_button(frame, y, "Export to SD Card", "message-export", paint, offset)
+        y = self._flow_button(frame, y, "Export to File", "message-export", paint, offset)
         y = self._flow_button(frame, y, "Back to Wallet", "message-wallet", paint, offset)
         return y
 
@@ -8364,7 +8399,7 @@ class App:
         self.sd_mode = "export"
         self.sd_dir = ""
         self.scroll["sd"] = 0
-        self.go("sd")
+        self.go("storage")
 
     def _return_to_message_wallet(self):
         self.message_keyboard = False

@@ -260,6 +260,7 @@ def test_a_bad_qr_or_file_stays_on_the_choice_screen():
     try:
         _tap(app, "Dismiss")
         _tap(app, "Load from File")
+        _tap(app, "SD Card")
         _tap(app, "note.txt")
         assert app.screen == "message-edit"
         assert app.message_text == "hello\n"
@@ -567,7 +568,7 @@ def test_a_native_address_signs_with_its_own_path():
     image = app.render()
     sign = next(hit for hit in app.hits if hit["action"] == "address-sign")
     assert image.getpixel((sign["box"][0] + 8, (sign["box"][1] + sign["box"][3]) // 2))[:3] == BLUE
-    assert any(hit["label"] == "Export to SD Card" for hit in app.hits)
+    assert any(hit["label"] == "Export to File" for hit in app.hits)
     _tap(app, "Sign Message")
     assert app.screen == "address-message"
     app.render()
@@ -614,16 +615,19 @@ def test_a_native_address_signs_with_its_own_path():
     try:
         _tap(app, "Dismiss")
         _tap(app, "Load from File")
+        _tap(app, "SD Card")
         _tap(app, "bad.txt")
         assert app.screen == "address-message"
         assert app.notice == NOT_ASCII
         _tap(app, "Dismiss")
         _tap(app, "Load from File")
+        _tap(app, "SD Card")
         _tap(app, "command.txt")
         assert app.screen == "address-message"
         assert app.notice == ADDRESS_MESSAGE_COMMAND
         _tap(app, "Dismiss")
         _tap(app, "Load from File")
+        _tap(app, "SD Card")
         _tap(app, "note.txt")
     finally:
         unmount_memory()
@@ -812,6 +816,7 @@ def test_loading_a_signmessage_command_longer_than_1024_bytes_is_refused():
     try:
         _tap(app, "Dismiss")
         _tap(app, "Load from File")
+        _tap(app, "SD Card")
         _tap(app, "long.txt")
         assert app.screen == "message-source"
         assert app.notice == TOO_LONG

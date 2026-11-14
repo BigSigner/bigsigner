@@ -45,7 +45,7 @@ Wallets are descriptors built from those keys. Changing the network drops wallet
 | `ui/psbt_screen.py` | Transaction Signing layout. Scroll keeps a few screen-tall tiles around the finger; a chevron toggle rebuilds them. |
 | `psbt_qr.py` | QR parts for a signed PSBT: Animated UR, Static UR, base64, Specter Animated, and BBQr. |
 | `psbt_review.py` | Check a PSBT against one loaded wallet, then sign with a seed that is in memory. |
-| `sdcard.py` | Load and export files. The browser page and the tests call `mount_memory`. On the panel, with no memory card mounted, the same helpers use `/mnt/microsd` (override with `BIGSIGNER_SDCARD_PATH`). |
+| `sdcard.py` | Shared file operations select `storage="sd"` or `storage="temporary"`. SD uses `/mnt/microsd`, which must be a mount (an explicit `BIGSIGNER_SDCARD_PATH` permits a development directory). Temporary FS creates `/tmp/bigsigner` on the panel's RAM rootfs and survives app restarts until reboot. Linux hosts can fall back to `/dev/shm/bigsigner`; persistent backing is refused. Other hosts and the browser use Python memory. Virtual storage has a simulated 64 MiB capacity. Disk usage uses `statvfs`, or system RAM usage for unbounded ramfs/rootfs. Only SD writes reach browser card snapshots and persistence. |
 | `licenses.py` | Notices shown from About → Licenses. |
 
 `psbt_check._input_paths` retains all input origins for ownership diagnostics while keeping only the selected wallet’s origins for derivation and signing checks. Supported origins from an unavailable wallet report This transaction does not belong to this wallet; a matching loaded wallet is named. Invalid paths and network mismatches retain their own diagnostics.
@@ -64,7 +64,7 @@ Bitcoin operations go through embit 0.8.0, the release SeedSigner pins. Pillow d
 
 The side menu reaches Bitcoin Keys, Bitcoin Wallets, Settings, and About. Every other screen has a back button. Scroll offset is stored per screen, and the title bar stays put.
 
-Scan QR Code and Load from File buttons use the bundled Font Awesome camera and file icons before their labels. `Frame.button` draws them on full-width buttons; `_speed_dial` reserves the same icon width and gap in the plus menus. Load from File keeps the existing SD card file picker and browser memory-card behavior.
+Scan QR Code and Load from File buttons use the bundled Font Awesome camera and file icons before their labels. `Frame.button` draws them on full-width buttons; `_speed_dial` reserves the same icon width and gap in the plus menus. Every Load from File and export route opens the `storage` choice before the shared `sd` browser. SD Card uses the mounted card; Temporary FS uses separate RAM storage. Export browsers pin a single `Used: <used> / <total> Free: <free>` line above the directory name, with one decimal place and IEC units (KiB, MiB, GiB). Its font starts at 24px and shrinks to fit the page width. The New File button stays fixed below the list.
 
 Seed Key (`key`) uses one row of Show and Export buttons for seeds without a passphrase. Show uses the existing privacy confirmation before `seed-show`; Export opens `seed-backup` directly and returns to the key after saving. Seeds with a passphrase retain the Show/Export button and `show-export` choice screen, including Show Passphrase.
 

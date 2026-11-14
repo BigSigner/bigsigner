@@ -51,6 +51,7 @@ def test_sd_card_folder_lists_subdirectories_and_loads_a_seed():
     app.screen = "keys"
     _tap(app, "plus")
     _tap(app, "Load from File")
+    _tap(app, "SD Card")
     assert app.screen == "sd"
     app.render()
     assert any(hit["label"] == "seeds/" for hit in app.hits)
@@ -78,6 +79,7 @@ def test_a_file_that_is_not_a_key_opens_an_error_screen():
     app.screen = "keys"
     _tap(app, "plus")
     _tap(app, "Load from File")
+    _tap(app, "SD Card")
     _tap(app, "note.txt")
     assert app.screen == "load-error"
     assert app.load_error == "That file is not a seed, key expression or wallet descriptor."
@@ -101,6 +103,7 @@ def test_a_binary_psbt_loaded_as_a_seed_names_the_type():
     app.screen = "keys"
     _tap(app, "plus")
     _tap(app, "Load from File")
+    _tap(app, "SD Card")
     _tap(app, "wallet.psbt")
     assert app.screen == "load-error"
     assert app.load_error == (
@@ -145,6 +148,7 @@ def test_disk_card_lists_and_loads_a_seed(monkeypatch, tmp_path):
     app.screen = "keys"
     _tap(app, "plus")
     _tap(app, "Load from File")
+    _tap(app, "SD Card")
     assert app.screen == "sd"
     _tap(app, "seeds/")
     assert app.sd_dir == "seeds"
@@ -194,6 +198,7 @@ def test_a_singlesig_descriptor_from_keys_asks_before_loading_both():
     app.screen = "keys"
     _tap(app, "plus")
     _tap(app, "Load from File")
+    _tap(app, "SD Card")
     _tap(app, "wallet.txt")
     assert app.screen == "descriptor-choice"
     assert app.confirm is None
@@ -225,6 +230,7 @@ def test_a_singlesig_descriptor_from_keys_asks_before_loading_both():
     both.screen = "keys"
     _tap(both, "plus")
     _tap(both, "Load from File")
+    _tap(both, "SD Card")
     _tap(both, "wallet.txt")
     _tap(both, "Both Wallet and Key")
     assert both.screen == "external-review"
@@ -252,6 +258,7 @@ def test_descriptor_load_rejects_a_seed_file():
     app.screen = "wallets"
     _tap(app, "plus")
     _tap(app, "Load from File")
+    _tap(app, "SD Card")
     assert app.sd_expect == "descriptor"
     _tap(app, "seed.txt")
     assert app.screen == "load-error"
@@ -280,7 +287,7 @@ def test_export_to_sd_card_chooses_a_format_then_a_file():
     app.scroll["derive"] = 10_000
     app.render()
     shown = [hit["label"] for hit in app.hits if hit["action"] in ("derive-details", "export-derived")]
-    assert shown == ["Show Full Details", "Export to SD Card"]
+    assert shown == ["Show Full Details", "Export to File"]
     assert "delete-key" not in {hit["action"] for hit in app.hits}
 
     app._act("export-derived")
@@ -290,6 +297,7 @@ def test_export_to_sd_card_chooses_a_format_then_a_file():
     assert names == ["Key Expression", "xpub only", "zpub"]
 
     app._act("export-format-2")
+    app._act("storage-sd")
     assert app.screen == "sd"
     app.render()
     assert "New File" in {hit["label"] for hit in app.hits}
@@ -302,6 +310,7 @@ def test_export_to_sd_card_chooses_a_format_then_a_file():
 
     app._act("export-derived")
     app._act("export-format-0")
+    app._act("storage-sd")
     app._act("export-new")
     assert app.screen == "export-name"
     assert app.filename == f"{fingerprint.hex()}-key-expression.txt"
@@ -329,7 +338,7 @@ def test_export_to_sd_card_chooses_a_format_then_a_file():
         for hit in app.hits
         if hit["action"] in ("show-qr", "export-key", "delete-key")
     ]
-    assert [label for _top, label in sorted(buttons)] == ["Show Full Details", "Export to SD Card", "Delete Key"]
+    assert [label for _top, label in sorted(buttons)] == ["Show Full Details", "Export to File", "Delete Key"]
 
 
 def test_a_long_filename_wraps_at_the_overflowing_character():
@@ -346,6 +355,7 @@ def test_a_long_filename_wraps_at_the_overflowing_character():
     app.screen = "keys"
     _tap(app, "plus")
     _tap(app, "Load from File")
+    _tap(app, "SD Card")
     image = app.render()
     draw = ImageDraw.Draw(image)
     face = font(TITLE_SIZE)
@@ -405,6 +415,7 @@ def test_a_memory_card_lists_folders_and_loads_a_seed():
     app.screen = "keys"
     _tap(app, "plus")
     _tap(app, "Load from File")
+    _tap(app, "SD Card")
     _tap(app, "seeds/")
     _tap(app, "abandon.txt")
     assert app.screen == "key"
@@ -494,6 +505,7 @@ def test_export_seed_without_passphrase_returns_directly_to_seed_key():
     assert app.screen == "seed-backup" and app.export_return == "key"
     assert app.back == ["key"]
     _tap(app, "Continue")
+    _tap(app, "SD Card")
     app._act("export-new")
     app._act("export-save-new")
     assert read_text(app.filename) == ABANDON
@@ -533,12 +545,13 @@ def test_export_seed_writes_words_that_load_from_the_card():
     assert app.screen == "show-export"
     app.render()
     tops = {hit["label"]: hit["box"][1] for hit in app.hits}
-    assert tops["Show Seed"] < tops["Show Passphrase"] < tops["Export Seed to SD Card"]
+    assert tops["Show Seed"] < tops["Show Passphrase"] < tops["Export Seed to File"]
     app._act("export-seed")
     assert app.screen == "seed-backup"
     app.render()
     assert any(hit["label"] == "Continue" for hit in app.hits)
     app._act("seed-backup-continue")
+    app._act("storage-sd")
     assert app.screen == "sd"
     app._act("export-new")
     assert app.filename == f"{added['fingerprint'].hex()}-seed.txt"
@@ -553,12 +566,14 @@ def test_export_seed_writes_words_that_load_from_the_card():
     fresh.screen = "keys"
     _tap(fresh, "plus")
     _tap(fresh, "Load from File")
+    _tap(fresh, "SD Card")
     _tap(fresh, app.filename)
     assert fresh.notice == "The seed was added successfully."
     again = App()
     again.screen = "keys"
     _tap(again, "plus")
     _tap(again, "Load from File")
+    _tap(again, "SD Card")
     _tap(again, "spaced.txt")
     assert again.notice == "The seed was added successfully."
 
@@ -584,6 +599,7 @@ def test_a_new_export_name_skips_names_that_already_exist():
     app._act("derive-native")
     app._act("export-derived")
     app._act("export-format-0")
+    app._act("storage-sd")
     app._act("export-new")
     assert app.filename == second
     assert app.filename_cursor == len(second)
@@ -602,6 +618,7 @@ def test_a_new_export_name_skips_names_that_already_exist():
     mount_memory({"dirs": [name], "files": {}})
     app._act("export-derived")
     app._act("export-format-0")
+    app._act("storage-sd")
     app._act("export-new")
     assert app.filename == first
 

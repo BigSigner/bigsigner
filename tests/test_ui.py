@@ -567,7 +567,7 @@ def test_a_singlesig_xpub_can_create_and_reopen_its_wallet():
     app.scroll["key"] = 10**9
     app.render()
     tops = {hit["label"]: hit["box"][1] for hit in app.hits}
-    assert tops["Export to SD Card"] < tops["Create a Native-Segwit SingleSig Wallet"]
+    assert tops["Export to File"] < tops["Create a Native-Segwit SingleSig Wallet"]
     assert any(hit["label"] == "Create a Native-Segwit SingleSig Wallet" for hit in app.hits)
     draw = ImageDraw.Draw(Image.new("RGB", (WIDTH, 8)))
     face = font(BODY_SIZE)

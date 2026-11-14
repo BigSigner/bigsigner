@@ -140,6 +140,7 @@ def test_a_file_or_qr_that_is_not_a_psbt_names_what_it_is():
     try:
         _tap(app, "Dismiss")
         _tap(app, "Load from File")
+        _tap(app, "SD Card")
         _tap(app, "note.txt")
         assert app.screen == "load-psbt"
         assert app.notice == "This is a seed, not a PSBT."
@@ -182,16 +183,19 @@ def test_a_binary_psbt_file_is_the_bip174_form_and_loads_from_the_sd_card():
     }})
     try:
         _tap(app, "Load from File")
+        _tap(app, "SD Card")
         _tap(app, "wallet.psbt")
         assert app.screen == "psbt-yaml"
         assert app.notice == ""
         app.back_one()
         assert app.screen == "load-psbt"
         _tap(app, "Load from File")
+        _tap(app, "SD Card")
         _tap(app, "wallet.txt")
         assert app.screen == "psbt-yaml"
         app.back_one()
         _tap(app, "Load from File")
+        _tap(app, "SD Card")
         _tap(app, "note.bin")
         assert app.screen == "load-psbt"
         assert app.notice == "That file is not text."
