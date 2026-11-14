@@ -25,7 +25,8 @@ Third-party components
 
 BigSigner includes or depends on other open-source works. Their notices are
 reproduced in src/bigsigner/licenses.py and are shown in the application under
-About, Licenses. The notices required to travel with those works
+About, Licenses. Emulator-only notices are kept under web/.
+The notices required to travel with those works
 follow.
 
 unique-names-generator word lists
@@ -65,6 +66,16 @@ qrcode
 Copyright (c) 2011 Lincoln Loop. BSD License. The Javascript origin by
 Kazuhiko Arase is MIT licensed. "QR Code" is a trademark of DENSO WAVE
 INCORPORATED. See src/bigsigner/licenses.py.
+
+jsQR (browser emulator)
+https://github.com/cozmo/jsQR
+Apache License 2.0. See web/licenses/jsQR-LICENSE.txt.
+
+Pyodide, CPython, and Emscripten (browser emulator runtime)
+Pyodide 314.0.7 is under MPL 2.0. CPython 3.14.2 includes PSF and historical
+licenses. Emscripten 5.0.3 includes MIT/NCSA licenses and additional notices.
+Their license texts are under web/licenses/ and linked from Emulator Credits.
+See web/licenses/README.md for versions and sources of the emulator notices.
 
 Bytewords
 The 256-word list is copied from Blockchain Commons URKit.

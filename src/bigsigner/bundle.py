@@ -4,7 +4,7 @@
 
 The page in web/ reads web/bundle.json and does not open src/ itself.
 That file is generated and is not committed. The same command downloads the
-pinned Pyodide runtime, Pillow, embit, and qrcode into web/external-assets.
+pinned Pyodide runtime, Pillow, embit, qrcode, and jsQR into web/external-assets.
 Those files are not committed either. The page loads them from that folder.
 """
 
@@ -45,6 +45,11 @@ EXTERNAL_ASSETS = (
         "qrcode/qrcode-8.0-py3-none-any.whl",
         "https://files.pythonhosted.org/packages/74/ab/df8d889fd01139db68ae9e5cb5c8f0ea016823559a6ecb427582d52b07dc/qrcode-8.0-py3-none-any.whl",
         "9fc05f03305ad27a709eb742cf3097fa19e6f6f93bb9e2f039c0979190f6f1b1",
+    ),
+    (
+        "jsqr/jsQR.js",
+        "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js",
+        "bc40c8a15196236b2314db0856f72ca0b49980cd5413b8c852a7349f5fee0859",
     ),
 )
 

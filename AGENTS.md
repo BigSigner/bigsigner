@@ -24,6 +24,8 @@ Every Load from File and export flow offers SD Card and Temporary FS before brow
 
 A seed imported from a file or QR code (including numeric or compact SeedQR) opens Seed Words before it is loaded. The fixed label is `<x> Words Seed`, with no word-count selector. The words use the same scrollable column as manual entry and start scrolled to the bottom. Continue stays below the word list and opens the passphrase choice. Manual entry also stays on the completed word list after selecting the last word; only Continue opens the passphrase choice. The seed is added only after No Passphrase or Save Passphrase. Back from the passphrase choice returns to the word list; Back from imported words returns to the file browser or scanner.
 
+File System in the side menu offers SD Card and Temporary FS. Browsing shows the usage line and a floating plus for New Directory and New File. File details show a grey Filename: label, the centered filename on the next line, and a grey Size: label with the exact byte size on the same line, then Open, Rename, Move, and Delete. Open is disabled above 50,000 bytes. ASCII text opens an editable, scrollable Text File; non-text bytes open scrollable Binary File hex. Only visible rows are painted. The keyboard appears when the text area is tapped; Save appears when it is hidden and is enabled after edits (or for a new file). Back with unsaved edits asks to discard them. Move can select a directory on either storage, and no operation silently replaces an existing destination. SD deletion uses a warning page explaining recovery and thorough wiping. Temporary FS deletion uses a normal confirmation, or a page for very long names. New File can capture one QR code, with a warning for sequence prefixes explaining that only one QR code was captured; OK continues with its raw content.
+
 ## Browser emulator
 
 Tests do not start it. They construct `App`, call `render`, and tap.
@@ -33,7 +35,7 @@ PYTHONPATH=src python -m bigsigner.bundle
 python3 -m http.server 8780 --directory web
 ```
 
-Open http://127.0.0.1:8780/ . Run the bundle command again after changing Python, then reload the page. `web/bundle.json` and `web/external-assets/` are gitignored. That folder holds `pyodide/`, `pillow/`, `embit/`, and `qrcode/`, pinned by the bundle command. Do not type a real seed into the emulator. The hash supplies `seed`, `descriptor`, and `network`. The SD card is the files stored in the browser. `BIGSIGNER_INITIAL_SEED` is for tests and the panel, not this page.
+Open http://127.0.0.1:8780/ . Run the bundle command again after changing Python, then reload the page. `web/bundle.json` and `web/external-assets/` are gitignored. That folder holds `pyodide/`, `pillow/`, `embit/`, `qrcode/`, and `jsqr/`, pinned by the bundle command. Do not type a real seed into the emulator. The hash supplies `seed`, `descriptor`, and `network`. The SD card is the files stored in the browser. `BIGSIGNER_INITIAL_SEED` is for tests and the panel, not this page.
 
 ## Tests
 
@@ -67,4 +69,4 @@ Cards on Bitcoin Keys: Seeds stay in `session.key_counter` order. SingleSig Exte
 
 ## Licenses
 
-Bundled notices are in `src/bigsigner/licenses.py`, shown from About → Licenses, and summarized in `LICENSE`. A new library or copied asset needs its notice in all three places. The word lists in `names.py` are MIT-licensed unique-names-generator data, not BigSigner originals.
+Device library and asset notices are in `src/bigsigner/licenses.py`, shown from About → Licenses, and summarized in `LICENSE`. A new device library or copied asset needs its notice in all three places. Emulator-only notices belong under `web/`, linked from the emulator's About section and summarized in `LICENSE`; they do not belong in the device's license list or resources. The word lists in `names.py` are MIT-licensed unique-names-generator data, not BigSigner originals.

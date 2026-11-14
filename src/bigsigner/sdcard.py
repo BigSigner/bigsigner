@@ -137,12 +137,156 @@ def read_text(relative: str, *, raw: bool = False, storage: str = "sd") -> str:
     return text if raw else text.strip()
 
 
-def read_bytes(relative: str, *, storage: str = "sd") -> bytes:
-    """The file's bytes, including a non-text file. A file above 256000 bytes is refused."""
+def read_bytes(relative: str, *, storage: str = "sd", max_bytes: int = 256_000) -> bytes:
+    """Read at most max_bytes, refusing larger files (256000 bytes by default)."""
     card = _memory_card(storage)
     if card is not None:
-        return _file_bytes(relative, card)
-    return _read_disk_bytes(relative, storage)
+        return _file_bytes(relative, card, max_bytes)
+    return _read_disk_bytes(relative, storage, max_bytes)
+
+
+def file_size(relative: str, *, storage: str = "sd") -> int:
+    """Exact byte size without reading a disk file into memory."""
+    card = _memory_card(storage)
+    if card is not None:
+        path = _memory_path(relative)
+        if path not in card["files"]:
+            raise SdError("That is not a file.")
+        return _stored_size(card["files"][path])
+    path = _disk_path(relative, storage)
+    try:
+        if not path.is_file():
+            raise SdError("That is not a file.")
+        return path.stat().st_size
+    except OSError as exc:
+        raise SdError("Could not read that file's size.") from exc
+
+
+def path_exists(relative: str, *, storage: str = "sd") -> bool:
+    card = _memory_card(storage)
+    if card is not None:
+        path = _memory_path(relative)
+        return not path or path in card["files"] or path in card["dirs"]
+    path = _disk_path(relative, storage)
+    return path.exists() or path.is_symlink()
+
+
+def create_directory(relative: str, *, storage: str = "sd") -> None:
+    card = _memory_card(storage)
+    if path_exists(relative, storage=storage):
+        raise SdError("A file or directory already has that name.")
+    if card is not None:
+        path = _memory_path(relative)
+        parent = parent_path(path)
+        if parent and parent not in card["dirs"]:
+            raise SdError("That folder is not available.")
+        card["dirs"].add(path)
+        _mark_changed(storage)
+        return
+    try:
+        _disk_path(relative, storage).mkdir()
+    except OSError as exc:
+        raise SdError("Could not create that directory.") from exc
+
+
+def create_file(relative: str, data: str | bytes = b"", *, storage: str = "sd") -> None:
+    """Create a file without replacing an existing file or directory."""
+    if path_exists(relative, storage=storage):
+        raise SdError("A file or directory already has that name.")
+    card = _memory_card(storage)
+    if card is not None:
+        _write_memory(relative, data, card)
+        _mark_changed(storage)
+    else:
+        _write_disk(relative, data.encode("utf-8") if isinstance(data, str) else data, storage, exclusive=True)
+
+
+def delete_file(relative: str, *, storage: str = "sd") -> None:
+    file_size(relative, storage=storage)
+    card = _memory_card(storage)
+    if card is not None:
+        del card["files"][_memory_path(relative)]
+        _mark_changed(storage)
+        return
+    try:
+        _disk_path(relative, storage).unlink()
+    except OSError as exc:
+        raise SdError("Could not delete that file.") from exc
+
+
+def move_file(source: str, destination: str, *, storage: str = "sd", destination_storage: str | None = None) -> None:
+    """Rename or move a file. Never replace a destination or remove directories."""
+    destination_storage = destination_storage or storage
+    size = file_size(source, storage=storage)
+    if path_exists(destination, storage=destination_storage):
+        raise SdError("A file or directory already has that name.")
+    source_card = _memory_card(storage)
+    destination_card = _memory_card(destination_storage)
+    if source_card is not None and destination_card is not None:
+        data = source_card["files"][_memory_path(source)]
+        if source_card is destination_card:
+            parent = parent_path(_memory_path(destination))
+            if parent and parent not in destination_card["dirs"]:
+                raise SdError("That folder is not available.")
+            destination_card["files"][_memory_path(destination)] = data
+        else:
+            _write_memory(destination, data, destination_card)
+        del source_card["files"][_memory_path(source)]
+        _mark_changed(storage)
+        _mark_changed(destination_storage)
+        return
+    if storage == destination_storage:
+        try:
+            _disk_path(source, storage).rename(_disk_path(destination, storage))
+        except OSError as exc:
+            raise SdError("Could not move that file.") from exc
+        return
+    # Cross-filesystem moves copy first and remove the original only after the
+    # destination has been flushed. A failed copy leaves the original intact.
+    if destination_card is None and size > disk_usage(storage=destination_storage)[2]:
+        raise SdError("There is not enough free space.")
+    if destination_card is not None:
+        if size > MEMORY_CAPACITY - _memory_used(destination_card):
+            raise SdError("There is not enough free space.")
+        data = read_bytes(source, storage=storage, max_bytes=MEMORY_CAPACITY)
+        create_file(destination, data, storage=destination_storage)
+    elif source_card is not None:
+        value = source_card["files"][_memory_path(source)]
+        data = value if isinstance(value, bytes) else value.encode("utf-8")
+        create_file(destination, data, storage=destination_storage)
+    else:
+        target = _disk_path(destination, destination_storage)
+        created = False
+        try:
+            with open(_disk_path(source, storage), "rb") as src, open(target, "xb") as dst:
+                created = True
+                while chunk := src.read(64 * 1024):
+                    dst.write(chunk)
+                dst.flush()
+                os.fsync(dst.fileno())
+        except OSError as exc:
+            if created:
+                try:
+                    target.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise SdError("Could not move that file.") from exc
+    try:
+        delete_file(source, storage=storage)
+    except SdError:
+        # A second copy is preferable to losing the only complete copy when
+        # the original card disappears or becomes read-only during a move.
+        raise SdError("The file was copied, but the original could not be deleted.")
+
+
+def _mark_changed(storage: str) -> None:
+    global _memory_dirty
+    if storage == "sd" and _memory is not None:
+        _memory_dirty = True
+
+
+def _stored_size(value: str | bytes) -> int:
+    return len(value if isinstance(value, bytes) else value.encode("utf-8"))
 
 
 def file_exists(relative: str, *, storage: str = "sd") -> bool:
@@ -262,7 +406,7 @@ def _safe_memory_path(relative: str) -> str:
 
 
 def _memory_path(relative: str) -> str:
-    relative = (relative or "").strip().strip("/")
+    relative = (relative or "").strip("/")
     if "\\" in relative or "\x00" in relative:
         raise SdError("That path is outside the selected storage.")
     parts = Path(relative).parts if relative else ()
@@ -304,13 +448,13 @@ def _child_name(path: str, prefix: str) -> str:
     return rest
 
 
-def _file_bytes(relative: str, card: dict) -> bytes:
+def _file_bytes(relative: str, card: dict, max_bytes: int = 256_000) -> bytes:
     path = _memory_path(relative)
     if not path or path in card["dirs"] or path not in card["files"]:
         raise SdError("That is not a file.")
     stored = card["files"][path]
     data = stored if isinstance(stored, bytes) else stored.encode("utf-8")
-    if len(data) > 256_000:
+    if len(data) > max_bytes:
         raise SdError("That file is too large.")
     return data
 
@@ -405,7 +549,7 @@ def _list_disk(relative: str, storage: str) -> list[dict]:
     return entries
 
 
-def _read_disk_bytes(relative: str, storage: str) -> bytes:
+def _read_disk_bytes(relative: str, storage: str, max_bytes: int = 256_000) -> bytes:
     path = _disk_path(relative, storage)
     if not path.is_file():
         raise SdError("That is not a file.")
@@ -413,28 +557,47 @@ def _read_disk_bytes(relative: str, storage: str) -> bytes:
         size = path.stat().st_size
     except OSError as exc:
         raise SdError("That is not a file.") from exc
-    if size > 256_000:
+    if size > max_bytes:
         raise SdError("That file is too large.")
     try:
-        data = path.read_bytes()
+        with open(path, "rb") as handle:
+            data = handle.read(max_bytes + 1)
     except OSError as exc:
         raise SdError("That is not a file.") from exc
-    if len(data) > 256_000:
+    if len(data) > max_bytes:
         raise SdError("That file is too large.")
     return data
 
 
-def _write_disk(relative: str, data: bytes, storage: str) -> None:
+def _write_disk(relative: str, data: bytes, storage: str, *, exclusive: bool = False) -> None:
     path = _disk_path(relative, storage)
     if path.is_dir():
         raise SdError("That is a folder.")
     parent = path.parent
     if not parent.is_dir():
         raise SdError("That folder is not available.")
+    temporary = None
     try:
-        with open(path, "wb") as handle:
+        if exclusive:
+            handle = open(path, "xb")
+            temporary = path
+        else:
+            import tempfile
+
+            handle = tempfile.NamedTemporaryFile(mode="wb", dir=parent, prefix=".bigsigner-", delete=False)
+            temporary = Path(handle.name)
+        with handle:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
+        if not exclusive:
+            temporary.replace(path)
+        temporary = None
     except OSError as exc:
         raise SdError("Could not write that file.") from exc
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass

@@ -67,6 +67,7 @@ from .psbt_screen import (
     paint_share,
     paint_signing,
 )
+from .filesystem import FileSystemUI
 from .canvas import (
     BLUE,
     ELLIPSIS,
@@ -647,6 +648,8 @@ class App:
             "external-details": self._external_details,
             "entropy": self._entropy,
         }
+        self.fs = FileSystemUI(self)
+        self._painters.update(self.fs.painters)
 
     def set_notice(self, message: str, *, error: bool = False):
         self.notice = message or ""
@@ -846,6 +849,8 @@ class App:
             return
         if self._in_hscroll_field(x, y):
             panel = "hfield"
+        elif self.screen == "fs-edit" and self.fs.editor.box is not None and _in_box(self.fs.editor.box, x, y):
+            panel = "fs-text"
         elif self._in_message_box(x, y):
             panel = "message"
         elif self._in_seed_grid(x, y):
@@ -866,6 +871,8 @@ class App:
             self._grid_origin = self.hscroll
         elif panel == "message":
             self._grid_origin = self.message_scroll
+        elif panel == "fs-text":
+            self._grid_origin = self.fs.editor.scroll
         else:
             self._grid_origin = self.seed_grid_scroll
 
@@ -966,6 +973,13 @@ class App:
             self.entropy_scroll_stick = offset >= self.entropy_scroll_max
             self._note_scroll()
             return True
+        if panel == "fs-text":
+            offset = max(0, min(self.fs.editor.scroll_max, int(self._grid_origin - dy)))
+            if offset == self.fs.editor.scroll:
+                return False
+            self.fs.editor.scroll = offset
+            self._note_scroll()
+            return True
         if panel == "message":
             offset = max(0, min(self.message_scroll_max, int(self._grid_origin - dy)))
             if offset == self.message_scroll:
@@ -1059,6 +1073,8 @@ class App:
         self.open_dropdown = None
 
     def back_one(self):
+        if self.fs.before_back():
+            return
         leaving_lit_qr = self.screen in ("seed-show", "address") or (
             self.screen == "qr" and self.qr_kind in ("key", "descriptor")
         )
@@ -1373,6 +1389,7 @@ class App:
         "ms-create": lambda self: self._create_selected_multisig(),
         "add-sd": lambda self: self._open_sd("key"),
         "sd-up": _act_sd_up,
+        "nav-filesystem": lambda self: self.fs.open(),
         "storage-sd": lambda self: self._choose_storage("sd"),
         "storage-temporary": lambda self: self._choose_storage("temporary"),
         "export-address": lambda self: self._open_address_export(),
@@ -1509,6 +1526,9 @@ class App:
     }
 
     def _act(self, action: str):
+        if action.startswith("fs-"):
+            self.fs.act(action)
+            return
         handler = self._EXACT_ACTIONS.get(action)
         if handler is not None:
             handler(self)
@@ -1643,7 +1663,7 @@ class App:
             self._passphrase_key(action[len("passkey-") :])
         elif action.startswith("passcur-"):
             index = int(action[8:])
-            if self.screen == "export-name":
+            if self.screen in ("export-name", "fs-name"):
                 self.filename_cursor = max(0, min(len(self.filename), index))
             elif self.screen == "address-type":
                 self.address_cursor = max(0, min(len(self.address_text), index))
@@ -1868,7 +1888,8 @@ class App:
         self.go("storage")
 
     def _storage(self, frame: Frame):
-        frame.header("Export" if self.sd_mode == "export" else "Load from File", "back")
+        title = "File System" if self.sd_mode == "manage" else "Export" if self.sd_mode == "export" else "Load from File"
+        frame.header(title, "menu" if self.screen == "filesystem" else "back")
         y = frame.button(HEADER + 24, "SD Card", "storage-sd")
         frame.button(y, "Temporary FS", "storage-temporary")
 
@@ -2154,25 +2175,28 @@ class App:
 
     def _sd(self, frame: Frame):
         exporting = self.sd_mode == "export"
+        managing = self.sd_mode == "manage"
+        moving = self.sd_mode == "move"
         title = "SD Card" if self.sd_storage == "sd" else "Temporary FS"
         try:
             entries = list_folder(self.sd_dir, storage=self.sd_storage)
-            usage = disk_usage(storage=self.sd_storage) if exporting else None
+            usage = disk_usage(storage=self.sd_storage) if exporting or managing or moving else None
         except SdError as exc:
             frame.header(title, "back")
             frame.text(str(exc), MARGIN, HEADER + 24, size=TITLE_SIZE)
             return
         rows = []
         if self.sd_dir:
-            rows.append(("..", "sd-up"))
+            rows.append(("..", "fs-move-up" if moving else "sd-up"))
         for entry in entries:
             relative = child_path(self.sd_dir, entry["name"])
             if entry["kind"] == "dir":
-                rows.append((entry["name"] + "/", f"sd-into:{relative}"))
-            else:
-                verb = "sd-write" if exporting else "sd-read"
+                verb = "fs-move-into" if moving else "sd-into"
+                rows.append((entry["name"] + "/", f"{verb}:{relative}"))
+            elif not moving:
+                verb = "fs-select" if managing else "sd-write" if exporting else "sd-read"
                 rows.append((entry["name"], f"{verb}:{relative}"))
-        usage_height = 32 if exporting else 0
+        usage_height = 32 if usage is not None else 0
         list_top = HEADER + 60 + usage_height
         name_width = WIDTH - 2 * MARGIN - 32
         face = font(TITLE_SIZE)
@@ -2184,15 +2208,20 @@ class App:
             placed.append((top, height, lines, label, action))
             top += height + 8
         end = top if placed else list_top
-        button_h = frame.button_height("New File") if exporting else 0
-        clearance = button_h + 28 if exporting else 96
-        list_bottom = HEIGHT - clearance if exporting else HEIGHT
-        offset = self._scroll_offset("sd", end, clearance=clearance)
+        button_h = frame.button_height("Move Here" if moving else "New File") if exporting or moving else 0
+        clearance = button_h + 28 if exporting or moving else 96
+        list_bottom = HEIGHT - clearance if exporting or moving else HEIGHT
+        offset = self._scroll_offset("fs-move" if moving else "sd", end, clearance=clearance)
         for row_top, height, lines, label, action in placed:
             self._sd_row(frame, row_top - offset, list_top, list_bottom, height, lines, label, action)
-        if exporting:
+        if exporting or moving:
             frame.draw.rectangle((0, list_bottom, WIDTH, HEIGHT), fill=PAPER)
-            frame.button(HEIGHT - 16 - button_h, "New File", "export-new")
+            if moving:
+                current = child_path(self.sd_dir, Path(self.fs.path).name)
+                enabled = self.sd_storage != self.fs.storage or current != self.fs.path
+                frame.button(HEIGHT - 16 - button_h, "Move Here", "fs-move-here", enabled=enabled)
+            else:
+                frame.button(HEIGHT - 16 - button_h, "New File", "export-new")
         frame.header(title, "back")
         frame.draw.rectangle((0, HEADER, WIDTH, list_top), fill=PAPER)
         if usage is not None:
@@ -2212,6 +2241,10 @@ class App:
                 message_y = list_top
             message = "This folder is empty." if self.sd_dir else f"This {title} is empty."
             frame.text(message, MARGIN, message_y, size=TITLE_SIZE)
+        if managing:
+            if self.add_menu:
+                self._speed_dial(frame, (("New Directory", "fs-new-directory", None), ("New File", "fs-new-file", Icons.FILE)))
+            self._plus(frame, "toggle-add", Icons.CLOSE if self.add_menu else Icons.PLUS)
 
     def _sd_row(self, frame: Frame, top: int, list_top: int, list_bottom: int, height: int, lines: list[str], label: str, action: str):
         if top >= list_bottom or top + height <= list_top:
@@ -2313,10 +2346,20 @@ class App:
         frame.text(self.load_error or "The key could not be loaded.", MARGIN, HEADER + 28, size=BODY_SIZE, fill=RED)
         frame.button(HEIGHT - 110, "OK", "load-error-ok")
 
-    def accept_qr(self, text: str):
+    def accept_qr(self, text: str | bytes):
         """Import a payload read from a QR code. Ignored unless the scan screen is open."""
         if self.screen != "scan" or self.confirm == "seed-warning":
             return
+        if self.scan_kind == "file":
+            self.fs.accept_qr(text)
+            return
+        if isinstance(text, bytes):
+            if self.scan_kind == "psbt" and is_binary_psbt(text):
+                self._accept_psbt_qr(text)
+                return
+            # Compact SeedQR uses a one-to-one byte mapping in the shared parser.
+            # Do not use UTF-8, which can reject or change the length of entropy.
+            text = text.decode("latin-1")
         if self.scan_kind == "address":
             try:
                 payload = self.qr_sequence.take(text, self.session.network, "QR code", "address")
@@ -3029,7 +3072,7 @@ class App:
 
     def _flow_button(
         self, frame: Frame, y: int, label: str, action: str, paint: bool, offset: int, hit_label: str = "",
-        enabled: bool = True,
+        enabled: bool = True, color=BLUE,
     ) -> int:
         height = frame.button_height(label)
         top = y - offset
@@ -3038,7 +3081,7 @@ class App:
         # The button rectangle includes its bottom row. A tile that starts on
         # that row still has to draw it, or the stitch drops the last pixel.
         if paint and top + height >= clip_top and top < clip_bottom:
-            frame.button(top, label, action, label=hit_label, enabled=enabled)
+            frame.button(top, label, action, label=hit_label, enabled=enabled, color=color)
         return y + height + 12
 
     def _flow_note(self, frame: Frame, y: int, text: str, paint: bool, offset: int, fill=MUTED, size: int = MESSAGE_NOTE_SIZE) -> int:
@@ -5622,8 +5665,8 @@ class App:
     def _passphrase_keyboard(self, frame: Frame):
         y = KEYBOARD_TOP
         self.keyboard_top = y
-        if self.screen == "message-edit":
-            frame.hit((0, y, WIDTH, HEIGHT), "message-keyboard", "keyboard")
+        if self.screen in ("message-edit", "fs-edit"):
+            frame.hit((0, y, WIDTH, HEIGHT), "fs-keyboard" if self.screen == "fs-edit" else "message-keyboard", "keyboard")
         modes = (("abc", "lower"), ("ABC", "upper"), (".?123", "digit"), ("#+=", "symbol"))
         gap = 8
         width = (WIDTH - 2 * MARGIN - gap * 3) // 4
@@ -5667,7 +5710,7 @@ class App:
                 x += key_w + 6
             y += key_h + 6
         delete = (WIDTH - MARGIN - 88, y, WIDTH - MARGIN, y + key_h)
-        if self.screen == "message-edit":
+        if self.screen in ("message-edit", "fs-edit"):
             enter_w = 120
             gap = 12
             enter = (delete[0] - gap - enter_w, y, delete[0] - gap, y + key_h)
@@ -5692,7 +5735,10 @@ class App:
         frame.hit(self._key_hit(delete, bottom=True, right=True), "passkey-backspace", "backspace")
 
     def _passphrase_key(self, key: str):
-        if self.screen == "export-name":
+        if self.screen == "fs-edit":
+            self.fs.editor.type(key)
+            return
+        if self.screen in ("export-name", "fs-name"):
             self._type_filename(key)
             return
         if self.screen == "address-type":
@@ -6081,6 +6127,7 @@ class App:
         for label, action in (
             ("Bitcoin Keys", "nav-keys"),
             ("Bitcoin Wallets", "nav-wallets"),
+            ("File System", "nav-filesystem"),
             ("Settings", "nav-settings"),
             ("About", "nav-about"),
         ):
@@ -6098,11 +6145,15 @@ class App:
     def _menu_section(self) -> str:
         """The side-menu page where this screen's back stack begins."""
         for screen in (*self.back, self.screen):
-            if screen in {"keys", "wallets", "settings", "about"}:
+            if screen in {"keys", "wallets", "filesystem", "settings", "about"}:
                 return screen
         return ""
 
     def _confirm_message(self) -> str:
+        if self.confirm == "fs-discard":
+            return "Your changes will not be saved. Discard changes?"
+        if self.confirm == "fs-delete":
+            return f'Delete "{Path(self.fs.path).name}"?'
         if self.confirm == "seed-warning":
             return self._seed_warning_message
         if self.confirm in ("show-seed", "show-passphrase"):
@@ -6198,7 +6249,7 @@ class App:
         if self.confirm == "seed-warning":
             yes = "OK"
         self._dialog_button(frame, cancel, no, "confirm-no", (132, 138, 148))
-        color = RED if self.confirm in ("delete-key", "delete-wallet", "replace-file") else BLUE
+        color = RED if self.confirm in ("delete-key", "delete-wallet", "replace-file", "fs-delete") else BLUE
         self._dialog_button(frame, confirm, yes, "confirm-yes", color)
 
     def _dialog_button(self, frame: Frame, box, text: str, action: str, color):
@@ -6218,7 +6269,11 @@ class App:
     def _confirm_yes(self):
         kind = self.confirm
         self.confirm = None
-        if kind == "seed-warning":
+        if kind == "fs-discard":
+            self.fs.discard()
+        elif kind == "fs-delete":
+            self.fs.act("fs-delete-confirm")
+        elif kind == "seed-warning":
             pending = self._pending_seed_warning
             self._pending_seed_warning = None
             self._seed_warning_message = ""
@@ -7336,7 +7391,7 @@ class App:
         self.menu = False
         self.add_menu = False
 
-    def _accept_psbt_qr(self, text: str):
+    def _accept_psbt_qr(self, text: str | bytes):
         try:
             payload = self._take_psbt_qr(text)
         except SessionError as exc:
@@ -7351,7 +7406,9 @@ class App:
         self.psbt_parts.reset()
         self._accept_psbt_text(payload, "QR code")
 
-    def _take_psbt_qr(self, text: str) -> str | None:
+    def _take_psbt_qr(self, text: str | bytes) -> str | bytes | None:
+        if isinstance(text, bytes) and is_binary_psbt(text):
+            return text
         match = None
         compact = " ".join(str(text).split())
         if compact.lower().startswith("p") and "of" in compact.lower():

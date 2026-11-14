@@ -203,6 +203,19 @@ def test_a_binary_psbt_file_is_the_bip174_form_and_loads_from_the_sd_card():
         unmount_memory()
 
 
+def test_a_raw_binary_psbt_qr_opens_transaction_signing():
+    app = App()
+    app.session = _native()
+    app.wallet_index = 0
+    app.screen = "load-psbt"
+    app._act("psbt-scan")
+    app.accept_qr(_psbt(app.session).serialize())
+    assert app.screen == "psbt-yaml"
+    app.render()
+    assert "Transaction Signing" in _texts(app)
+    assert not app.notice
+
+
 def test_a_specter_sequence_counts_the_parts_and_a_large_psbt_is_refused():
     session = _native()
     encoded = base64.b64encode(_psbt(session).serialize()).decode("ascii")

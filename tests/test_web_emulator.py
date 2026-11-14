@@ -8,8 +8,187 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from embit import bip39
 
 from bigsigner.bundle import EXTERNAL_ASSETS, bundle_files, install_assets, source_files, source_root, write_bundle
+from bigsigner.seedqr import standard_digits
+from test_domain import ABANDON
+
+
+@pytest.mark.parametrize("payload,binary,expected_seed", [
+    (base64.b64decode("aaaaaaaaaaaaaaaa"), True, None),
+    (bytes(range(256)), True, None),
+    (b"  hello\r\nworld! \n", False, None),
+    (b"01234567890123456789012345", False, None),
+    (b"UR:BYTES/1-3/\xff\x00", True, None),
+    (b"\x00" * 16, True, ABANDON),
+    (b"\xc2\xa9" * 8, True, bip39.mnemonic_from_bytes(b"\xc2\xa9" * 8)),
+    (ABANDON.encode("ascii"), False, ABANDON),
+    (standard_digits(ABANDON).encode("ascii"), False, ABANDON),
+], ids=["reported-binary", "all-bytes", "text", "numeric", "sequence-binary",
+        "compact-seed", "compact-valid-utf8", "mnemonic", "numeric-seed"])
+def test_camera_qr_pixels_reach_file_and_key_flows_without_byte_changes(payload, binary, expected_seed, tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    import qrcode
+
+    from bigsigner import sdcard
+    from bigsigner.ui.app import App
+    from test_filesystem import _browser
+    from test_sdcard import _tap
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to exercise browser QR decoding")
+    decoder = Path("web/external-assets/jsqr/jsQR.js").resolve()
+    if not decoder.is_file():
+        pytest.skip("Run python -m bigsigner.bundle to install the pinned QR decoder")
+    digest = next(digest for name, _url, digest in EXTERNAL_ASSETS if name == "jsqr/jsQR.js")
+    assert hashlib.sha256(decoder.read_bytes()).hexdigest() == digest
+    image = qrcode.make(payload, box_size=5, border=4).convert("RGBA")
+    pixels = tmp_path / "pixels.json"
+    pixels.write_text(json.dumps({"width": image.width, "height": image.height,
+                                  "rgba": base64.b64encode(image.tobytes()).decode("ascii")}))
+    page = Path("web/index.html").read_text(encoding="utf-8")
+    scanner = "async function watchQr(" + page.split("async function watchQr(", 1)[1].split("async function syncCamera(", 1)[0]
+    script = r'''
+const assert = require("node:assert/strict");
+const jsQR = require(process.argv[2]);
+const frame = JSON.parse(require("node:fs").readFileSync(process.argv[3], "utf8"));
+let rgba = new Uint8ClampedArray(Buffer.from(frame.rgba, "base64"));
+const video = {srcObject: {}, readyState: 4, videoWidth: frame.width, videoHeight: frame.height};
+const context = {
+  drawImage: (source, x, y, width, height) => {
+    assert.equal(source, video);
+    assert.equal(width, frame.width);
+    assert.equal(height, frame.height);
+  },
+  getImageData: () => ({data: rgba, width: frame.width, height: frame.height}),
+};
+const document = {createElement: () => ({getContext: () => context})};
+const status = {textContent: ""};
+const showStatus = text => {status.textContent = text;};
+let qrBusy = false, qrWarned = false, qrCanvas = null, lastQr = "", screenName = "scan";
+const sent = [];
+const sendTick = body => sent.push(body);
+const enqueue = fn => fn();
+''' + scanner + r'''
+(async () => {
+  await watchQr();
+  assert.equal(sent.length, 1, status.textContent || "The QR code was not captured");
+  await watchQr();
+  assert.equal(sent.length, 1, "The same visible code should only be sent once");
+  const saved = rgba;
+  rgba = new Uint8ClampedArray(rgba.length).fill(255);
+  await watchQr();
+  assert.equal(lastQr, "");
+  rgba = saved;
+  await watchQr();
+  assert.equal(sent.length, 2);
+  assert.deepEqual(sent[0], sent[1]);
+  assert.equal(status.textContent, "");
+  console.log(JSON.stringify(sent[0]));
+})().catch(error => { console.error(error); process.exitCode = 1; });
+'''
+    result = subprocess.run([node, "-", str(decoder), str(pixels)], input=script, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    message = json.loads(result.stdout)
+    assert message["qr_encoding"] == "hex"
+    assert bytes.fromhex(message["qr"]) == payload
+    worker = Path("web/worker.js").read_text(encoding="utf-8")
+    driver = worker.split("const DRIVER = `", 1)[1].rsplit("`;", 1)[0]
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    namespace = {}
+    exec(compile(driver, "web/worker.js:DRIVER", "exec"), namespace)
+    app = _browser()
+    _tap(app, "plus")
+    _tap(app, "New File")
+    _tap(app, "Scan QR Code")
+    namespace["_tap"](app, message)
+    if payload.startswith(b"UR:"):
+        assert app.screen == "fs-qr-warning"
+        _tap(app, "OK")
+    assert app.screen == ("fs-binary" if binary else "fs-edit")
+    _tap(app, "Save")
+    name = "file.bin" if binary else "file.txt"
+    assert app.filename == name
+    _tap(app, "Save")
+    assert sdcard.read_bytes(name) == payload
+    # All scan flows receive the same raw bytes, including numeric QR segments.
+    received = []
+    namespace["_tap"](SimpleNamespace(scan_kind="key", accept_qr=received.append), message)
+    assert received == [payload]
+    key_scan = App()
+    key_scan.screen = "scan"
+    namespace["_tap"](key_scan, message)
+    if expected_seed is not None:
+        assert key_scan.screen == "seed-review"
+        assert key_scan.seed_words == expected_seed.split()
+        assert not key_scan.session.fingerprints
+    else:
+        assert key_scan.screen == "load-error"
+        assert key_scan.load_error and "empty" not in key_scan.load_error
+        if payload == base64.b64decode("aaaaaaaaaaaaaaaa"):
+            assert key_scan.load_error == "That QR code is not a seed, key expression or wallet descriptor."
+
+
+def test_an_old_worker_cannot_silently_turn_a_binary_qr_into_empty_text():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to exercise worker compatibility")
+    page = Path("web/index.html").read_text(encoding="utf-8")
+    ready = "function workerReady(" + page.split("function workerReady(", 1)[1].split('if (location.protocol === "file:")', 1)[0]
+    script = '''
+const assert = require("node:assert/strict");
+let terminated = false, loaded = false, status = "";
+const worker = {terminate: () => {terminated = true;}};
+const loadFrame = () => {loaded = true;};
+const showStatus = text => {status = text;};
+''' + ready + '''
+workerReady({type: "ready"}); // Old workers only returned the event type.
+assert.equal(terminated, true);
+assert.equal(loaded, false);
+assert.match(status, /out of date/);
+workerReady({type: "ready", qr_bytes: true}); // Reject the earlier file-only transport too.
+assert.equal(loaded, false);
+terminated = false;
+workerReady({type: "ready", qr_encoding: "hex"});
+assert.equal(terminated, false);
+assert.equal(loaded, true);
+'''
+    result = subprocess.run([node], input=script, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_device_file_deletes_and_renames_merge_with_browser_card_edits():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to exercise browser card merging")
+    page = Path("web/index.html").read_text(encoding="utf-8")
+    merge = "function applyRemote(" + page.split("function applyRemote(", 1)[1].split("async function sendTick(", 1)[0]
+    script = '''
+const assert = require("node:assert/strict");
+const normalizeCard = value => JSON.parse(JSON.stringify(value));
+const saveCard = () => {};
+const renderSd = () => {};
+let dirty = true;
+let card;
+''' + merge + '''
+const sent = {dirs: [], files: {"old.txt": "unchanged", "binary.bin": {base64: "AP8="}}};
+card = normalizeCard(sent);
+card.files["browser.txt"] = "a concurrent browser edit";
+applyRemote(sent, {dirs: [], files: {"renamed.txt": "unchanged"}});
+assert.equal(card.files["old.txt"], undefined);
+assert.equal(card.files["binary.bin"], undefined);
+assert.equal(card.files["renamed.txt"], "unchanged");
+assert.equal(card.files["browser.txt"], "a concurrent browser edit");
+card = {dirs: [], files: {"old.txt": "modified while the device was busy"}};
+applyRemote(sent, {dirs: [], files: {}});
+assert.equal(card.files["old.txt"], "modified while the device was busy");
+'''
+    result = subprocess.run([node], input=script, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_browser_drops_taps_queued_against_the_previous_frame():
@@ -197,6 +376,7 @@ def test_the_static_page_reads_the_bundle_and_checks_downloads():
         "pillow/pillow-12.2.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
         "embit/embit-0.8.0.tar.gz",
         "qrcode/qrcode-8.0-py3-none-any.whl",
+        "jsqr/jsQR.js",
     ]
 
 

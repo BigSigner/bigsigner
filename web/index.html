@@ -120,6 +120,21 @@
         <p>A set of fingerprints and the number of signatures required (m-of-n). As with a SingleSig wallet, you can use account indexes to keep funds separate, and each fingerprint can have its own account index. For example, a 2-of-3 multisig of fingerprints <code>00112233</code>, <code>aabbccdd</code>, and <code>a1b2c3d4</code> may be switched to account indexes (0, 7, 4). Non-zero account indexes are rarely used in multisig wallets - people usually just keep a different seed for each multisig wallet that they own (or being part of).</p>
         <p>If you have the Seed Key for one of the fingerprints, you can add its signature to transactions (the other hardware wallets may still need to sign to complete the transaction). If you have none of the seeds, you can watch the addresses, but you cannot sign. The wallet is removed automatically if, for any of its fingerprints, the Seed Key and all of the External Keys are gone. Even in a 2-of-3 wallet, if you have the seed or the xpubs for the first two fingerprints but not for the third, you cannot find the wallet's addresses.</p>
         <p>For more information, visit <a href="https://bigsigner.com">bigsigner.com</a>.</p>
+        <h3>Emulator Credits</h3>
+        <ul>
+          <li>Pyodide 314.0.7 — <a href="licenses/pyodide-LICENSE.txt" target="_blank" rel="noopener">MPL 2.0</a> (<a href="https://github.com/pyodide/pyodide/tree/314.0.7" target="_blank" rel="noopener">source</a>)</li>
+          <li>CPython 3.14.2 — <a href="licenses/CPython-LICENSE.txt" target="_blank" rel="noopener">Python Licenses</a></li>
+          <li>Emscripten 5.0.3 — <a href="licenses/Emscripten-LICENSE.txt" target="_blank" rel="noopener">MIT / NCSA Licenses and Notices</a></li>
+          <li>Pillow 12.2.0 — <a href="licenses/Pillow-LICENSE.txt" target="_blank" rel="noopener">HPND License</a></li>
+          <li>embit 0.8.0 — <a href="licenses/embit-LICENSE.txt" target="_blank" rel="noopener">MIT License</a></li>
+          <li>qrcode 8.0 — <a href="licenses/qrcode-LICENSE.txt" target="_blank" rel="noopener">BSD License and Notices</a></li>
+          <li>jsQR 1.4.0 — <a href="licenses/jsQR-LICENSE.txt" target="_blank" rel="noopener">Apache License 2.0</a></li>
+          <li>unique-names-generator word lists — <a href="licenses/unique-names-generator-LICENSE.txt" target="_blank" rel="noopener">MIT License</a></li>
+          <li>Bytewords — <a href="licenses/Bytewords-LICENSE.txt" target="_blank" rel="noopener">BSD-2-Clause-Patent License</a></li>
+          <li>DejaVu fonts — <a href="licenses/DejaVu-LICENSE.txt" target="_blank" rel="noopener">Bitstream Vera License and Notices</a></li>
+          <li>Font Awesome Free — <a href="licenses/FontAwesome-LICENSE.txt" target="_blank" rel="noopener">SIL OFL 1.1</a></li>
+          <li>SeedSigner icons — <a href="licenses/SeedSigner-icons-LICENSE.txt" target="_blank" rel="noopener">MIT License</a></li>
+        </ul>
       </div>
     </section>
     <div id="sd-panel">
@@ -180,6 +195,7 @@
     </form>
   </aside>
 </div>
+<script src="external-assets/jsqr/jsQR.js"></script>
 <script>
 const panel = document.getElementById("panel");
 const panelWrap = document.getElementById("panel-wrap");
@@ -286,7 +302,7 @@ let sampler = 0;
 let lastQr = "";
 let qrBusy = false;
 let qrWarned = false;
-let qrDetector = null;
+let qrCanvas = null;
 panel.style.pointerEvents = "none";
 renderSd();
 
@@ -854,25 +870,36 @@ async function watchQr() {
   if (qrBusy || screenName !== "scan" || !video.srcObject) return;
   qrBusy = true;
   try {
-    if (!("BarcodeDetector" in window)) {
+    if (typeof jsQR !== "function") {
       if (!qrWarned) {
         qrWarned = true;
+        showStatus("The QR decoder is missing. Run python -m bigsigner.bundle and reload.");
         enqueue(() => sendTick({kind: "tap", qr_unsupported: true}));
       }
       return;
     }
-    if (!video.videoWidth) return;
-    if (!qrDetector) qrDetector = new BarcodeDetector({formats: ["qr_code"]});
-    const codes = await qrDetector.detect(video);
-    const text = codes.length ? (codes[0].rawValue || "") : "";
-    if (!text) {
+    if (!video.videoWidth || !video.videoHeight || video.readyState < 2) return;
+    if (!qrCanvas) qrCanvas = document.createElement("canvas");
+    const scale = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight));
+    qrCanvas.width = Math.round(video.videoWidth * scale);
+    qrCanvas.height = Math.round(video.videoHeight * scale);
+    const context = qrCanvas.getContext("2d", {willReadFrequently: true});
+    context.drawImage(video, 0, 0, qrCanvas.width, qrCanvas.height);
+    const pixels = context.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
+    const code = jsQR(pixels.data, pixels.width, pixels.height);
+    if (!code || !code.binaryData.length) {
       lastQr = "";
       return;
     }
-    if (text === lastQr) return;
-    lastQr = text;
-    enqueue(() => sendTick({kind: "tap", qr: text}));
+    const raw = Array.from(code.binaryData, byte => byte.toString(16).padStart(2, "0")).join("");
+    if (raw === lastQr) return;
+    lastQr = raw;
+    enqueue(() => sendTick({kind: "tap", qr: raw, qr_encoding: "hex"}));
   } catch (err) {
+    if (!qrWarned) {
+      qrWarned = true;
+      showStatus("The QR scanner could not read the camera frame: " + String(err));
+    }
   } finally {
     qrBusy = false;
   }
@@ -966,6 +993,11 @@ function applyRemote(sent, remote) {
   const remoteCard = normalizeCard(remote);
   if (!dirty) card = remoteCard;
   else {
+    for (const [path, text] of Object.entries(sent.files)) {
+      if (!Object.hasOwn(remoteCard.files, path) && JSON.stringify(card.files[path]) === JSON.stringify(text)) {
+        delete card.files[path];
+      }
+    }
     for (const [path, text] of Object.entries(remoteCard.files)) {
       if (sent.files[path] !== text) card.files[path] = text;
     }
@@ -1056,10 +1088,20 @@ panel.addEventListener("pointerup", (event) => {
 });
 panel.addEventListener("pointercancel", () => { press = null; });
 
+function workerReady(msg) {
+  if (msg.qr_encoding !== "hex") {
+    worker.terminate();
+    showStatus("The emulator worker is out of date. Reload the page to update it.");
+    return;
+  }
+  loadFrame();
+}
+
 if (location.protocol === "file:") {
   showStatus("Open this page from a local web server.");
 } else {
-  worker = new Worker("worker.js", {type: "module"});
+  // The page and worker must agree on the raw QR transport.
+  worker = new Worker("worker.js?load=" + Date.now(), {type: "module"});
   worker.addEventListener("message", (event) => {
     const msg = event.data;
     if (msg.type === "progress") {
@@ -1075,7 +1117,7 @@ if (location.protocol === "file:") {
       return;
     }
     if (msg.type === "ready") {
-      loadFrame();
+      workerReady(msg);
       return;
     }
     const waiter = pending.get(msg.id);

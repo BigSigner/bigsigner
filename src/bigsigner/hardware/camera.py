@@ -193,7 +193,7 @@ def paste_preview(image: Image.Image, shot: Image.Image, box: tuple[int, int, in
     image.paste(resized.crop((crop_x, crop_y, crop_x + width, crop_y + height)), (left, top))
 
 
-def read_qr(image: Image.Image) -> str | None:
+def read_qr(image: Image.Image, *, raw: bool = False) -> str | bytes | None:
     """The first QR text in the picture, or None when zbar is absent or finds nothing."""
     try:
         from pyzbar.pyzbar import decode
@@ -206,6 +206,8 @@ def read_qr(image: Image.Image) -> str | None:
     for code in codes:
         if code.type != "QRCODE" or not code.data:
             continue
+        if raw:
+            return code.data
         try:
             return code.data.decode("utf-8")
         except UnicodeDecodeError:

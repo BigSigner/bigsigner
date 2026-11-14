@@ -82,7 +82,7 @@ sys.path.insert(0, "/tmp/qrcode")
   pyodide.runPython(DRIVER);
   tick = pyodide.globals.get("tick");
   progress("Starting…");
-  self.postMessage({type: "ready"});
+  self.postMessage({type: "ready", qr_encoding: "hex"});
 }
 
 function mkdirP(fs, dir) {
@@ -212,7 +212,14 @@ def _tap(app, payload):
         app.note_qr_unsupported()
         return
     if isinstance(payload.get("qr"), str):
-        app.accept_qr(payload["qr"])
+        data = payload["qr"]
+        if payload.get("qr_encoding") == "hex":
+            try:
+                data = bytes.fromhex(data)
+            except ValueError:
+                app.set_error("The QR code content could not be read.")
+                return
+        app.accept_qr(data)
         return
     x = int(payload.get("x") or 0)
     y = int(payload.get("y") or 0)
