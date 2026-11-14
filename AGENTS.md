@@ -22,6 +22,8 @@ Every tap action starts a fixed 250 ms input guard after its resulting frame is 
 
 Every Load from File and export flow offers SD Card and Temporary FS before browsing files. SD Card requires a mounted card and reports an error when absent. Temporary FS creates `/tmp/bigsigner` on the panel's RAM filesystem; files last until reboot. Browser Temporary FS is separate memory cleared on reload. The displayed directory path always starts with `/`, including `/` at the root. Export file browsers show one fixed line above the directory name: Used: <used> / <total> Free: <free>. Sizes use one decimal place and IEC units, with a font smaller than the directory name that shrinks to keep the line within the page margins.
 
+A seed imported from a file or QR code (including numeric or compact SeedQR) opens Seed Words before it is loaded. The fixed label is `<x> Words Seed`, with no word-count selector. The words use the same scrollable column as manual entry and start scrolled to the bottom. Continue stays below the word list and opens the passphrase choice. Manual entry also stays on the completed word list after selecting the last word; only Continue opens the passphrase choice. The seed is added only after No Passphrase or Save Passphrase. Back from the passphrase choice returns to the word list; Back from imported words returns to the file browser or scanner.
+
 ## Browser emulator
 
 Tests do not start it. They construct `App`, call `render`, and tap.

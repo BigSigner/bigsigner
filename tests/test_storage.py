@@ -105,6 +105,8 @@ def test_temporary_export_can_be_loaded_again_without_an_sd_card():
     _tap(fresh, "Load from File")
     _tap(fresh, "Temporary FS")
     _tap(fresh, app.filename)
+    _tap(fresh, "Continue")
+    _tap(fresh, "No Passphrase")
     assert fresh.screen == "key"
     assert fresh.notice == "The seed was added successfully."
 

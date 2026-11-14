@@ -64,7 +64,7 @@ def classify_content(text: str, network: str) -> ParsedContent:
         except ParseError as exc:
             raise SessionError(str(exc)) from exc
         return ParsedContent("bsms", descriptor)
-    words = payload.split()
+    words = payload.lower().replace(",", " ").split()
     if len(words) in (12, 18, 24) and all(word in WORDLIST for word in words):
         return ParsedContent("seed", " ".join(words))
     if payload.isdigit():
@@ -134,7 +134,7 @@ def read_address(text: str, network: str, source: str = "QR code") -> str:
     return parsed.text
 
 
-def import_scanned(session, text: str, expect: str = "key", source: str = "QR code") -> dict:
+def import_scanned(session, text: str, expect: str = "key", source: str = "QR code", *, defer_seed: bool = False) -> dict:
     """Import a mnemonic, SeedQR, key expression, or wallet descriptor.
 
     ``expect="descriptor"`` rejects seeds and transactions. The wallets
@@ -147,7 +147,7 @@ def import_scanned(session, text: str, expect: str = "key", source: str = "QR co
         raise SessionError(f"That {source} is empty.")
     if parsed.kind not in _ACCEPTED[expect]:
         raise SessionError(wrong_type_message(parsed.kind, expect, source, session.network))
-    return _load_parsed(session, parsed, expect)
+    return _load_parsed(session, parsed, expect, defer_seed=defer_seed)
 
 
 def _open_transport(text: str, network: str, source: str, expect: str) -> str:
@@ -161,8 +161,10 @@ def _open_transport(text: str, network: str, source: str, expect: str) -> str:
     return payload
 
 
-def _load_parsed(session, parsed: ParsedContent, expect: str) -> dict:
+def _load_parsed(session, parsed: ParsedContent, expect: str, *, defer_seed: bool = False) -> dict:
     if parsed.kind in ("seed", "compact-seed", "numeric-seed"):
+        if defer_seed:
+            return {"review": "seed", "words": parsed.text.split()}
         return session.add_mnemonic(parsed.text.split())
     if parsed.kind in ("descriptor", "bsms") and expect == "key":
         loaded = session._parse_supported_descriptor(parsed.text)

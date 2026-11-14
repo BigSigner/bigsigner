@@ -67,6 +67,8 @@ def test_sd_card_folder_lists_subdirectories_and_loads_a_seed():
     _tap(app, "..")
     assert app.sd_dir == "seeds"
     _tap(app, "abandon.txt")
+    _tap(app, "Continue")
+    _tap(app, "No Passphrase")
     assert app.screen == "key"
     assert app.notice == "The seed was added successfully."
     saved = next(iter(app.session.fingerprints.values()))
@@ -153,6 +155,8 @@ def test_disk_card_lists_and_loads_a_seed(monkeypatch, tmp_path):
     _tap(app, "seeds/")
     assert app.sd_dir == "seeds"
     _tap(app, "abandon.txt")
+    _tap(app, "Continue")
+    _tap(app, "No Passphrase")
     assert app.screen == "key"
     assert app.notice == "The seed was added successfully."
     saved = next(iter(app.session.fingerprints.values()))
@@ -418,6 +422,8 @@ def test_a_memory_card_lists_folders_and_loads_a_seed():
     _tap(app, "SD Card")
     _tap(app, "seeds/")
     _tap(app, "abandon.txt")
+    _tap(app, "Continue")
+    _tap(app, "No Passphrase")
     assert app.screen == "key"
     assert app.notice == "The seed was added successfully."
 
@@ -568,6 +574,8 @@ def test_export_seed_writes_words_that_load_from_the_card():
     _tap(fresh, "Load from File")
     _tap(fresh, "SD Card")
     _tap(fresh, app.filename)
+    _tap(fresh, "Continue")
+    _tap(fresh, "No Passphrase")
     assert fresh.notice == "The seed was added successfully."
     again = App()
     again.screen = "keys"
@@ -575,6 +583,8 @@ def test_export_seed_writes_words_that_load_from_the_card():
     _tap(again, "Load from File")
     _tap(again, "SD Card")
     _tap(again, "spaced.txt")
+    _tap(again, "Continue")
+    _tap(again, "No Passphrase")
     assert again.notice == "The seed was added successfully."
 
 

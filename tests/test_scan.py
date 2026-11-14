@@ -62,20 +62,25 @@ def test_a_tap_on_the_dimmed_page_closes_the_add_menu():
     assert app.screen == "keys"
 
 
-def test_scanned_words_and_seedqr_open_the_key():
-    app = _open_scan()
-    app.accept_qr(ABANDON)
-    assert app.screen == "key"
-    assert app.notice == "The seed was added successfully."
-
-    other = _open_scan()
-    other.accept_qr(standard_digits(ABANDON))
-    assert other.screen == "key"
-    assert next(iter(other.session.fingerprints)) == next(iter(app.session.fingerprints))
-
-    compact = _open_scan()
-    compact.accept_qr(compact_bytes(ABANDON).decode("latin-1"))
-    assert compact.screen == "key"
+def test_scanned_words_and_seedqr_review_the_words_before_loading():
+    fingerprints = set()
+    for payload in (ABANDON, standard_digits(ABANDON), compact_bytes(ABANDON).decode("latin-1")):
+        app = _open_scan()
+        app.accept_qr(payload)
+        assert app.screen == "seed-review"
+        assert not app.session.fingerprints
+        app.render()
+        assert "12 Words Seed" in [item["text"] for item in app.texts]
+        assert not any(hit["action"] == "dropdown-seed-length" for hit in app.hits)
+        assert app.seed_grid_scroll == app.seed_grid_max > 0
+        _tap(app, "Continue")
+        assert app.screen == "passphrase-ask"
+        assert not app.session.fingerprints
+        _tap(app, "No Passphrase")
+        assert app.screen == "key"
+        assert app.notice == "The seed was added successfully."
+        fingerprints.add(next(iter(app.session.fingerprints)))
+    assert len(fingerprints) == 1
 
 
 def test_scanned_transaction_or_unknown_text_opens_an_error_screen():

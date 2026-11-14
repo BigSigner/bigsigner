@@ -260,6 +260,7 @@ def test_the_title_count_resets():
     assert app._seed_title_count == 0
 
     app.back = ["keys"]
+    app.seed_words = list(WORDS)
     app._seed_title_count = 5
     app._act("seed-continue")
     assert app.screen == "passphrase-ask"
@@ -373,6 +374,11 @@ def test_last_word_must_match_the_checksum():
     assert app.seed_words == ["abandon"] * 11
     app._pick_word("about")
     assert app.seed_words[-1] == "about"
+    assert app.screen == "seed"
+    assert not app.session.fingerprints
+    app.render()
+    assert any(hit["label"] == "Continue" for hit in app.hits)
+    app._act("seed-continue")
     assert app.screen == "passphrase-ask"
     app._act("passphrase-no")
     assert app.screen == "key"
@@ -387,6 +393,7 @@ def test_a_new_seed_can_create_a_singlesig_wallet():
     app.seed_length = 12
     app.seed_words = ["abandon"] * 11
     app._pick_word("about")
+    app._act("seed-continue")
     app._act("passphrase-no")
     assert app.screen == "key"
     assert app.confirm == "create-wallet"
@@ -419,6 +426,7 @@ def test_a_new_seed_can_create_a_singlesig_wallet():
     other.seed_length = 12
     other.seed_words = ["abandon"] * 11
     other._pick_word("about")
+    other._act("seed-continue")
     other._act("passphrase-no")
     other._act("confirm-yes")
     other._act("wallet-taproot")

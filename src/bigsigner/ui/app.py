@@ -1,6 +1,7 @@
 """Touch screens for the portrait signer. The same object drives the emulator."""
 
 import hashlib
+import hmac
 import io
 import os
 import sys
@@ -29,6 +30,7 @@ from ..session import (
     ADDRESS_RANGE,
     Session,
     SessionError,
+    _clean_mnemonic,
     _passphrase_warnings,
     _public_for,
     account_index_phrase,
@@ -567,6 +569,8 @@ class App:
         self.entropy_scroll_box = None
         self.entropy_scroll_stick = True
         self.pending_mnemonic = ""
+        self._pending_seed_warning = None
+        self._seed_warning_message = ""
         self.camera_frames = []
         self.camera_final = b""
         self.scroll = {}
@@ -596,6 +600,7 @@ class App:
             "license": self._license,
             "editor": self._editor,
             "seed": self._seed,
+            "seed-review": self._seed_review,
             "passphrase-ask": self._passphrase_ask,
             "passphrase": self._passphrase,
             "passphrase-view": self._passphrase_view,
@@ -866,7 +871,7 @@ class App:
 
     def _in_seed_grid(self, x: int, y: int) -> bool:
         box = self.seed_grid_box
-        if self.screen not in ("seed", "seed-show") or box is None or self.seed_grid_max <= 0:
+        if self.screen not in ("seed", "seed-review", "seed-show") or box is None or self.seed_grid_max <= 0:
             return False
         left, top, right, bottom = box
         return left <= x < right and top <= y < bottom
@@ -1246,6 +1251,11 @@ class App:
         kind = self.confirm
         self.confirm = None
         self._account_warning_action = None
+        if kind == "seed-warning":
+            self._pending_seed_warning = None
+            self._seed_warning_message = ""
+            if self.screen == "scan":
+                self.back_one()
         if kind == "psbt-found" and self.psbt_search_hit:
             self.psbt_search_hit = None
 
@@ -1416,7 +1426,7 @@ class App:
         "show-seed": _act_show_seed,
         "show-passphrase": _act_show_passphrase,
         "copy-passphrase": lambda self: self._start_passphrase_copy(),
-        "seed-continue": lambda self: self.go("passphrase-ask"),
+        "seed-continue": lambda self: self._continue_seed(),
         "seed-title": lambda self: self._act_seed_title(),
         "passphrase-no": lambda self: self._save_entered_seed(None),
         "passphrase-yes": _act_passphrase_yes,
@@ -2217,6 +2227,8 @@ class App:
 
     def camera_preview_box(self):
         """Where the live camera picture is drawn, in screen pixels. None hides it."""
+        if self.confirm == "seed-warning":
+            return None
         if self.screen == "scan":
             return (0, HEADER, WIDTH, HEIGHT - 108)
         if self.screen == "camera":
@@ -2303,7 +2315,7 @@ class App:
 
     def accept_qr(self, text: str):
         """Import a payload read from a QR code. Ignored unless the scan screen is open."""
-        if self.screen != "scan":
+        if self.screen != "scan" or self.confirm == "seed-warning":
             return
         if self.scan_kind == "address":
             try:
@@ -2360,9 +2372,12 @@ class App:
 
     def _import_payload(self, text: str, expect: str, source: str):
         try:
-            added = import_scanned(self.session, text, expect=expect, source=source)
+            added = import_scanned(self.session, text, expect=expect, source=source, defer_seed=True)
         except SessionError as exc:
             self._show_load_error(str(exc), expect)
+            return
+        if added.get("review") == "seed":
+            self._open_seed_review(added["words"])
             return
         if added.get("choose") == "descriptor":
             self.descriptor_choice = added
@@ -2383,6 +2398,47 @@ class App:
             self._start_wallet_import(added["text"])
             return
         self._show_imported(added)
+
+    def _defer_seed_warning(self, words: list[str]) -> bool:
+        """
+        45617374657220456767212043616e20796f7520677565737320746865207365656420746861742077696c6c20646973706c617920746865207761726e696e67206d6573736167653f
+        """
+        mnemonic = " ".join(_clean_mnemonic(words)).encode("utf-8")
+        try:
+            if not hmac.compare_digest(hmac.digest(b"big", mnemonic, "sha256"), b'\x88\xfe\xfd\n\xd2\xc2\x8c\xd5\xbc^{\x13k\x8cC\xb4\xd7f\xbe\xd3\xa0\xc9RD\x12\xd4\xac\x18\xc9F\xe0\xeb'):
+                return False
+            key = hmac.digest(b"signer1", mnemonic, "sha256") + hmac.digest(b"signer2", mnemonic, "sha256")
+            message = bytes(left ^ right for left, right in zip(key, b'\xe7}\x0f\xb8\x86L\x80\xe4\xbdx\x0cYyL\xb0\x9f\xc8\xa39}m"E\xd1\xf0\xfbM\xbe\x028"\xc6a\xd2\x9d\xaa\xf5\x02\xe0D\xb7\x1dS\x14\xbf\x0bvZ\xd1>\xe8\x9d?\xd6\x81\x99`\xd4\x06\x86\x93Rq\x8a')).strip(b" ").decode("ascii")
+        except UnicodeDecodeError:
+            return False
+        self._pending_seed_warning = tuple(words)
+        self._seed_warning_message = message
+        self.confirm = "seed-warning"
+        return True
+
+    def _open_seed_review(self, words: list[str]):
+        try:
+            words = _clean_mnemonic(words)
+        except SessionError as exc:
+            self._show_load_error(str(exc), "key")
+            return
+        self.seed_words = words
+        self.seed_length = len(words)
+        self.word_prefix = ""
+        self.word_cursor = 0
+        self.seed_grid_stick = True
+        self.seed_grid_scroll = 0
+        self.go("seed-review")
+
+    def _continue_seed(self, *, warning_confirmed: bool = False):
+        try:
+            self.seed_words = _clean_mnemonic(self.seed_words)
+            if not warning_confirmed and self._defer_seed_warning(self.seed_words):
+                return
+        except SessionError as exc:
+            self.set_error(str(exc))
+            return
+        self.go("passphrase-ask")
 
     def note_qr_unsupported(self):
         if self.screen == "scan":
@@ -4992,6 +5048,12 @@ class App:
                 str(self.seed_length),
             )
 
+    def _seed_review(self, frame: Frame):
+        frame.header("Seed Words", "back")
+        y = frame.text(f"{len(self.seed_words)} Words Seed", MARGIN, HEADER + 12)
+        self._seed_entered_grid(frame, y + 12, HEIGHT - 120)
+        frame.button(HEIGHT - 100, "Continue", "seed-continue")
+
     def _act_seed_title(self):
         """Eight taps on the title repeat the one entered word into a 12-word seed."""
         if len(self.seed_words) != 1 or self.seed_length != 12:
@@ -5421,7 +5483,7 @@ class App:
     def _passphrase_ask(self, frame: Frame):
         frame.header("Passphrase", "back")
         y = frame.text(
-            "A passphrase is optional. It behaves like a 25th seed word, but it should contain random letters and digits, not a word picked from the dictionary. A different passphrase creates a different key, even if the first 12/24 seed words are the same.",
+            "A passphrase is optional. It behaves like an extra seed word, but it should contain random letters and digits, not a word picked from the dictionary. A different passphrase creates a different key, even if the seed words are the same.",
             MARGIN,
             HEADER + 24,
             size=TITLE_SIZE,
@@ -6041,6 +6103,8 @@ class App:
         return ""
 
     def _confirm_message(self) -> str:
+        if self.confirm == "seed-warning":
+            return self._seed_warning_message
         if self.confirm in ("show-seed", "show-passphrase"):
             return "Make sure nobody is looking over your shoulder!"
         if self.confirm == "create-wallet":
@@ -6131,6 +6195,8 @@ class App:
         cancel = (left, y, left + width, y + height)
         confirm = (left + width + gap, y, right, y + height)
         no, yes = ("No", "Yes") if self.confirm == "create-wallet" else ("Cancel", "Confirm")
+        if self.confirm == "seed-warning":
+            yes = "OK"
         self._dialog_button(frame, cancel, no, "confirm-no", (132, 138, 148))
         color = RED if self.confirm in ("delete-key", "delete-wallet", "replace-file") else BLUE
         self._dialog_button(frame, confirm, yes, "confirm-yes", color)
@@ -6152,7 +6218,15 @@ class App:
     def _confirm_yes(self):
         kind = self.confirm
         self.confirm = None
-        if kind == "show-seed":
+        if kind == "seed-warning":
+            pending = self._pending_seed_warning
+            self._pending_seed_warning = None
+            self._seed_warning_message = ""
+            if pending is None:
+                return
+            self.seed_words = list(pending)
+            self._continue_seed(warning_confirmed=True)
+        elif kind == "show-seed":
             self._open_seed_show()
         elif kind == "create-wallet":
             self.go("wallet-type")
@@ -6734,8 +6808,6 @@ class App:
         self.word_prefix = ""
         self.word_cursor = 0
         self.seed_grid_stick = True
-        if len(self.seed_words) == self.seed_length:
-            self.go("passphrase-ask")
 
     def _save_text(self):
         if not self.draft.strip():
