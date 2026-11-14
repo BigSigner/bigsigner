@@ -35,6 +35,16 @@ def test_matrix_is_square_with_a_two_module_border():
     assert matrix[2][2]  # the finder pattern's corner
 
 
+def test_byte_payloads_use_byte_mode_and_fit_through_the_single_qr_limit():
+    from qrcode.exceptions import DataOverflowError
+
+    # Even numeric bytes use the same byte-mode capacity as the device encoder.
+    matrix = qr._matrix_from_qrcode(b"1" * qr.MAX_BYTE_PAYLOAD)
+    assert len(matrix) == 177 + 2 * qr.BORDER  # Version 40.
+    with pytest.raises((DataOverflowError, ValueError)):
+        qr._matrix_from_qrcode(b"1" * (qr.MAX_BYTE_PAYLOAD + 1))
+
+
 @pytest.mark.parametrize("payload", PAYLOADS)
 def test_both_builders_encode_the_same_payload(payload):
     python = qr._matrix_from_qrcode(payload)

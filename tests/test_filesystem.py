@@ -8,7 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from bigsigner import sdcard
-from bigsigner.ui.app import App
+from bigsigner.qr import MAX_BYTE_PAYLOAD
+from bigsigner.ui.app import App, QR_BRIGHTNESS_DEFAULT
 from bigsigner.ui.canvas import BLUE, HEADER, HEIGHT, MARGIN, WIDTH
 from bigsigner.ui.filesystem import OPEN_LIMIT, SD_DELETE_NOTE, SEQUENCE_NOTE
 from test_sdcard import _tap
@@ -241,6 +242,58 @@ def test_file_details_show_exact_size_and_open_limit(size, can_open):
         assert {hit["label"] for hit in app.hits} >= {"Rename", "Move", "Delete"}
 
 
+@pytest.mark.parametrize("size", [0, MAX_BYTE_PAYLOAD, MAX_BYTE_PAYLOAD + 1, OPEN_LIMIT + 1])
+def test_file_qr_capacity_uses_file_size_without_reading_oversized_content(size, monkeypatch):
+    original = sdcard.read_bytes
+    reads = []
+
+    def read(path, **kwargs):
+        reads.append(kwargs["max_bytes"])
+        return original(path, **kwargs)
+
+    monkeypatch.setattr(sdcard, "read_bytes", read)
+    app = _details(b"x" * size)
+    assert not reads
+    enabled = size <= MAX_BYTE_PAYLOAD
+    assert any(hit["action"] == "fs-show-qr" for hit in app.hits) == enabled
+    if enabled:
+        _tap(app, "Show QR")
+        assert reads == [MAX_BYTE_PAYLOAD]
+        assert app.screen == "qr" and app.qr_kind == "file"
+        app.render()
+    else:
+        assert "too large for a single QR code." in " ".join(item["text"] for item in app.texts)
+
+
+@pytest.mark.parametrize("storage", ["sd", "temporary"])
+@pytest.mark.parametrize("data", [b"  hello\r\nworld! \n", bytes(range(256))])
+def test_file_qr_preserves_bytes_and_dims_the_whole_screen(storage, data):
+    app = _details(data, storage=storage)
+    _tap(app, "Show QR")
+    assert app._qr_payload() == data
+    normal = app.render()
+    assert "File QR" in [item["text"] for item in app.texts]
+    assert app._shown_to_a_camera()
+    assert {hit["action"] for hit in app.hits} >= {"brightness-down", "brightness-up", "back"}
+    _tap(app, "brightness-down")
+    dimmed = app.render()
+    assert app.qr_brightness == QR_BRIGHTNESS_DEFAULT - 1
+    assert dimmed.getpixel((0, HEIGHT - 1))[0] < normal.getpixel((0, HEIGHT - 1))[0]
+    assert dimmed.getpixel((WIDTH - 1, 0))[2] < normal.getpixel((WIDTH - 1, 0))[2]
+    assert (0, 0, 0) in [color for _count, color in dimmed.getcolors(WIDTH * HEIGHT)]
+    _tap(app, "back")
+    assert app.screen == "fs-details"
+    assert app.qr_brightness == QR_BRIGHTNESS_DEFAULT
+
+
+def test_file_qr_refuses_a_file_that_grows_after_details_are_shown():
+    app = _details(b"small")
+    sdcard.write_text("file.txt", "x" * (MAX_BYTE_PAYLOAD + 1))
+    app._act("fs-show-qr")
+    assert app.screen == "fs-details"
+    assert app.notice_error and "too large" in app.notice
+
+
 def test_text_edit_save_disabled_until_changed_and_back_warns():
     app = _details(b"hello\r\nworld\t!\n")
     _tap(app, "Open")
@@ -441,6 +494,11 @@ def test_filesystem_screens_save_screenshots():
     _tap(app, "back")
     _tap(app, "hello.txt")
     record.shot(app, "file-details")
+    _tap(app, "Show QR")
+    record.shot(app, "file-qr")
+    _tap(app, "brightness-down")
+    record.shot(app, "file-qr-dimmed")
+    _tap(app, "back")
     _tap(app, "Open")
     record.shot(app, "text-save-disabled")
     _tap(app, "Text")

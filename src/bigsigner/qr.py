@@ -13,6 +13,8 @@ import ctypes
 import ctypes.util
 
 BORDER = 2
+# Version 40, error correction L, with one byte-mode segment.
+MAX_BYTE_PAYLOAD = 2953
 _QR_ECLEVEL_L = 0
 _QR_MODE_8 = 2
 _LIBRARY = None
@@ -95,8 +97,10 @@ def _encode_bytes(library, payload: bytes):
 
 def _matrix_from_qrcode(data):
     import qrcode
+    from qrcode.util import MODE_8BIT_BYTE, QRData
 
     code = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L, border=BORDER)
-    code.add_data(data)
+    # Match QRcode_encodeData on the device: bytes always use byte mode.
+    code.add_data(data if isinstance(data, str) else QRData(bytes(data), mode=MODE_8BIT_BYTE))
     code.make(fit=True)
     return tuple(tuple(bool(cell) for cell in row) for row in code.get_matrix())

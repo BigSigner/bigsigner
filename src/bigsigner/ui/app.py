@@ -1076,7 +1076,7 @@ class App:
         if self.fs.before_back():
             return
         leaving_lit_qr = self.screen in ("seed-show", "address") or (
-            self.screen == "qr" and self.qr_kind in ("key", "descriptor")
+            self.screen == "qr" and self.qr_kind in ("key", "descriptor", "file")
         )
         leaving_wallet = self.screen == "wallet"
         destination = self.back[-1] if self.back else "keys"
@@ -5872,6 +5872,9 @@ class App:
         return y
 
     def _qr(self, frame: Frame):
+        if self.qr_kind == "file":
+            self.fs.qr(frame)
+            return
         if self.qr_kind in ("key", "descriptor"):
             if self.qr_zoom is not None:
                 self._draw_zoom(frame)
@@ -7318,7 +7321,7 @@ class App:
             return self._descriptor_qr_payload()
         return self.qr_text
 
-    def _open_qr(self, text: str):
+    def _open_qr(self, text: str | bytes):
         self.qr_text = text
         self.qr_kind = "plain"
         self.qr_zoom = None
@@ -7348,7 +7351,7 @@ class App:
             return SEED_FORMATS[self.seed_format] != "words"
         if self.screen in ("address", "psbt-qr", "psbt-input-qr"):
             return True
-        return self.screen == "qr" and self.qr_kind in ("key", "descriptor")
+        return self.screen == "qr" and self.qr_kind in ("key", "descriptor", "file")
 
     def _message_wallet(self):
         if self.wallet_index >= len(self.session.wallets):

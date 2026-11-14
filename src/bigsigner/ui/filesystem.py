@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 
 from .. import sdcard
+from ..qr import MAX_BYTE_PAYLOAD
 from .canvas import BODY_SIZE, HEADER, HEIGHT, INK, MARGIN, MUTED, RED, TITLE_SIZE, WIDTH, Frame, Icons, font, wrap
 from .text_editor import TextEditor
 
@@ -83,6 +84,13 @@ class FileSystemUI:
                 self.data = sdcard.read_bytes(self.path, storage=self.storage, max_bytes=OPEN_LIMIT)
                 self.is_new = False
                 self.open_data()
+            elif action == "fs-show-qr":
+                from .app import QR_BRIGHTNESS_DEFAULT
+
+                data = sdcard.read_bytes(self.path, storage=self.storage, max_bytes=MAX_BYTE_PAYLOAD)
+                app._open_qr(data)
+                app.qr_kind = "file"
+                app.qr_brightness = QR_BRIGHTNESS_DEFAULT
             elif action == "fs-new-directory":
                 self.begin_name("directory", "")
             elif action == "fs-new-file":
@@ -271,9 +279,24 @@ class FileSystemUI:
         if size > OPEN_LIMIT:
             y = app._flow_text(frame, y, "Files larger than 50 KB cannot be opened.", paint, offset, 28, MUTED)
             y += 8
+        y = app._flow_button(frame, y, "Show QR", "fs-show-qr", paint, offset, enabled=size <= MAX_BYTE_PAYLOAD)
+        if size > MAX_BYTE_PAYLOAD:
+            y = app._flow_text(frame, y, "The file content is too large for a single QR code.", paint, offset, 28, MUTED)
+            y += 8
         y = app._flow_button(frame, y, "Rename", "fs-rename", paint, offset)
         y = app._flow_button(frame, y, "Move", "fs-move", paint, offset)
         return app._flow_button(frame, y, "Delete", "fs-delete", paint, offset, color=RED)
+
+    def qr(self, frame):
+        from .app import QR_BRIGHTNESS_DEFAULT, _qr_image, _qr_light
+
+        light = _qr_light(QR_BRIGHTNESS_DEFAULT)
+        frame.draw.rectangle((0, 0, WIDTH, HEIGHT), fill=light)
+        top = HEADER + 24
+        image = _qr_image(self.app.qr_text, WIDTH - 2 * MARGIN, light)
+        frame.image.paste(image, (MARGIN, top))
+        self.app._brightness_control(frame, top + image.height + 24)
+        frame.header("File QR", "back")
 
     def new_source(self, frame):
         frame.header("New File", "back")
