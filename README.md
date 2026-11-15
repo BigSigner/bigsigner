@@ -29,6 +29,8 @@ It reviews a proposed transaction before signing and can show receive addresses 
 
 The Bitcoin library is [embit](https://github.com/diybitcoinhardware/embit) 0.8.0, the same release [SeedSigner pins](https://github.com/SeedSigner/seedsigner/blob/dev/requirements.txt).
 
+GPG in the side menu loads public keys into a private RAM-only keyring and verifies detached signatures or signed checksum manifests, including clear-signed manifests. Signature verification asks for the UTC date and hour because the air-gapped device has no reliable clock. Listing and loading keys do not ask for a date. GnuPG and `sha256sum` come from bigsigner-os. The static web emulator displays the GPG interface but cannot execute these native commands.
+
 ## Documentation
 
 Tutorials live in [docs/](docs/README.md). They are for people reading this repository. They are not installed on the device. [docs/architecture.md](docs/architecture.md) maps the code. [AGENTS.md](AGENTS.md) records the constraints that are easy to miss while changing it.

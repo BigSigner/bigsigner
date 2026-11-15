@@ -68,6 +68,7 @@ from .psbt_screen import (
     paint_signing,
 )
 from .filesystem import FileSystemUI
+from .gpg import GpgUI
 from .canvas import (
     BLUE,
     ELLIPSIS,
@@ -650,6 +651,8 @@ class App:
         }
         self.fs = FileSystemUI(self)
         self._painters.update(self.fs.painters)
+        self.gpg = GpgUI(self)
+        self._painters.update(self.gpg.painters)
 
     def set_notice(self, message: str, *, error: bool = False):
         self.notice = message or ""
@@ -688,6 +691,8 @@ class App:
             delays.append(0)
         if self._psbt_progress_pending() and self._psbt_progress_shown:
             delays.append(0)
+        if self.screen == "gpg-working":
+            delays.append(self.gpg.delay())
         if not delays:
             return None
         return min(delays)
@@ -723,6 +728,7 @@ class App:
         self._advance_addresses_open()
         self._advance_psbt_check()
         self._advance_psbt_signing()
+        self.gpg.advance()
         frame = Frame()
         self._painters[self.screen](frame)
         if self.menu:
@@ -748,6 +754,8 @@ class App:
     def _touch_blocked(self) -> bool:
         """Loading is on screen, or this gesture began while it was."""
         if self._discard_gesture:
+            return True
+        if self.screen == "gpg-working":
             return True
         if self.screen == "psbt-progress":
             return True
@@ -1075,7 +1083,8 @@ class App:
     def back_one(self):
         if self.fs.before_back():
             return
-        leaving_lit_qr = self.screen in ("seed-show", "address") or (
+        self.gpg.before_back()
+        leaving_lit_qr = self.screen in ("seed-show", "address", "gpg-key-qr") or (
             self.screen == "qr" and self.qr_kind in ("key", "descriptor", "file")
         )
         leaving_wallet = self.screen == "wallet"
@@ -1390,6 +1399,7 @@ class App:
         "add-sd": lambda self: self._open_sd("key"),
         "sd-up": _act_sd_up,
         "nav-filesystem": lambda self: self.fs.open(),
+        "nav-gpg": lambda self: self.gpg.open(),
         "storage-sd": lambda self: self._choose_storage("sd"),
         "storage-temporary": lambda self: self._choose_storage("temporary"),
         "export-address": lambda self: self._open_address_export(),
@@ -1528,6 +1538,9 @@ class App:
     def _act(self, action: str):
         if action.startswith("fs-"):
             self.fs.act(action)
+            return
+        if action.startswith("gpg-"):
+            self.gpg.act(action)
             return
         handler = self._EXACT_ACTIONS.get(action)
         if handler is not None:
@@ -1905,6 +1918,9 @@ class App:
         self.go("sd")
 
     def _read_sd_file(self, relative: str):
+        if self.sd_expect in ("gpg-key", "gpg-verify"):
+            self.gpg.accept_file(relative)
+            return
         if self.sd_expect == "psbt":
             self._read_psbt_file(relative)
             return
@@ -2102,6 +2118,9 @@ class App:
         return _unused_filename(name, {entry["name"] for entry in entries})
 
     def _suggested_export_name(self) -> str:
+        if self.export_label in ("GPG Public Key", "GPG Private Key") and self.gpg.selected is not None:
+            kind = "private" if self.export_label == "GPG Private Key" else "public"
+            return f"{self.gpg.selected.fingerprint}-{kind}.asc"
         if self.export_label == "PSBT":
             if self.export_binary:
                 return "transaction-signed.psbt"
@@ -2349,6 +2368,9 @@ class App:
     def accept_qr(self, text: str | bytes):
         """Import a payload read from a QR code. Ignored unless the scan screen is open."""
         if self.screen != "scan" or self.confirm == "seed-warning":
+            return
+        if self.scan_kind == "gpg-key":
+            self.gpg.accept_key(text)
             return
         if self.scan_kind == "file":
             self.fs.accept_qr(text)
@@ -6131,6 +6153,7 @@ class App:
             ("Bitcoin Keys", "nav-keys"),
             ("Bitcoin Wallets", "nav-wallets"),
             ("File System", "nav-filesystem"),
+            ("GPG", "nav-gpg"),
             ("Settings", "nav-settings"),
             ("About", "nav-about"),
         ):
@@ -6148,7 +6171,7 @@ class App:
     def _menu_section(self) -> str:
         """The side-menu page where this screen's back stack begins."""
         for screen in (*self.back, self.screen):
-            if screen in {"keys", "wallets", "filesystem", "settings", "about"}:
+            if screen in {"keys", "wallets", "filesystem", "gpg", "settings", "about"}:
                 return screen
         return ""
 
@@ -7349,7 +7372,7 @@ class App:
             return bool(self.message_signature)
         if self.screen == "seed-show":
             return SEED_FORMATS[self.seed_format] != "words"
-        if self.screen in ("address", "psbt-qr", "psbt-input-qr"):
+        if self.screen in ("address", "psbt-qr", "psbt-input-qr", "gpg-key-qr"):
             return True
         return self.screen == "qr" and self.qr_kind in ("key", "descriptor", "file")
 

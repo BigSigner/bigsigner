@@ -218,7 +218,7 @@ def _with_camera(app: App, camera: LiveCamera):
     if app.screen == "camera":
         app.remember_camera_frame(jpeg_bytes(shot))
     elif app.screen == "scan":
-        text = read_qr(shot, raw=True) if app.scan_kind == "file" else read_qr(shot)
+        text = read_qr(shot, raw=True) if app.scan_kind in ("file", "gpg-key") else read_qr(shot)
         if text and text != camera.last_qr:
             camera.last_qr = text
             app.accept_qr(text)

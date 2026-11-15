@@ -487,13 +487,25 @@ def _disk_root(storage: str = "sd") -> Path:
     raise SdError("No SD card is available.")
 
 
+def native_path(relative: str, *, storage: str = "sd") -> Path | None:
+    """A confined native path for streaming tools, or None for a virtual card."""
+    return None if _memory_card(storage) is not None else _disk_path(relative, storage)
+
+
 def _temporary_root() -> Path:
-    root = Path(TEMPORARY_ROOT)
+    return ram_directory(Path(TEMPORARY_ROOT).name)
+
+
+def ram_directory(name: str) -> Path:
+    """Create an application directory only on a verified RAM filesystem."""
+    if not name or name in (".", "..") or Path(name).name != name:
+        raise SdError("Invalid RAM directory name.")
+    root = Path(TEMPORARY_ROOT).with_name(name)
     try:
         # Refuse persistent filesystems even on Linux development machines.
         # The panel's initramfs is rootfs/ramfs; /dev/shm is tmpfs on desktop Linux.
         mounts = _mounted_filesystems()
-        for candidate in (root, Path("/dev/shm/bigsigner")):
+        for candidate in (root, Path("/dev/shm") / name):
             resolved = candidate.resolve()
             covering = [(mount, kind) for mount, kind in mounts if resolved == mount or mount in resolved.parents]
             if covering and max(covering, key=lambda item: len(item[0].parts))[1] in ("rootfs", "ramfs", "tmpfs"):
