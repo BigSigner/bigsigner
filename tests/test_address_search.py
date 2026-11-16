@@ -300,7 +300,7 @@ def test_address_search_saves_screenshots():
     record = ScreenRecord(Path("artifacts/screenshots/test_address_search_saves_screenshots"))
     app = _app()
     record.shot(app, "settings")
-    _tap(app, "psbt-search-start")
+    record.click(app, "psbt-search-start")
     record.shot(app, "preparing")
     for _ in range(app.psbt_search.creator_count + 1):
         app._advance_psbt_search()
@@ -314,7 +314,7 @@ def test_address_search_saves_screenshots():
         left, top, right, bottom = mark["box"]
         assert 0 <= left < right <= 480
         assert bottom < button_top
-    _tap(app, "psbt-search-stop")
+    record.click(app, "psbt-search-stop")
     record.shot(app, "stopped")
     assert app.psbt_search_last_checked == MAX_INDEX
     app._act("search-field-first-dec")

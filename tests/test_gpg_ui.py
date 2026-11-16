@@ -9,8 +9,8 @@ from bigsigner import sdcard
 from bigsigner.gpg import CommandResult, Outcome, parse_keys
 from bigsigner.qr import MAX_BYTE_PAYLOAD
 from bigsigner.ui.app import QR_BRIGHTNESS_DEFAULT, App
-from bigsigner.ui.canvas import HEADER, HEIGHT, INK, MUTED, RED, WIDTH, font
-from test_gpg import COLONS, FPR, VERIFY_TIME, VERIFICATION_FAILURES, _import, _prepare_verification_failure, real_backend
+from bigsigner.ui.canvas import HEADER, HEIGHT, INK, MUTED, RED, WARNING, WIDTH, font
+from test_gpg import COLONS, FPR, SUB_FPR, VERIFY_TIME, VERIFICATION_FAILURES, _import, _prepare_verification_failure, real_backend
 from test_sdcard import _tap
 
 
@@ -21,6 +21,7 @@ class FakeBackend:
         self.calls = []
         self.good = True
         self.secret = False
+        self.subkey_only = False
         self.huge = False
         self.fail_export = False
         self.version_text = "gpg (GnuPG) 2.4.8"
@@ -28,8 +29,8 @@ class FakeBackend:
     def version_line(self):
         return self.version_text
 
-    def export_key(self, fingerprint, secret=False):
-        self.calls.append(("export", fingerprint, secret))
+    def export_key(self, fingerprint, secret=False, subkey=False):
+        self.calls.append(("export", fingerprint, secret, subkey))
         name = "Export Private Key" if secret else "Export Public Key"
         if self.fail_export:
             return Outcome(False, "The key could not be exported.", [CommandResult(name, 2, "", "gpg: skipped")])
@@ -43,8 +44,13 @@ class FakeBackend:
     def list_keys(self, timestamp=None):
         self.calls.append(("list", timestamp))
         keys = parse_keys(COLONS)
-        if self.secret:
+        if self.secret or self.subkey_only:
             keys[0].secret = True
+            keys[0].secret_available = self.secret and not self.subkey_only
+            keys[0].contains_private = keys[0].secret_available
+            for sub in keys[0].subkeys:
+                sub["secret"] = True
+                sub["contains_private"] = True
         return Outcome(True, keys=keys, stages=[CommandResult("list", 0, COLONS, "listing diagnostics")])
 
     def inspect_key(self, data, timestamp=None):
@@ -174,9 +180,15 @@ def test_key_is_only_imported_after_confirmation_and_cancel_discards_content(sou
     assert label[4] == MUTED and code[4] == INK
 
 
-def _listed(*, secret=False):
+def _reveal(app, label):
+    button = next(item for item in app.gpg.buttons if item[1] == label)
+    app.scroll[app.screen] = max(0, button[0] - HEADER - 24)
+
+
+def _listed(*, secret=False, subkey_only=False):
     app = _app()
     app.gpg.backend.secret = secret
+    app.gpg.backend.subkey_only = subkey_only
     _tap(app, "List GPG Keys")
     _settle(app)
     return app
@@ -191,13 +203,22 @@ def test_key_list_shows_three_fields_and_opens_details_with_armored_export():
     assert app.screen == "gpg-key-details"
     assert any(row[2] == "Algorithm:" for row in app.gpg.rows)
     assert any(row[2] == "EdDSA (255 bits)" for row in app.gpg.rows)
-    app.scroll["gpg-key-details"] = 10**9
+    rows = app.gpg.rows
+    for row, nxt in zip(rows, rows[1:]):
+        if row[2] != "Usage:":
+            continue
+        if nxt[2] == "Encryption":
+            assert nxt[1] == row[1]
+        if nxt[2] == "Certification and Signing":
+            assert nxt[1] > row[1]
+    _reveal(app, "Export Public Key")
     app.render()
     assert "Export Public Key" in {hit["label"] for hit in app.hits}
     assert "Export Private Key" not in {hit["label"] for hit in app.hits}
+    assert "Export Private Encryption Subkey" not in {hit["label"] for hit in app.hits}
     _tap(app, "Export Public Key")
     _settle(app)
-    assert app.gpg.backend.calls[-1] == ("export", FPR, False)
+    assert app.gpg.backend.calls[-1] == ("export", FPR, False, False)
     assert app.screen == "gpg-export"
     assert app.gpg.armor.startswith("-----BEGIN PGP PUBLIC KEY BLOCK-----")
     _tap(app, "Show QR Code")
@@ -221,14 +242,14 @@ def test_key_list_shows_three_fields_and_opens_details_with_armored_export():
 def test_secret_key_can_be_exported_as_a_private_key_and_a_large_key_has_no_qr():
     app = _listed(secret=True)
     _tap(app, "gpg-open:0")
-    app.scroll["gpg-key-details"] = 10**9
-    app.render()
+    _reveal(app, "Export Private Key")
     _tap(app, "Export Private Key")
     _settle(app)
-    assert app.gpg.backend.calls[-1] == ("export", FPR, True)
+    assert app.gpg.backend.calls[-1] == ("export", FPR, True, False)
     assert app.gpg.armor.startswith("-----BEGIN PGP PRIVATE KEY BLOCK-----")
     _tap(app, "back")
     app.gpg.backend.huge = True
+    _reveal(app, "Export Public Key")
     _tap(app, "Export Public Key")
     _settle(app)
     app.render()
@@ -236,11 +257,77 @@ def test_secret_key_can_be_exported_as_a_private_key_and_a_large_key_has_no_qr()
     assert "too large" in " ".join(item["text"] for item in app.texts)
 
 
+def test_secret_subkey_exports_only_that_subkey_secret():
+    app = _listed(secret=True)
+    _tap(app, "gpg-open:0")
+    _reveal(app, "Export Private Encryption Subkey")
+    _tap(app, "Export Private Encryption Subkey")
+    _settle(app)
+    assert app.gpg.backend.calls[-1] == ("export", SUB_FPR, True, True)
+    assert any(item["text"] == "Export Private Subkey" for item in app.texts)
+    _tap(app, "Export to File")
+    _tap(app, "SD Card")
+    _tap(app, "New File")
+    assert app.filename == f"{SUB_FPR}-private.asc"
+
+
+def test_each_subkey_shows_its_usage_fingerprint_and_keeps_its_export_under_it():
+    from bigsigner.ui.gpg import PRIVATE_NOTE
+
+    signing, encryption, authentication = "A" * 40, "B" * 40, "C" * 40
+
+    def sub(key_id, fingerprint, capabilities, algo="22", bits="255"):
+        return f"sub:-:{bits}:{algo}:{key_id}:1704067200:0:::::{capabilities}:\nfpr:::::::::{fingerprint}:\n"
+
+    text = (
+        f"pub:-:255:22:89ABCDEF01234567:1704067200:1767225600:::::c:\nfpr:::::::::{FPR}:\n"
+        "uid:-::::::::BigSigner Test <test@example.invalid>:\n"
+        + sub("1111111111111111", signing, "s")
+        + sub("2222222222222222", encryption, "e", algo="18")
+        + sub("3333333333333333", authentication, "a")
+    )
+    app = _app()
+    key, = parse_keys(text)
+    key.secret_available = True
+    key.contains_private = True
+    for item in key.subkeys:
+        item["secret"] = True
+        item["contains_private"] = True
+    app.gpg.selected = key
+    app.screen = "gpg-key-details"
+    app.gpg.build_details()
+    app.render()
+    assert [row[2] for row in app.gpg.rows if row[2] in ("Certification", "Signing", "Encryption", "Authentication")] == [
+        "Certification", "Signing", "Encryption", "Authentication"]
+    usages = [row for row in app.gpg.rows if row[2] == "Usage:"]
+    values = [row for row in app.gpg.rows if row[2] in ("Certification", "Signing", "Encryption", "Authentication")]
+    assert [row[1] for row in usages] == [row[1] for row in values]
+    for y, _text, _action, height, inset in app.gpg.buttons:
+        assert inset == 16
+        assert any(top < y and y + height < bottom for _left, top, _right, bottom in app.gpg.cards)
+    notes = [row for row in app.gpg.rows if row[2] == PRIVATE_NOTE]
+    assert len(notes) == 4 and all(row[4] == WARNING for row in notes)
+    headings = [row[1] for row in app.gpg.rows if row[2] == "Subkey"]
+    assert len(headings) == 3
+    labels = ["Export Private Signing Subkey", "Export Private Encryption Subkey", "Export Private Authentication Subkey"]
+    note_y = [row[1] for row in notes]
+    assert note_y[0] < next(item[0] for item in app.gpg.buttons if item[1] == "Export Private Key") < headings[0]
+    for heading, note, label, nxt in zip(headings, note_y[1:], labels, headings[1:] + [10**9]):
+        button = next(item[0] for item in app.gpg.buttons if item[1] == label)
+        assert heading < note < button < nxt
+    groups = " ".join(encryption[i:i + 4] for i in range(0, 16, 4))
+    assert any(row[2] == groups and row[5] for row in app.gpg.rows)
+    _reveal(app, "Export Private Signing Subkey")
+    _tap(app, "Export Private Signing Subkey")
+    _settle(app)
+    assert app.gpg.backend.calls[-1] == ("export", signing, True, True)
+
+
 def test_failed_export_shows_the_error_screen():
     app = _listed()
     app.gpg.backend.fail_export = True
     _tap(app, "gpg-open:0")
-    app.scroll["gpg-key-details"] = 10**9
+    _reveal(app, "Export Public Key")
     _tap(app, "Export Public Key")
     _settle(app)
     assert app.screen == "gpg-result" and not app.gpg.outcome.ok
@@ -348,63 +435,105 @@ def test_gpg_screens_save_screenshots(real_backend):
     record = ScreenRecord(Path("artifacts/screenshots/test_gpg_screens_save_screenshots"))
     app = _app(fixture_date=False)
     record.shot(app, "home")
-    _tap(app, "menu")
+    record.click(app, "menu")
     record.shot(app, "side-menu")
     menu = _app(fixture_date=False)
     menu.gpg.backend = backend
     record.shot(menu, "gpg")
     assert any(item["text"] == backend.version_line() for item in menu.texts)
-    _tap(app, "GPG")
-    _tap(app, "Verify Signature")
-    _tap(app, "Detached Signature")
+    record.click(app, "GPG")
+    record.click(app, "Verify Signature")
+    record.click(app, "Detached Signature")
     record.shot(app, "date")
-    _tap(app, "Year")
+    record.click(app, "Year")
     record.shot(app, "year-entry")
-    _tap(app, "back")
-    _tap(app, "back")
-    _tap(app, "back")
-    _tap(app, "Load GPG Key")
+    record.click(app, "back")
+    record.click(app, "back")
+    record.click(app, "back")
+    record.click(app, "Load GPG Key")
     record.shot(app, "key-source")
-    _tap(app, "Scan QR Code")
+    record.click(app, "Scan QR Code")
     app.accept_qr(b"test key")
     record.shot(app, "working")
     _settle(app)
     record.shot(app, "key-review")
     app.scroll["gpg-review"] = 10**9
     record.shot(app, "key-review-bottom")
-    _tap(app, "Confirm")
+    record.click(app, "Confirm")
     _settle(app)
     record.shot(app, "import-success")
     app.scroll["gpg-result"] = 10**9
     record.shot(app, "import-success-bottom")
     app = _app()
-    _tap(app, "List GPG Keys")
+    record.click(app, "List GPG Keys")
     _settle(app)
     record.shot(app, "gpg-keys")
-    _tap(app, "gpg-open:0")
+    record.click(app, "gpg-open:0")
     record.shot(app, "gpg-key")
-    app.scroll["gpg-key-details"] = 10**9
+    _reveal(app, "Export Public Key")
     record.shot(app, "gpg-key-bottom")
-    _tap(app, "Export Public Key")
+    record.click(app, "Export Public Key")
     _settle(app)
     record.shot(app, "export-public")
     app = _listed(secret=True)
-    _tap(app, "gpg-open:0")
-    app.scroll["gpg-key-details"] = 10**9
+    record.click(app, "gpg-open:0")
+    _reveal(app, "Export Private Encryption Subkey")
     record.shot(app, "gpg-key-private")
-    assert "Export Private Key" in {hit["label"] for hit in app.hits}
-    _tap(app, "Export Private Key")
+    assert "Export Private Encryption Subkey" in {hit["label"] for hit in app.hits}
+    _reveal(app, "Export Private Key")
+    record.click(app, "Export Private Key")
     _settle(app)
     record.shot(app, "export-private")
-    _tap(app, "Show QR Code")
+    record.click(app, "Show QR Code")
     record.shot(app, "private-key-qr")
+    app = _listed(subkey_only=True)
+    record.click(app, "gpg-open:0")
+    _reveal(app, "Export Private Encryption Subkey")
+    record.shot(app, "gpg-subkey-only")
+    assert "Export Private Key" not in {hit["label"] for hit in app.hits}
+    assert "Export Private Encryption Subkey" in {hit["label"] for hit in app.hits}
+    record.click(app, "Export Private Encryption Subkey")
+    _settle(app)
+    record.shot(app, "export-subkey")
+    signing, encryption, authentication = "A" * 40, "B" * 40, "C" * 40
+
+    def sub(key_id, fingerprint, capabilities, algo="22", bits="255"):
+        return f"sub:-:{bits}:{algo}:{key_id}:1704067200:0:::::{capabilities}:\nfpr:::::::::{fingerprint}:\n"
+
+    text = (
+        f"pub:-:255:22:89ABCDEF01234567:1704067200:1767225600:::::c:\nfpr:::::::::{FPR}:\n"
+        "uid:-::::::::BigSigner Test <test@example.invalid>:\n"
+        + sub("1111111111111111", signing, "s")
+        + sub("2222222222222222", encryption, "e", algo="18")
+        + sub("3333333333333333", authentication, "a")
+    )
     app = _app()
-    _tap(app, "Verify Signature")
+    key, = parse_keys(text)
+    key.secret_available = True
+    key.contains_private = True
+    for item in key.subkeys:
+        item["secret"] = True
+        item["contains_private"] = True
+    app.gpg.selected = key
+    app.screen = "gpg-key-details"
+    app.gpg.build_details()
+    record.shot(app, "certificate-usage")
+    for label, name in (("Export Private Signing Subkey", "signing-subkey"),
+                        ("Export Private Encryption Subkey", "encryption-subkey"),
+                        ("Export Private Authentication Subkey", "authentication-subkey")):
+        _reveal(app, label)
+        record.shot(app, name)
+        record.click(app, label)
+        app.gpg.selected = key
+        app.screen = "gpg-key-details"
+        app.gpg.build_details()
+    app = _app()
+    record.click(app, "Verify Signature")
     record.shot(app, "verification-formats")
-    _tap(app, "Signed Checksum File")
-    _tap(app, "Continue")
-    _tap(app, "SD Card")
-    _tap(app, "SHASUMS.asc")
+    record.click(app, "Signed Checksum File")
+    record.click(app, "Continue")
+    record.click(app, "SD Card")
+    record.click(app, "SHASUMS.asc")
     _settle(app)
     record.shot(app, "checksum-failure")
     app.scroll["gpg-result"] = 10**9
@@ -417,11 +546,11 @@ def test_gpg_screens_save_screenshots(real_backend):
         _prepare_verification_failure(root, filename, failure)
         app = _app(files={filename: (root / filename).read_bytes()})
         app.gpg.backend = backend
-        _tap(app, "Verify Signature")
-        _tap(app, "Detached Signature" if filename == "release.txt.asc" else "Signed Checksum File")
-        _tap(app, "Continue")
-        _tap(app, "SD Card")
-        _tap(app, filename)
+        record.click(app, "Verify Signature")
+        record.click(app, "Detached Signature" if filename == "release.txt.asc" else "Signed Checksum File")
+        record.click(app, "Continue")
+        record.click(app, "SD Card")
+        record.click(app, filename)
         _settle(app)
         assert app.screen == "gpg-result" and not app.gpg.outcome.ok
         assert "Error" in [item["text"] for item in app.texts]

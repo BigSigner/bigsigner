@@ -32,6 +32,9 @@ def test_colon_keys_preserve_primary_fingerprint_escape_uid_and_parse_subkeys():
     assert key.user_ids == ["BigSigner: Test <test@example.invalid>"]
     assert key.subkeys[0]["fingerprint"] == SUB_FPR
     assert key.subkeys[0]["expires"] == "Never"
+    assert key.capabilities == "sc"
+    assert key.subkeys[0]["capabilities"] == "e"
+    assert not key.subkeys[0]["secret"]
     assert key.created == "2024-01-01 00:00 UTC"
     assert key.expires == "2026-01-01 00:00 UTC"
     epoch, = parse_keys(COLONS.replace(":1704067200:", ":0:"))
@@ -49,6 +52,25 @@ def test_missing_primary_fingerprint_and_secret_key_records_are_refused():
     assert key.subkeys[0]["fingerprint"] == SUB_FPR
 
 
+def _secret_listing(text):
+    """Turn a public colon listing into a secret listing whose private keys are present."""
+    lines = []
+    for line in text.splitlines():
+        kind, separator, rest = line.partition(":")
+        if kind == "pub":
+            kind = "sec"
+        elif kind == "sub":
+            kind = "ssb"
+        line = kind + separator + rest
+        if kind in ("sec", "ssb"):
+            parts = line.split(":")
+            parts += [""] * (15 - len(parts))
+            parts[14] = "+"
+            line = ":".join(parts)
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def test_list_marks_secret_keys_and_export_asks_for_armor(monkeypatch):
     backend = GpgBackend()
     seen = []
@@ -56,7 +78,9 @@ def test_list_marks_secret_keys_and_export_asks_for_armor(monkeypatch):
     def fake_command(name, args, **kwargs):
         seen.append((name, list(args)))
         if "--list-secret-keys" in args:
-            text = COLONS.replace("pub:", "sec:", 1).replace("sub:", "ssb:", 1)
+            text = _secret_listing(COLONS)
+        elif "--export-secret-subkeys" in args:
+            text = "-----BEGIN PGP PRIVATE KEY BLOCK-----\nsubkey\n-----END PGP PRIVATE KEY BLOCK-----\n"
         elif "--export-secret-keys" in args:
             text = "-----BEGIN PGP PRIVATE KEY BLOCK-----\nkey\n-----END PGP PRIVATE KEY BLOCK-----\n"
         elif "--export" in args:
@@ -67,13 +91,16 @@ def test_list_marks_secret_keys_and_export_asks_for_armor(monkeypatch):
 
     monkeypatch.setattr(backend, "command", fake_command)
     listed = backend.list_keys()
-    assert listed.ok and listed.keys[0].secret and listed.keys[0].fingerprint == FPR
+    assert listed.ok and listed.keys[0].secret_available and listed.keys[0].fingerprint == FPR
+    assert listed.keys[0].subkeys[0]["secret"] and listed.keys[0].subkeys[0]["fingerprint"] == SUB_FPR
     assert backend.export_key(FPR, secret=False).ok
     assert backend.export_key(FPR, secret=True).ok
+    assert backend.export_key(SUB_FPR, subkey=True).ok
     assert not backend.export_key("zzzz", secret=False).ok
     assert ["--armor", "--export", "--", FPR] in [args for _name, args in seen]
     assert ["--armor", "--export-secret-keys", "--", FPR] in [args for _name, args in seen]
-    assert len(seen) == 4
+    assert ["--armor", "--export-secret-subkeys", "--", SUB_FPR + "!"] in [args for _name, args in seen]
+    assert len(seen) == 5
 
 
 @pytest.mark.parametrize("status", ["BADSIG", "ERRSIG", "EXPKEYSIG", "EXPSIG", "REVKEYSIG", "FAILURE", "NO_PUBKEY", "NODATA"])
@@ -242,6 +269,37 @@ def test_real_secret_key_exports_an_armored_private_key(real_backend):
     assert private.stages[0].stdout.lstrip().startswith("-----BEGIN PGP PRIVATE KEY BLOCK-----")
     assert public.stages[0].stdout.lstrip().startswith("-----BEGIN PGP PUBLIC KEY BLOCK-----")
     assert "-----BEGIN PGP PRIVATE KEY BLOCK-----" not in public.stages[0].stdout
+
+
+def test_real_subkey_export_leaves_the_certificate_secret_behind(real_backend):
+    backend, _root = real_backend
+    env = dict(os.environ, GNUPGHOME=str(backend.home), LC_ALL="C", LANG="C", TZ="UTC")
+    generated = subprocess.run(
+        ["gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
+         "--quick-gen-key", "Subkey Export <subkey@example.invalid>", "ed25519", "cert", "never"],
+        capture_output=True, env=env)
+    assert generated.returncode == 0, generated.stderr.decode()
+    fingerprint = backend.list_keys().keys[0].fingerprint
+    for algo, usage in (("ed25519", "sign"), ("cv25519", "encrypt")):
+        added = subprocess.run(
+            ["gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
+             "--quick-add-key", fingerprint, algo, usage, "never"],
+            capture_output=True, env=env)
+        assert added.returncode == 0, added.stderr.decode()
+    listed = backend.list_keys()
+    assert listed.ok and listed.keys[0].secret_available
+    signing = next(sub for sub in listed.keys[0].subkeys if "s" in sub["capabilities"] and sub["secret"])
+    encryption = next(sub for sub in listed.keys[0].subkeys if "e" in sub["capabilities"] and sub["secret"])
+    exported = backend.export_key(signing["fingerprint"], subkey=True)
+    assert exported.ok, exported
+    with tempfile.TemporaryDirectory(prefix="bsgpg-sub-") as home:
+        other = GpgBackend(Path(home))
+        imported = other.import_key(exported.stages[0].stdout.encode())
+        assert imported.ok, imported
+        shown = other.list_keys()
+    assert shown.ok and shown.keys[0].secret and not shown.keys[0].secret_available and not shown.keys[0].contains_private
+    assert [sub["fingerprint"] for sub in shown.keys[0].subkeys if sub.get("secret")] == [signing["fingerprint"]]
+    assert encryption["fingerprint"] not in {sub["fingerprint"] for sub in shown.keys[0].subkeys}
 
 
 def test_real_key_preview_import_and_listing_use_an_isolated_keyring(real_backend):

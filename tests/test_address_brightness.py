@@ -105,7 +105,7 @@ def test_receive_and_change_address_brightness_saves_screenshots():
     for branch, name in ((0, "receive"), (1, "change")):
         app = _address(branch)
         record.shot(app, name)
-        _tap(app, "brightness-down")
+        record.click(app, "brightness-down")
         record.shot(app, name + "-dimmed")
     app.scroll["address"] = 100_000
     record.shot(app, "change-scrolled-dimmed")

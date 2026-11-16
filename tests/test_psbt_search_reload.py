@@ -170,7 +170,7 @@ def test_search_confirmation_and_revalidation_save_screenshots(monkeypatch):
     record.shot(app, "found-on-address-search")
     monkeypatch.setattr(app_module, "PSBT_PROGRESS_PAINT_S", 0)
     app.defer_psbt_progress = True
-    app._act("psbt-search-confirm")
+    record.click(app, "psbt-search-confirm")
     record.shot(app, "rechecking")
     _finish_reload(app)
     assert app.screen == "psbt-yaml"

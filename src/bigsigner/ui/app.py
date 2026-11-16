@@ -2118,9 +2118,10 @@ class App:
         return _unused_filename(name, {entry["name"] for entry in entries})
 
     def _suggested_export_name(self) -> str:
-        if self.export_label in ("GPG Public Key", "GPG Private Key") and self.gpg.selected is not None:
-            kind = "private" if self.export_label == "GPG Private Key" else "public"
-            return f"{self.gpg.selected.fingerprint}-{kind}.asc"
+        if self.export_label in ("GPG Public Key", "GPG Private Key", "GPG Private Subkey") and self.gpg.selected is not None:
+            kind = "public" if self.export_label == "GPG Public Key" else "private"
+            fingerprint = self.gpg.export_fingerprint or self.gpg.selected.fingerprint
+            return f"{fingerprint}-{kind}.asc"
         if self.export_label == "PSBT":
             if self.export_binary:
                 return "transaction-signed.psbt"

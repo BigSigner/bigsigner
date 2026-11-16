@@ -6,10 +6,12 @@ import re
 from .. import sdcard
 from ..gpg import GpgBackend, GpgError, KEY_LIMIT, Outcome
 from ..qr import MAX_BYTE_PAYLOAD
-from .canvas import BLUE, BODY_SIZE, HEADER, HEIGHT, INK, LINE, MARGIN, MUTED, PAPER, RED, TITLE_SIZE, WHITE, WIDTH, Frame, Icons, font, wrap
+from .canvas import BLUE, BODY_SIZE, HEADER, HEIGHT, INK, LINE, MARGIN, MUTED, PAPER, RED, TITLE_SIZE, WARNING, WHITE, WIDTH, Frame, Icons, font, wrap
 
 
 DATE_NOTE = "Some GPG signatures and keys expire. Set the current date so they can be checked correctly. The signer has no reliable clock."
+PRIVATE_NOTE = "Contains a private key"
+_USAGE = (("c", "Certification"), ("s", "Signing"), ("e", "Encryption"), ("a", "Authentication"))
 
 
 class GpgUI:
@@ -32,6 +34,9 @@ class GpgUI:
         self.selected = None
         self.armor = ""
         self.export_secret = False
+        self.export_subkey = False
+        self.export_fingerprint = ""
+        self.export_title = ""
         self.job = None
         self.future = None
         self.executor = None
@@ -125,16 +130,29 @@ class GpgUI:
             self.build_details()
             app.scroll["gpg-key-details"] = 0
             app.go("gpg-key-details")
-        elif action in ("gpg-export-public", "gpg-export-private"):
+        elif action in ("gpg-export-public", "gpg-export-private") or action.startswith("gpg-export-subkey:"):
             key = self.selected
             if key is None:
                 return
-            secret = action == "gpg-export-private"
-            if secret and not key.secret:
-                return
-            self.export_secret = secret
-            fingerprint = key.fingerprint
-            self.start("export", lambda: self.backend.export_key(fingerprint, secret=secret))
+            subkey = None
+            if action.startswith("gpg-export-subkey:"):
+                index = int(action.split(":", 1)[1])
+                if not 0 <= index < len(key.subkeys) or not key.subkeys[index].get("secret"):
+                    return
+                subkey = key.subkeys[index]
+                fingerprint = subkey["fingerprint"]
+            else:
+                if action == "gpg-export-private" and not key.secret_available:
+                    return
+                fingerprint = key.fingerprint
+            self.export_subkey = subkey is not None
+            self.export_secret = self.export_subkey or action == "gpg-export-private"
+            self.export_fingerprint = fingerprint
+            if subkey is None:
+                self.export_title = "Export Private Key" if self.export_secret else "Export Public Key"
+            else:
+                self.export_title = "Export Private Subkey"
+            self.start("export", lambda: self.backend.export_key(fingerprint, secret=self.export_secret, subkey=self.export_subkey))
         elif action == "gpg-export-file":
             self._export_file()
         elif action == "gpg-export-qr":
@@ -301,7 +319,7 @@ class GpgUI:
     def working(self, frame):
         frame.header("GPG")
         labels = {"list": "Listing GPG Keys…", "preview": "Reading GPG Key…", "import": "Importing GPG Key…",
-                  "verify": "Verifying Signature…", "export": "Exporting Private Key…" if self.export_secret else "Exporting Public Key…"}
+                  "verify": "Verifying Signature…", "export": self._export_progress()}
         frame.text(labels.get(self.job_kind, "Working…"), MARGIN, HEADER + 40, size=BODY_SIZE)
         self.work_shown = True
 
@@ -310,9 +328,9 @@ class GpgUI:
         self.content_end = HEADER + 20
         self.scratch = Frame()
 
-    def add_button(self, text, action):
-        height = self.scratch.button_height(text)
-        self.buttons.append((self.content_end, text, action, height))
+    def add_button(self, text, action, *, inset=0):
+        height = self.scratch.button_height(text, inset=inset)
+        self.buttons.append((self.content_end, text, action, height, inset))
         self.content_end += height + 12
 
     def add_text(self, text, *, fill=INK, size=TITLE_SIZE, mono=False, center=False, inset=0):
@@ -339,49 +357,116 @@ class GpgUI:
         self._key_cards(self.outcome.keys, summary=summary, open_cards=summary)
         self._append_stderr()
 
+    def _subkey_export_label(self, sub):
+        letters = set(sub.get("capabilities", "").lower())
+        roles = [name for letter, name in (("s", "Signing"), ("e", "Encryption"), ("a", "Authentication")) if letter in letters]
+        if not roles:
+            return "Export Private Subkey"
+        if len(roles) == 1:
+            role = roles[0]
+        elif len(roles) == 2:
+            role = f"{roles[0]} and {roles[1]}"
+        else:
+            role = ", ".join(roles[:-1]) + ", and " + roles[-1]
+        return f"Export Private {role} Subkey"
+
+    def _export_title(self):
+        return self.export_title or ("Export Private Key" if self.export_secret else "Export Public Key")
+
+    def _export_progress(self):
+        title = self._export_title()
+        return ("Exporting " + title[len("Export "):] if title.startswith("Export ") else title) + "…"
+
+    def usage_text(self, capabilities):
+        names = [name for letter, name in _USAGE if letter in capabilities]
+        if not names:
+            return "Unknown"
+        if len(names) == 1:
+            return names[0]
+        if len(names) == 2:
+            return f"{names[0]} and {names[1]}"
+        return ", ".join(names[:-1]) + ", and " + names[-1]
+
+    def _add_fingerprint(self, fingerprint):
+        groups = [fingerprint[i:i + 4] for i in range(0, len(fingerprint), 4)]
+        for start in range(0, len(groups), 4):
+            self.add_text(" ".join(groups[start:start + 4]), mono=True, center=True, inset=16)
+
+    def _add_same_line(self, label, value, *, inset=16, size=TITLE_SIZE):
+        face = font(size)
+        x = MARGIN + inset
+        self.rows.append((x, self.content_end, label, size, MUTED, False))
+        self.rows.append((x + self.scratch.draw.textlength(label + " ", font=face), self.content_end, value, size, INK, False))
+        self.content_end += size + 8
+
+    def _add_value(self, label, value, *, mono=False):
+        if label == "Usage:" and self.scratch.draw.textlength(f"{label} {value}", font=font(TITLE_SIZE)) <= WIDTH - 2 * (MARGIN + 16):
+            self._add_same_line(label, value)
+            return
+        self.add_text(label, fill=MUTED, inset=16)
+        if label == "Fingerprint:":
+            self._add_fingerprint(value)
+        else:
+            self.add_text(value, mono=mono, inset=16)
+        self.content_end += 8
+
+    def _card(self, values, fields, *, open_action="", private=False, heading="", buttons=()):
+        top = self.content_end
+        self.content_end += 16
+        if heading:
+            self.add_text(heading, fill=MUTED, inset=16)
+            self.content_end += 8
+        for label in fields:
+            self._add_value(label, values[label], mono=label in ("Key ID:", "Created:", "Expires:"))
+            if label == "Fingerprint:" and private:
+                self.add_text(PRIVATE_NOTE, fill=WARNING, center=True, inset=16)
+                self.content_end += 8
+        if buttons:
+            self.content_end += 4
+            for text, action in buttons:
+                self.add_button(text, action, inset=16)
+        self.content_end += 8
+        self.cards.append((MARGIN, top, WIDTH - MARGIN, self.content_end))
+        self.card_actions.append(open_action)
+        self.content_end += 16
+
     def build_details(self):
         key = self.selected
-        self._key_cards([] if key is None else [key], summary=False, open_cards=False)
-        if key is None:
-            return
-        self.content_end += 8
-        self.add_button("Export Public Key", "gpg-export-public")
-        if key.secret:
-            self.add_button("Export Private Key", "gpg-export-private")
+        self._key_cards([] if key is None else [key], summary=False, open_cards=False, exports=True)
 
-    def _key_cards(self, keys, *, summary, open_cards):
+    def _key_cards(self, keys, *, summary, open_cards, exports=False):
         self.reset_layout()
         if not keys and summary:
             self.add_text("No GPG keys are loaded.")
         fields = ("User ID:", "Fingerprint:", "Key ID:")
         if not summary:
-            fields += ("Algorithm:", "Created:", "Expires:", "Validity:")
+            fields += ("Algorithm:", "Usage:", "Created:", "Expires:", "Validity:")
         for index, key in enumerate(keys):
             values = {"User ID:": "\n".join(key.user_ids) or "None", "Fingerprint:": key.fingerprint,
-                      "Key ID:": key.key_id, "Algorithm:": key.algorithm, "Created:": key.created,
-                      "Expires:": key.expires, "Validity:": key.validity}
-            top = self.content_end
-            self.content_end += 16
-            for label in fields:
-                self.add_text(label, fill=MUTED, inset=16)
-                if label == "Fingerprint:":
-                    groups = [values[label][i:i + 4] for i in range(0, len(values[label]), 4)]
-                    for i in range(0, len(groups), 4):
-                        self.add_text(" ".join(groups[i:i + 4]), mono=True, center=True, inset=16)
-                else:
-                    self.add_text(values[label], mono=label in ("Key ID:", "Created:", "Expires:"), inset=16)
-                self.content_end += 8
-            if not summary and key.subkeys:
-                self.add_text("Subkeys:", fill=MUTED, inset=16)
-                for subkey in key.subkeys:
-                    self.add_text(subkey["key_id"], mono=True, inset=16)
-            if not summary and key.secret:
-                self.content_end += 8
-                self.add_text("This file contains a private key.", fill=RED, inset=16)
-            self.content_end += 8
-            self.cards.append((MARGIN, top, WIDTH - MARGIN, self.content_end))
-            self.card_actions.append(f"gpg-open:{index}" if open_cards else "")
-            self.content_end += 16
+                      "Key ID:": key.key_id, "Algorithm:": key.algorithm, "Usage:": self.usage_text(key.capabilities),
+                      "Created:": key.created, "Expires:": key.expires, "Validity:": key.validity}
+            buttons = []
+            if exports:
+                buttons.append(("Export Public Key", "gpg-export-public"))
+                if key.secret_available:
+                    buttons.append(("Export Private Key", "gpg-export-private"))
+            self._card(values, fields, open_action=f"gpg-open:{index}" if open_cards else "",
+                       private=not summary and key.contains_private, buttons=buttons)
+            if not summary:
+                labels = [self._subkey_export_label(sub) if sub.get("secret") else "" for sub in key.subkeys]
+                for sub_index, sub in enumerate(key.subkeys):
+                    buttons = []
+                    if exports and sub.get("secret"):
+                        label = labels[sub_index]
+                        if labels.count(label) > 1 and sub.get("key_id"):
+                            label = f"{label} {sub['key_id']}"
+                        buttons.append((label, f"gpg-export-subkey:{sub_index}"))
+                    self._card({"Usage:": self.usage_text(sub.get("capabilities", "")), "Algorithm:": sub.get("algorithm", ""),
+                                "Fingerprint:": sub.get("fingerprint", ""), "Key ID:": sub.get("key_id", ""),
+                                "Created:": sub.get("created", ""), "Expires:": sub.get("expires", ""),
+                                "Validity:": sub.get("validity", "")},
+                               ("Usage:", "Algorithm:", "Fingerprint:", "Key ID:", "Created:", "Expires:", "Validity:"),
+                               private=bool(sub.get("contains_private")), heading="Subkey", buttons=buttons)
 
     def _append_stderr(self):
         for stage in self.outcome.stages:
@@ -394,7 +479,12 @@ class GpgUI:
         key = self.selected
         if key is None or not self.armor:
             return
-        app.export_label = "GPG Private Key" if self.export_secret else "GPG Public Key"
+        if self.export_subkey:
+            app.export_label = "GPG Private Subkey"
+        elif self.export_secret:
+            app.export_label = "GPG Private Key"
+        else:
+            app.export_label = "GPG Public Key"
         app.export_text = self.armor
         app.export_binary = False
         app.export_return = "gpg-key-details"
@@ -429,10 +519,10 @@ class GpgUI:
                 frame.draw.rounded_rectangle((left, top - offset, right, end - offset), radius=12, fill=WHITE, outline=LINE, width=2)
                 if action:
                     frame.hit((left, max(top - offset, HEADER), right, min(end - offset, bottom)), action, "GPG Key")
-        for y, text, action, height in self.buttons:
+        for y, text, action, _height, inset in self.buttons:
             top = y - offset
             if top >= HEADER and top < bottom:
-                frame.button(top, text, action)
+                frame.button(top, text, action, inset=inset)
         for x, y, text, size, fill, mono in self.rows:
             y -= offset
             if y + size + 8 > HEADER and y < bottom:
@@ -450,7 +540,7 @@ class GpgUI:
         self.content(frame, "GPG Key")
 
     def export_choice(self, frame):
-        title = "Export Private Key" if self.export_secret else "Export Public Key"
+        title = self._export_title()
         frame.header(title, "back")
         y = frame.button(HEADER + 24, "Export to File", "gpg-export-file")
         too_big = len(self.armor.encode("utf-8")) > MAX_BYTE_PAYLOAD
@@ -467,7 +557,7 @@ class GpgUI:
         image = _qr_image(self.armor, WIDTH - 2 * MARGIN, light)
         frame.image.paste(image, (MARGIN, top))
         self.app._brightness_control(frame, top + image.height + 24)
-        frame.header("Private Key" if self.export_secret else "Public Key", "back")
+        frame.header(self._export_title().removeprefix("Export "), "back")
 
     def review(self, frame):
         self.content(frame, "Load GPG Key", review=True)

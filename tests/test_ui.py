@@ -348,7 +348,7 @@ class ScreenRecord:
         self.mark(app.render(), end[0], end[1], "scroll-up")
 
     def click(self, app: App, label: str):
-        app.render()
+        self._show(app, label)
         for hit in app.hits:
             if hit["label"] == label or hit["action"] == label:
                 left, top, right, bottom = hit["box"]
@@ -364,13 +364,51 @@ class ScreenRecord:
                 radius = 12
                 draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=PINK)
                 self._save(marked)
+                self._wait_until_a_tap_lands(app)
                 app.tap(x, y)
                 return
         raise AssertionError(f"No control named {label}.")
 
+    def _show(self, app: App, label: str):
+        """Scroll the current screen until the control is painted."""
+        app.render()
+        if self._contains(app, label):
+            return
+        key = app.screen
+        start = app.scroll.get(key, 0)
+        offset = 0
+        while offset < 20000:
+            app.scroll[key] = offset
+            app.render()
+            if self._contains(app, label):
+                return
+            offset += 160
+        app.scroll[key] = start
+        app.render()
+
+    @staticmethod
+    def _contains(app: App, label: str) -> bool:
+        return any(hit["label"] == label or hit["action"] == label for hit in app.hits)
+
+    @staticmethod
+    def _wait_until_a_tap_lands(app: App):
+        from bigsigner.ui.app import SCROLL_QUIET, SEARCH_TOUCH_GAP
+
+        while True:
+            now = time.monotonic()
+            wait = 0.0
+            if app._search_touch_guard:
+                wait = max(wait, SEARCH_TOUCH_GAP - (now - app._search_touch_at))
+            if app._scroll_at is not None:
+                wait = max(wait, SCROLL_QUIET - (now - app._scroll_at))
+            if wait <= 0:
+                return
+            time.sleep(wait + 0.01)
+
     def _save(self, image):
         self.index += 1
-        image.save(self.folder / f"{self.index:03d}-{self.name}.png")
+        safe = self.name.replace("/", "-").replace("\\", "-")
+        image.save(self.folder / f"{self.index:03d}-{safe}.png")
         write_screenshot_index(self.folder)
 
 

@@ -109,7 +109,7 @@ def test_imported_seed_review_saves_screenshots():
         app.seed_grid_stick = False
         app.seed_grid_scroll = 0
         record.shot(app, f"{count}-words-top")
-        _tap(app, "Continue")
+        record.click(app, "Continue")
         record.shot(app, f"{count}-passphrase-choice")
         for item in app.texts:
             left, top, right, bottom = item["box"]

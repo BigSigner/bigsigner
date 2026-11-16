@@ -84,9 +84,9 @@ def test_transaction_signing_saves_screenshots():
     zero.outputs.append(OutputScope(vout=TransactionOutput(0, Script(b"\x6a\x05hello"))))
     _load(app, zero)
     _shot(record, app, "op-return-zero")
-    app._act("psbt-opreturn-1")
+    record.click(app, "psbt-opreturn-1")
     record.shot(app, "op-return-ascii")
-    app._act("psbt-op-next")
+    record.click(app, "psbt-op-next")
     record.shot(app, "op-return-hex")
     hex_line = next(item for item in app.texts if item["text"] == "68 65 6c 6c 6f")
     probe = ImageDraw.Draw(Image.new("RGB", (WIDTH, 10)))
@@ -130,32 +130,32 @@ def test_transaction_signing_saves_screenshots():
     assert dimmed.getpixel((240, 40))[:3] != (18, 36, 58)
     app.back_one()
 
-    app._act("psbt-sign")
+    record.click(app, "psbt-sign")
     record.shot(app, "signing")
     app.render()
     record.shot(app, "sign-export")
     mount_memory({"files": {}})
     try:
-        app._act("psbt-export")
+        record.click(app, "psbt-export")
         record.shot(app, "export-format")
-        app._act("psbt-export-binary")
-        app._act("storage-sd")
+        record.click(app, "psbt-export-binary")
+        record.click(app, "storage-sd")
         assert app.screen == "sd"
         assert app.export_binary is True
         assert app.export_bytes.startswith(b"psbt\xff")
         record.shot(app, "export-binary")
-        app._act("export-new")
+        record.click(app, "export-new")
         assert app.filename == "transaction-signed.psbt"
         record.shot(app, "export-binary-name")
         app.back_one()
         app.back_one()
         app.back_one()
-        app._act("psbt-export-base64")
-        app._act("storage-sd")
+        record.click(app, "psbt-export-base64")
+        record.click(app, "storage-sd")
         assert app.export_binary is False
         assert app.export_text.startswith("cHNidP")
         record.shot(app, "export-base64")
-        app._act("export-new")
+        record.click(app, "export-new")
         assert app.filename == "transaction-signed-base64.psbt"
         record.shot(app, "export-base64-name")
         app.back_one()
@@ -282,9 +282,9 @@ def test_combined_warnings_save_screenshots():
         assert phrase in shown, phrase
 
     op_return = next(card for card in app.psbt_view["outputs"] if card["kind"] == "op_return")
-    app._act(f"psbt-opreturn-{op_return['index']}")
+    record.click(app, f"psbt-opreturn-{op_return['index']}")
     record.shot(app, "op-return-ascii")
-    app._act("psbt-op-next")
+    record.click(app, "psbt-op-next")
     record.shot(app, "op-return-hex")
     assert "6d 65 74 61" in _joined(app)
     app.back_one()
@@ -296,27 +296,27 @@ def test_combined_warnings_save_screenshots():
         record.shot(app, f"input-qr-{name}")
     app.back_one()
 
-    app._act("psbt-sign")
+    record.click(app, "psbt-sign")
     record.shot(app, "signing")
     app.render()
     record.shot(app, "sign-export")
     mount_memory({"files": {}})
     try:
-        app._act("psbt-export")
+        record.click(app, "psbt-export")
         record.shot(app, "export-format")
-        app._act("psbt-export-binary")
-        app._act("storage-sd")
+        record.click(app, "psbt-export-binary")
+        record.click(app, "storage-sd")
         record.shot(app, "export-binary")
-        app._act("export-new")
+        record.click(app, "export-new")
         assert app.filename == "transaction-signed.psbt"
         record.shot(app, "export-binary-name")
         app.back_one()
         app.back_one()
         app.back_one()
-        app._act("psbt-export-base64")
-        app._act("storage-sd")
+        record.click(app, "psbt-export-base64")
+        record.click(app, "storage-sd")
         record.shot(app, "export-base64")
-        app._act("export-new")
+        record.click(app, "export-new")
         assert app.filename == "transaction-signed-base64.psbt"
         record.shot(app, "export-base64-name")
         app.back_one()
@@ -327,11 +327,11 @@ def test_combined_warnings_save_screenshots():
     _qr_frames(record, app)
 
 
-def _open_op_return(app, payload: bytes, amount: int = 0):
+def _open_op_return(record, app, payload: bytes, amount: int = 0):
     psbt = _psbt(app.session)
     psbt.outputs.append(_op_return(payload, amount))
     _load(app, psbt)
-    app._act("psbt-opreturn-1")
+    record.click(app, "psbt-opreturn-1")
 
 
 def test_op_return_content_saves_screenshots():
@@ -341,15 +341,15 @@ def test_op_return_content_saves_screenshots():
     app.wallet_index = 0
     record.note("OP_RETURN content that is not ASCII, wraps a long line, or needs scrolling.")
 
-    _open_op_return(app, b"hello\xff")
+    _open_op_return(record, app, b"hello\xff")
     assert app.psbt_op_mode == "hex"
     record.shot(app, "non-ascii-hex")
     assert "68 65 6c 6c 6f ff" in _joined(app)
-    app._act("psbt-op-next")
+    record.click(app, "psbt-op-next")
     record.shot(app, "non-ascii-ascii")
     assert "The content is not ASCII text." in _joined(app)
 
-    _open_op_return(app, b"W" * 80)
+    _open_op_return(record, app, b"W" * 80)
     assert app.psbt_op_mode == "ascii"
     record.shot(app, "long-line")
     shown = [item["text"] for item in app.texts if item["text"].startswith("W")]
@@ -357,7 +357,7 @@ def test_op_return_content_saves_screenshots():
     assert "too long" not in _joined(app)
 
     long_text = "\n".join(f"Line {index:02d}" for index in range(1, 31))
-    _open_op_return(app, long_text.encode("ascii"))
+    _open_op_return(record, app, long_text.encode("ascii"))
     record.shot(app, "long-ascii-top")
     assert "Scroll down to see the rest." in _joined(app)
     assert "Line 01" in _joined(app)
@@ -367,7 +367,7 @@ def test_op_return_content_saves_screenshots():
     assert "Line 01" not in _joined(app)
     assert "Scroll down" not in _joined(app)
 
-    _open_op_return(app, bytes(range(240)))
+    _open_op_return(record, app, bytes(range(240)))
     assert app.psbt_op_mode == "hex"
     record.shot(app, "long-hex-top")
     assert "Scroll down to see the rest." in _joined(app)
@@ -469,9 +469,9 @@ def _search_hidden_address(record, app):
     """The search runs continuously through index 73 and finds the hidden output."""
     _scroll_until(app, "Search for Address in Loaded Wallets")
     record.shot(app, "search-before")
-    app._act("psbt-search-0-0")
+    record.click(app, "psbt-search-0-0")
     record.shot(app, "search-settings")
-    app._act("psbt-search-start")
+    record.click(app, "psbt-search-start")
     record.shot(app, "search-preparing")
     for _ in range(100000):
         if not app.psbt_search_active():
@@ -484,7 +484,7 @@ def _search_hidden_address(record, app):
     assert app.screen == "address-search"
     assert app.confirm == "psbt-found"
     assert app._confirm_message() == f"Address found in Receive addresses: #{HIDDEN_INDEX}"
-    app._act("psbt-search-confirm")
+    record.click(app, "psbt-search-confirm")
     assert app._psbt_heights == {}
     assert app.scroll["psbt-yaml"] == 0
     place = f"Receive Address #{HIDDEN_INDEX}"
@@ -578,7 +578,7 @@ def test_multisig_sign_with_saves_screenshots():
     assert len(sign_hits) == 3
     assert all(hit["label"].startswith("Sign Transaction with\n") for hit in sign_hits)
     assert not any(hit["action"] == "psbt-continue" for hit in app.hits)
-    app._act(sign_hits[0]["action"])
+    record.click(app, sign_hits[0]["action"])
     _scroll_until(app, "Each input already has 1 signature.")
     record.shot(app, "sign-note-after")
     assert app.psbt_view["signature_note"] == (

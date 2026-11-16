@@ -285,16 +285,16 @@ class Frame:
         else:
             self.glyph(Icons.BACK, 42, HEADER / 2, 42, WHITE)
 
-    def button_height(self, text: str, icon: bool = False) -> int:
+    def button_height(self, text: str, icon: bool = False, inset: int = 0) -> int:
         """The button's box height, without the 12px gap `button` leaves under it."""
-        _face, _lines, _line_h, height, _text_delta, _icon_size, _icon_gap = self._button_metrics(text, icon)
+        _face, _lines, _line_h, height, _text_delta, _icon_size, _icon_gap = self._button_metrics(text, icon, inset)
         return height
 
-    def _button_metrics(self, text: str, icon: bool):
+    def _button_metrics(self, text: str, icon: bool, inset: int = 0):
         face = font(BODY_SIZE)
         icon_size = BODY_SIZE
         icon_gap = 12
-        text_width_limit = WIDTH - 2 * MARGIN - 32 - (icon_size + icon_gap if icon else 0)
+        text_width_limit = WIDTH - 2 * (MARGIN + inset) - 32 - (icon_size + icon_gap if icon else 0)
         lines = wrap(self.draw, text, face, text_width_limit)
         line_h = BODY_SIZE + 6
         # The space under a one-line button's ink. A longer label keeps that
@@ -310,10 +310,10 @@ class Frame:
         height = round(last_ink_bottom + edge_gap(boxes[-1]))
         return face, lines, line_h, height, text_delta, icon_size, icon_gap
 
-    def button(self, y: int, text: str, action: str, color=BLUE, label: str = "", icon: str | None = None, awesome: bool = False, enabled: bool = True):
-        face, lines, line_h, height, text_delta, icon_size, icon_gap = self._button_metrics(text, icon is not None)
+    def button(self, y: int, text: str, action: str, color=BLUE, label: str = "", icon: str | None = None, awesome: bool = False, enabled: bool = True, inset: int = 0):
+        face, lines, line_h, height, text_delta, icon_size, icon_gap = self._button_metrics(text, icon is not None, inset)
         text_top = y + text_delta
-        box = (MARGIN, y, WIDTH - MARGIN, y + height)
+        box = (MARGIN + inset, y, WIDTH - MARGIN - inset, y + height)
         text_fill = WHITE
         if not enabled:
             color = (186, 190, 196)
@@ -329,7 +329,7 @@ class Frame:
         else:
             for index, line in enumerate(lines):
                 width = self.draw.textlength(line, font=face)
-                self.draw.text(((WIDTH - width) / 2, text_top + index * line_h), line, font=face, fill=text_fill)
+                self.draw.text(((box[0] + box[2] - width) / 2, text_top + index * line_h), line, font=face, fill=text_fill)
         if enabled:
             self.hit(box, action, label or text)
         return y + height + 12

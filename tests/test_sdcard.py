@@ -530,7 +530,7 @@ def test_seed_key_show_export_saves_screenshots():
         app.screen = "key"
         record.shot(app, name)
         if passphrase:
-            _tap(app, "Show/Export")
+            record.click(app, "Show/Export")
             record.shot(app, "passphrase-options")
 
 

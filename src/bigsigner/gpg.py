@@ -39,6 +39,9 @@ class PublicKey:
     user_ids: list[str] = field(default_factory=list)
     subkeys: list[dict] = field(default_factory=list)
     secret: bool = False
+    secret_available: bool = False
+    contains_private: bool = False
+    capabilities: str = ""
 
 
 @dataclass
@@ -77,7 +80,7 @@ def parse_keys(output: str, *, secret: bool = False) -> list[PublicKey]:
                   "m": "Marginal", "f": "Full", "u": "Ultimate", "w": "Known Private Key"}
     for line in output.splitlines():
         parts = line.split(":")
-        parts += [""] * max(0, 12 - len(parts))
+        parts += [""] * max(0, 15 - len(parts))
         kind = parts[0]
         if kind in ("sec", "ssb") and not secret:
             raise GpgError("Only public GPG keys can be loaded.")
@@ -88,11 +91,20 @@ def parse_keys(output: str, *, secret: bool = False) -> list[PublicKey]:
                           validity=validities.get(parts[1], "Unknown"))
             if parts[2]:
                 values["algorithm"] += f" ({parts[2]} bits)"
+            # Field 15 is "+" when this secret key's private material is present.
+            # A stub, including a certificate exported with --export-secret-subkeys, is "#".
+            available = kind in ("sec", "ssb") and parts[14] == "+"
+            # "#" is a stub with no private material. show-keys leaves this field empty.
+            contains_private = kind in ("sec", "ssb") and parts[14] != "#"
             if kind in ("pub", "sec"):
-                current = PublicKey(**values, secret=kind == "sec")
+                current = PublicKey(**values, secret=kind == "sec", secret_available=available,
+                                    contains_private=contains_private, capabilities=parts[11])
                 keys.append(current)
                 target = current
             elif current is not None:
+                values["capabilities"] = parts[11]
+                values["secret"] = available
+                values["contains_private"] = contains_private
                 current.subkeys.append(values)
                 target = values
         elif kind == "fpr" and target is not None:
@@ -222,25 +234,40 @@ class GpgBackend:
             return Outcome(False, "Could not list GPG keys.", stages)
         try:
             keys = parse_keys(listed.stdout)
-            secret_ids = {key.fingerprint for key in parse_keys(secret.stdout, secret=True)}
+            secret_keys = {key.fingerprint: key for key in parse_keys(secret.stdout, secret=True)}
         except GpgError as exc:
             return Outcome(False, str(exc), stages)
         for key in keys:
-            key.secret = key.fingerprint in secret_ids
+            found = secret_keys.get(key.fingerprint)
+            key.secret = found is not None
+            key.secret_available = bool(found and found.secret_available)
+            key.contains_private = bool(found and found.contains_private)
+            found_subs = {sub.get("fingerprint"): sub for sub in found.subkeys} if found else {}
+            for sub in key.subkeys:
+                match = found_subs.get(sub.get("fingerprint"))
+                sub["secret"] = bool(match and match.get("secret"))
+                sub["contains_private"] = bool(match and match.get("contains_private"))
         return Outcome(True, stages=stages, keys=keys)
 
-    def export_key(self, fingerprint: str, *, secret: bool = False):
-        """ASCII-armored public or private key.
+    def export_key(self, fingerprint: str, *, secret: bool = False, subkey: bool = False):
+        """ASCII-armored public key, private certificate, or one private subkey.
 
-        The wrapped command is ``gpg --armor --export <fingerprint>`` or
-        ``gpg --armor --export-secret-keys <fingerprint>``, plus the private
-        keyring flags used for every GPG command.
+        A subkey export is ``gpg --armor --export-secret-subkeys <fingerprint>!``.
+        The ``!`` keeps that subkey's secret and leaves out the certificate
+        secret and every other subkey. The other exports are
+        ``gpg --armor --export <fingerprint>`` and
+        ``gpg --armor --export-secret-keys <fingerprint>``.
         """
         if not re.fullmatch(r"[0-9A-F]{32}|[0-9A-F]{40}|[0-9A-F]{64}", fingerprint):
             return Outcome(False, "The key fingerprint is not valid.")
-        name = "Export Private Key" if secret else "Export Public Key"
-        option = "--export-secret-keys" if secret else "--export"
-        result = self.command(name, ["--armor", option, "--", fingerprint], agent=secret)
+        if subkey:
+            secret = True
+            name, option, target = "Export Private Subkey", "--export-secret-subkeys", fingerprint + "!"
+        elif secret:
+            name, option, target = "Export Private Key", "--export-secret-keys", fingerprint
+        else:
+            name, option, target = "Export Public Key", "--export", fingerprint
+        result = self.command(name, ["--armor", option, "--", target], agent=secret)
         marker = "-----BEGIN PGP PRIVATE KEY BLOCK-----" if secret else "-----BEGIN PGP PUBLIC KEY BLOCK-----"
         ok = result.returncode == 0 and marker in result.stdout
         return Outcome(ok, "" if ok else "The key could not be exported.", [result])
