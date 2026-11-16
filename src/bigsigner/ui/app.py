@@ -17,7 +17,7 @@ from PIL import Image, ImageDraw
 from .. import __version__
 from ..entropy import mnemonic_from_camera, mnemonic_from_coins, mnemonic_from_dice
 from ..rpc import split_line
-from ..parse import MAX_MULTISIG_KEYS, ParseError
+from ..parse import MAX_MULTISIG_KEYS, KeyQrVerdict, ParseError, verify_key_qr
 from ..paths import HARDENED, MULTISIG_NATIVE, SINGLESIG_NATIVE, SINGLESIG_TAPROOT, coin_type, format_path
 from ..psbt_check import check_loaded_psbt, iter_check_loaded_psbt, psbt_yaml
 from ..psbt_load import TOO_LARGE, UNREADABLE, SpecterParts, explain_not_psbt, is_binary_psbt, psbt_bytes, psbt_text
@@ -72,6 +72,7 @@ from .gpg import GpgUI
 from .canvas import (
     BLUE,
     ELLIPSIS,
+    GREEN,
     HEADER,
     HEIGHT,
     INK,
@@ -310,6 +311,28 @@ QR_BRIGHTNESS_STOPS = (
 def _kind_count(count: int, singular: str) -> str:
     word = singular if count == 1 else f"{singular}s"
     return f"{count} {word}"
+
+
+# The extended key on Load External Key is broken after this many characters.
+KEY_LINE_CHARS = 22
+KEY_FORMAT_NOTE = (
+    "Different wallets may display the key expression in different formats. "
+    "Some show the derivation path (the part in the [] brackets) separately. "
+    "Some show the derivation path starting with m/ instead of the 8-character fingerprint prefix. "
+    "Some use the ' notation after the elements in the derivation path instead of the h notation. "
+    "It is ok if the fingerprint is not displayed, as long as the wallet does not show a different fingerprint."
+)
+KEY_SCAN_NOTE = (
+    "Some hardware wallets don't show the key expression as text but only as a QR code. "
+    "You can use the scanner above to verify them."
+)
+
+
+def _fixed_lines(value: str, width: int = KEY_LINE_CHARS) -> list[str]:
+    """Break after every `width` characters. No character is dropped."""
+    if not value:
+        return [""]
+    return [value[index : index + width] for index in range(0, len(value), width)]
 
 
 def _loaded_kinds_phrase(seeds: int, externals: int) -> str:
@@ -560,6 +583,7 @@ class App:
         self.singlesig_selected = None
         self.pending_external = None
         self.external_format = "xpub"
+        self.key_qr = None
         self.load_error = ""
         self.load_error_home = "keys"
         self.wallet_plan = None
@@ -647,6 +671,7 @@ class App:
             "wallet-import-note": self._wallet_import_note,
             "external-review": self._external_warning,
             "external-details": self._external_details,
+            "external-verify": self._external_verify,
             "entropy": self._entropy,
         }
         self.fs = FileSystemUI(self)
@@ -1227,6 +1252,13 @@ class App:
         else:
             self._commit_external_key()
 
+    def _act_external_verify(self):
+        if self.pending_external is None:
+            return
+        self.scan_kind = "verify-key"
+        self.qr_sequence.reset()
+        self.go("scan")
+
     def _act_add_seed(self):
         self.seed_words = []
         self.word_prefix = ""
@@ -1427,6 +1459,7 @@ class App:
         "external-known": lambda self: self._continue_loaded_multisig(),
         "external-next": _act_external_next,
         "external-continue": _act_external_continue,
+        "external-verify": _act_external_verify,
         "wallet-import-continue": lambda self: self._finish_wallet_import(),
         "back": lambda self: self.back_one(),
         "add-seed": _act_add_seed,
@@ -2323,6 +2356,8 @@ class App:
             return "Point the camera at the message."
         if self.scan_kind == "psbt":
             return "Point the camera at the PSBT QR code."
+        if self.scan_kind == "verify-key":
+            return "Point the camera at the key expression QR code."
         return "Point the camera at one QR code."
 
     def _scan(self, frame: Frame):
@@ -2334,6 +2369,8 @@ class App:
             title = "Scan Message"
         elif self.scan_kind == "psbt":
             title = "Scan PSBT"
+        elif self.scan_kind == "verify-key":
+            title = "Verify QR Code"
         else:
             title = "Scan QR"
         frame.header(title, "back")
@@ -2375,6 +2412,11 @@ class App:
             return
         if self.scan_kind == "file":
             self.fs.accept_qr(text)
+            return
+        if self.scan_kind == "verify-key":
+            if isinstance(text, bytes):
+                text = text.decode("utf-8", "replace")
+            self._accept_key_verification(text)
             return
         if isinstance(text, bytes):
             if self.scan_kind == "psbt" and is_binary_psbt(text):
@@ -6504,13 +6546,14 @@ class App:
         return dict(self._external_format_options(key))[self.external_format]
 
     def _external_preview(self, key) -> str:
+        path = format_path(list(key.path))[2:]
+        prefix = f"[{key.fingerprint.hex()}/{path}]"
         if self.external_format == "slip":
             slip = display_form(key.canonical, self.session.network, key.role)
-            return slip or key.canonical
+            return prefix + (slip or key.canonical)
         if self.external_format == "expression":
-            path = format_path(list(key.path))[2:]
-            return f"[{key.fingerprint.hex()}/{path}]{key.canonical}/<0;1>/*"
-        return key.canonical
+            return f"{prefix}{key.canonical}/<0;1>/*"
+        return prefix + key.canonical
 
     def _continue_loaded_multisig(self):
         plan = self.wallet_plan
@@ -6655,12 +6698,9 @@ class App:
             frame.text("This external key is no longer waiting to be loaded.", MARGIN, HEADER + 24)
             return
         subtitle = self._external_details_title()
-        intro = "Verify these details are backed up:"
         prompt = "Verify this Extended Public Key on the other hardware wallet:"
         preview = self._external_preview(key)
-        xpub_size = TITLE_SIZE
         detail = TITLE_SIZE
-        path = format_path(list(key.path))
         y = HEADER + 16
         y += self._text_height(frame, subtitle, detail)
         y += 8
@@ -6669,15 +6709,16 @@ class App:
         y += self._text_height(frame, "Format:", detail)
         y += 8
         y += 64 + 16
-        y += self._text_height(frame, preview, xpub_size, mono=True) + 16
+        y += len(_fixed_lines(preview)) * (detail + 8)
         y += 16
-        y += self._text_height(frame, intro, detail)
-        y += 20
-        y += self._text_height(frame, f"Type: {self._external_kind(key)}", detail)
-        y += detail + 8
-        y += self._text_height(frame, "Derivation Path:", detail)
-        y += detail + 8
-        content_end = y + frame.button_height("Continue") + 24
+        y += self._text_height(frame, KEY_FORMAT_NOTE, detail)
+        y += 16
+        y += frame.button_height("Verify QR Code") + 12
+        y += 8
+        y += self._text_height(frame, KEY_SCAN_NOTE, detail)
+        y += 16
+        y += frame.button_height("Continue")
+        content_end = y + 24
         offset = self._scroll_offset("external-details", content_end, clearance=12)
         y = HEADER + 16 - offset
         y = self._centered_block(frame, subtitle, y, detail, INK)
@@ -6685,18 +6726,11 @@ class App:
         y = frame.text(prompt, MARGIN, y, size=detail)
         y = frame.text("Format:", MARGIN, y + 8, size=detail, fill=MUTED)
         field = self._dropdown_field(frame, y + 8, "external-format", self._external_format_label(key))
-        y = self._draw_wrapped(frame, preview, field[3] + 16, xpub_size, mono=True)
+        y = self._draw_fixed(frame, preview, field[3] + 16, detail)
         y += 16
-        y = frame.text(intro, MARGIN, y, size=detail)
-        y += 20
-        y = self._label_value(frame, y, "Type: ", self._external_kind(key), detail)
-        y = self._review_account_line(frame, y, key.account)
-        y = frame.text("Derivation Path:", MARGIN, y, size=detail, fill=MUTED)
-        path_face = font(detail, mono=True)
-        path_width = frame.draw.textlength(path, font=path_face)
-        if y >= HEADER:
-            frame.draw.text((max(MARGIN, (WIDTH - path_width) / 2), y), path, font=path_face, fill=INK)
-        y += detail + 8
+        y = frame.text(KEY_FORMAT_NOTE, MARGIN, y, size=detail, fill=MUTED)
+        y = frame.button(y + 16, "Verify QR Code", "external-verify")
+        y = frame.text(KEY_SCAN_NOTE, MARGIN, y + 8, size=detail)
         frame.button(y + 16, "Continue", "external-continue")
         frame.header("Load External Key", "back")
         if self.open_dropdown == "external-format":
@@ -6723,31 +6757,6 @@ class App:
             y += size + 8
         return y
 
-    def _label_value(self, frame: Frame, y: int, label: str, value: str, size: int, value_fill=INK) -> int:
-        """A grey label and its value, wrapping as one sentence. Later lines are the value."""
-        face = font(size)
-        source = f"{label}{value}"
-        lines = wrap(frame.draw, source, face, WIDTH - 2 * MARGIN) or [""]
-        cursor = 0
-        label_end = len(label)
-        for line in lines:
-            while cursor < len(source) and not source.startswith(line, cursor):
-                cursor += 1
-            if y >= HEADER:
-                if cursor < label_end:
-                    take = min(len(line), label_end - cursor)
-                    label_part = line[:take]
-                    value_part = line[take:]
-                    frame.draw.text((MARGIN, y), label_part, font=face, fill=MUTED)
-                    if value_part:
-                        x = MARGIN + frame.draw.textlength(label_part, font=face)
-                        frame.draw.text((x, y), value_part, font=face, fill=value_fill)
-                else:
-                    frame.draw.text((MARGIN, y), line, font=face, fill=value_fill)
-            cursor += len(line)
-            y += size + 8
-        return y
-
     def _text_height(self, frame: Frame, value: str, size: int, mono: bool = False) -> int:
         face = font(size, mono=mono)
         lines = wrap(frame.draw, value, face, WIDTH - 2 * MARGIN) or [""]
@@ -6761,21 +6770,56 @@ class App:
             y += size + 8
         return y
 
-    def _review_account_line(self, frame: Frame, y: int, account: int) -> int:
-        size = TITLE_SIZE
-        face = font(size)
-        label = "Account: "
-        if y >= HEADER:
-            frame.draw.text((MARGIN, y), label, font=face, fill=MUTED)
-            x = MARGIN + frame.draw.textlength(label, font=face)
-            if account == 0:
-                frame.draw.text((x, y), "0 (default)", font=face, fill=INK)
-            else:
-                value = str(account)
-                frame.draw.text((x, y), value, font=face, fill=RED)
-                x += frame.draw.textlength(value, font=face)
-                frame.draw.text((x, y), " - non-default", font=face, fill=RED)
-        return y + size + 8
+    def _draw_fixed(self, frame: Frame, value: str, y: int, size: int, fill=INK) -> int:
+        """Draw `value` in monospace, 22 characters to a line, dropping nothing."""
+        face = font(size, mono=True)
+        for line in _fixed_lines(value):
+            if HEADER <= y < HEIGHT:
+                frame.draw.text((MARGIN, y), line, font=face, fill=fill)
+                frame.mark(line, frame.draw.textbbox((MARGIN, y), line, font=face))
+            y += size + 8
+        return y
+
+    def _accept_key_verification(self, text: str):
+        key = self.pending_external
+        if key is None:
+            verdict = KeyQrVerdict("error", "This external key is no longer waiting to be loaded.")
+        else:
+            verdict = verify_key_qr(text, key, self.session.network)
+        self.key_qr = verdict
+        self.scroll["external-verify"] = 0
+        self.go("external-verify")
+
+    def _external_verify(self, frame: Frame):
+        verdict = self.key_qr
+        if verdict is None:
+            frame.header("Verify QR Code", "back")
+            frame.text("Scan a key expression QR code first.", MARGIN, HEADER + 24, size=TITLE_SIZE)
+            return
+        fill = {"error": RED, "warning": WARNING, "success": GREEN}[verdict.status]
+        show_continue = verdict.status in ("warning", "success")
+        y = HEADER + 16
+        y += self._text_height(frame, verdict.message, TITLE_SIZE)
+        if verdict.scanned:
+            y += 16 + self._text_height(frame, "Scanned:", TITLE_SIZE)
+            y += len(_fixed_lines(verdict.scanned)) * (TITLE_SIZE + 8)
+        if verdict.expected:
+            y += 16 + self._text_height(frame, "Expected:", TITLE_SIZE)
+            y += len(_fixed_lines(verdict.expected)) * (TITLE_SIZE + 8)
+        if show_continue:
+            y += 16 + frame.button_height("Continue")
+        offset = self._scroll_offset("external-verify", y + 24, clearance=12)
+        y = HEADER + 16 - offset
+        y = frame.text(verdict.message, MARGIN, y, size=TITLE_SIZE, fill=fill)
+        if verdict.scanned:
+            y = frame.text("Scanned:", MARGIN, y + 16, size=TITLE_SIZE, fill=MUTED)
+            y = self._draw_fixed(frame, verdict.scanned, y, TITLE_SIZE, fill)
+        if verdict.expected:
+            y = frame.text("Expected:", MARGIN, y + 16, size=TITLE_SIZE, fill=MUTED)
+            y = self._draw_fixed(frame, verdict.expected, y, TITLE_SIZE, fill)
+        if show_continue:
+            frame.button(y + 16, "Continue", "external-continue")
+        frame.header("Verify QR Code", "back")
 
     def _notice_layout(self, frame: Frame):
         face = font(TITLE_SIZE)

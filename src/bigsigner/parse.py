@@ -15,7 +15,7 @@ from .paths import (
     format_path,
     parse_path,
 )
-from .slip132 import Slip132Error, accept_for_role, label_of
+from .slip132 import Slip132Error, accept_for_role, display_form, label_of, to_canonical
 
 
 class ParseError(ValueError):
@@ -211,6 +211,90 @@ def _split_top_level(text: str) -> list[str]:
     if any(not part for part in parts):
         raise ParseError("The descriptor has an empty key.")
     return parts
+
+
+class KeyQrVerdict:
+    """How a scanned extended key compares with the key being loaded."""
+
+    def __init__(self, status: str, message: str, scanned: str = "", expected: str = ""):
+        self.status = status
+        self.message = message
+        self.scanned = scanned
+        self.expected = expected
+
+
+_BARE_EXTENDED = re.compile(r"^[1-9A-HJ-NP-Za-km-z]+$")
+_BRACKET_EXTENDED = re.compile(r"^\[([0-9a-fA-F]{8}|[mM])/([^\[\]]+)\]([1-9A-HJ-NP-Za-km-z]+)$")
+
+
+def verify_key_qr(text: str, key, network: str) -> KeyQrVerdict:
+    """Compare a hardware-wallet QR with the extended key on the review screen.
+
+    The code is ``[<fingerprint or m>/<path>]<xpub>`` or the extended key alone.
+    ``h`` and ``'`` are the same hardened step. Letter case in the fingerprint
+    is ignored. ``m`` means the fingerprint was left off.
+    """
+    body = "".join(text.replace("\ufeff", "").split())
+    bracket = _BRACKET_EXTENDED.fullmatch(body)
+    bare = _BARE_EXTENDED.fullmatch(body)
+    if bracket is None and bare is None:
+        return KeyQrVerdict("error", "The format could not be detected.")
+    extended = bare.group(0) if bare else bracket.group(3)
+    try:
+        scanned_label = label_of(extended)
+        canonical = to_canonical(extended, network)
+    except Slip132Error:
+        return KeyQrVerdict("error", "The format could not be detected.")
+    if canonical != key.canonical:
+        return KeyQrVerdict(
+            "error",
+            "The extended public key does not match.",
+            scanned=extended,
+            expected=_expected_extended(key, network, scanned_label),
+        )
+    if bare is not None:
+        return KeyQrVerdict(
+            "error",
+            "The extended public key is correct, but the derivation path is missing and must be verified.",
+        )
+    path_text = bracket.group(2)
+    try:
+        steps = parse_path(path_text)
+    except PathError:
+        steps = None
+    if steps is None or tuple(steps) != tuple(key.path):
+        return KeyQrVerdict(
+            "error",
+            "The derivation path does not match.",
+            scanned=path_text,
+            expected=format_path(list(key.path)),
+        )
+    fingerprint = bracket.group(1)
+    if fingerprint.lower() == "m":
+        return KeyQrVerdict(
+            "warning",
+            "The extended public key and the derivation path match. "
+            "The fingerprint is missing. This happens on some hardware wallets. "
+            "It is ok if the fingerprint is not displayed, as long as the wallet does not show a different fingerprint.",
+        )
+    if fingerprint.lower() != key.fingerprint.hex():
+        return KeyQrVerdict(
+            "error",
+            "The fingerprint does not match.",
+            scanned=fingerprint,
+            expected=key.fingerprint.hex(),
+        )
+    return KeyQrVerdict("success", "The key expression matches.")
+
+
+def _expected_extended(key, network: str, scanned_label: str) -> str:
+    """Our key in the same spelling as the scan, when that spelling exists."""
+    if scanned_label in ("xpub", "tpub"):
+        return key.canonical
+    slip = display_form(key.canonical, network, key.role)
+    if slip is not None and label_of(slip) == scanned_label:
+        return slip
+    return key.canonical
 
 
 def _branch_warnings(note: str) -> list[str]:
