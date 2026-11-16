@@ -71,7 +71,7 @@ def _app(files=None, *, fixture_date=True):
     app.screen = "keys"
     app.gpg.backend = FakeBackend()
     if fixture_date:
-        app.gpg.date = dict(year=2025, month=6, day=1, hour=0)
+        app.gpg.date = dict(year=2025, month=6, day=1)
     _tap(app, "menu")
     _tap(app, "GPG")
     return app
@@ -135,8 +135,9 @@ def test_date_selector_uses_utc_and_numeric_editing_and_clamps_leap_day():
     app = _app(fixture_date=False)
     _tap(app, "Verify Signature")
     _tap(app, "Detached Signature")
-    assert app.gpg.date == dict(year=2026, month=6, day=15, hour=13)
-    assert app.gpg.timestamp() == 1781528400  # 2026-06-15 13:00 UTC.
+    assert app.gpg.date == dict(year=2026, month=6, day=15)
+    assert app.gpg.timestamp() == 1781481600  # 2026-06-15 00:00:00 UTC.
+    assert "Hour" not in {hit["label"] for hit in app.hits}
     _tap(app, "Year")
     for digit in "2024":
         _tap(app, digit)
@@ -145,12 +146,6 @@ def test_date_selector_uses_utc_and_numeric_editing_and_clamps_leap_day():
     app.gpg.set_date("day", 29)
     _tap(app, "gpg-date-step:year:1")
     assert app.gpg.date["day"] == 28
-    _tap(app, "Hour")
-    _tap(app, "2")
-    _tap(app, "5")
-    _tap(app, "Save")
-    assert app.screen == "gpg-number"
-    assert "between 0 and 23" in app.gpg.date_error
 
 
 @pytest.mark.parametrize("source", ["file", "qr"])

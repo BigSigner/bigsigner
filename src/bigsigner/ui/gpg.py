@@ -9,14 +9,14 @@ from ..qr import MAX_BYTE_PAYLOAD
 from .canvas import BLUE, BODY_SIZE, HEADER, HEIGHT, INK, LINE, MARGIN, MUTED, PAPER, RED, TITLE_SIZE, WHITE, WIDTH, Frame, Icons, font, wrap
 
 
-DATE_NOTE = "Some GPG signatures and keys expire. Set the current date and hour so they can be checked correctly. The signer has no reliable clock."
+DATE_NOTE = "Some GPG signatures and keys expire. Set the current date so they can be checked correctly. The signer has no reliable clock."
 
 
 class GpgUI:
     def __init__(self, app, backend=None):
         self.app = app
         self.backend = backend or GpgBackend()
-        self.date = dict(year=2026, month=6, day=15, hour=13)
+        self.date = dict(year=2026, month=6, day=15)
         self.operation = "detached"
         self.edit_field = "year"
         self.draft = ""
@@ -55,11 +55,11 @@ class GpgUI:
 
     def timestamp(self):
         date = self.date
-        return calendar.timegm((date["year"], date["month"], date["day"], date["hour"], 0, 0))
+        return calendar.timegm((date["year"], date["month"], date["day"], 0, 0, 0))
 
     def limits(self, field):
         return {"year": (1970, 9999), "month": (1, 12),
-                "day": (1, calendar.monthrange(self.date["year"], self.date["month"])[1]), "hour": (0, 23)}[field]
+                "day": (1, calendar.monthrange(self.date["year"], self.date["month"])[1])}[field]
 
     def set_date(self, field, value):
         lo, hi = self.limits(field)
@@ -261,10 +261,10 @@ class GpgUI:
 
     def date_screen(self, frame):
         app = self.app
-        frame.header("Date and Time", "back")
+        frame.header("Date", "back")
         y = frame.text(DATE_NOTE, MARGIN, HEADER + 16, size=28)
         y += 16
-        for name in ("year", "month", "day", "hour"):
+        for name in ("year", "month", "day"):
             lo, hi = self.limits(name)
             app._brightness_button(frame, (MARGIN, y, MARGIN + 64, y + 64), "-", self.date[name] > lo, f"gpg-date-step:{name}:-1")
             app._brightness_button(frame, (WIDTH - MARGIN - 64, y, WIDTH - MARGIN, y + 64), "+", self.date[name] < hi, f"gpg-date-step:{name}:1")
@@ -276,7 +276,7 @@ class GpgUI:
             frame.text(value, x + frame.draw.textlength(label, font=face), y + 10, size=TITLE_SIZE)
             frame.hit((MARGIN + 76, y, WIDTH - MARGIN - 76, y + 64), f"gpg-date-edit:{name}", name.title())
             y += 80
-        frame.text("UTC · minutes and seconds: 00", MARGIN, y, size=24, fill=MUTED)
+        frame.text("UTC · 00:00:00", MARGIN, y, size=24, fill=MUTED)
         frame.button(HEIGHT - 110, "Continue", "gpg-date-continue")
 
     def number(self, frame):
