@@ -247,10 +247,10 @@ class GpgUI:
             face = font(28, mono=True)
             line_width = frame.draw.textlength(version, font=face)
             y = frame.text(version, (WIDTH - line_width) / 2, HEADER + 16, size=28, fill=MUTED, mono=True) + 8
-        y = frame.button(y, "List Trusted Keys", "gpg-list")
-        y = frame.button(y, "Load Trusted Key", "gpg-load")
+        y = frame.button(y, "List GPG Keys", "gpg-list")
+        y = frame.button(y, "Load GPG Key", "gpg-load")
         y = frame.button(y, "Verify Signature", "gpg-formats")
-        frame.text("Trusted keys stay in RAM and are cleared on reboot.", MARGIN, y + 12, size=28, fill=MUTED)
+        frame.text("GPG keys stay in RAM and are cleared on reboot.", MARGIN, y + 12, size=28, fill=MUTED)
 
     def formats(self, frame):
         frame.header("Verify Signature", "back")
@@ -294,13 +294,13 @@ class GpgUI:
         frame.button(HEIGHT - 110, "Save", "gpg-number-save", enabled=bool(self.draft))
 
     def key_source(self, frame):
-        frame.header("Load Trusted Key", "back")
+        frame.header("Load GPG Key", "back")
         y = frame.button(HEADER + 24, "Load from File", "gpg-load-file", icon=Icons.FILE, awesome=True)
         frame.button(y, "Scan QR Code", "gpg-scan-key", icon=Icons.CAMERA, awesome=True)
 
     def working(self, frame):
         frame.header("GPG")
-        labels = {"list": "Listing Trusted Keys…", "preview": "Reading Trusted Key…", "import": "Importing Trusted Key…",
+        labels = {"list": "Listing GPG Keys…", "preview": "Reading GPG Key…", "import": "Importing GPG Key…",
                   "verify": "Verifying Signature…", "export": "Exporting Private Key…" if self.export_secret else "Exporting Public Key…"}
         frame.text(labels.get(self.job_kind, "Working…"), MARGIN, HEADER + 40, size=BODY_SIZE)
         self.work_shown = True
@@ -347,15 +347,12 @@ class GpgUI:
         self.content_end += 8
         self.add_button("Export Public Key", "gpg-export-public")
         if key.secret:
-            self.content_end += 8
-            self.add_text("This key has a private key.", fill=MUTED, size=28)
-            self.content_end += 8
             self.add_button("Export Private Key", "gpg-export-private")
 
     def _key_cards(self, keys, *, summary, open_cards):
         self.reset_layout()
         if not keys and summary:
-            self.add_text("No trusted keys are loaded.")
+            self.add_text("No GPG keys are loaded.")
         fields = ("User ID:", "Fingerprint:", "Key ID:")
         if not summary:
             fields += ("Algorithm:", "Created:", "Expires:", "Validity:")
@@ -431,7 +428,7 @@ class GpgUI:
             if end - offset > HEADER and top - offset < bottom:
                 frame.draw.rounded_rectangle((left, top - offset, right, end - offset), radius=12, fill=WHITE, outline=LINE, width=2)
                 if action:
-                    frame.hit((left, max(top - offset, HEADER), right, min(end - offset, bottom)), action, "Trusted Key")
+                    frame.hit((left, max(top - offset, HEADER), right, min(end - offset, bottom)), action, "GPG Key")
         for y, text, action, height in self.buttons:
             top = y - offset
             if top >= HEADER and top < bottom:
@@ -447,10 +444,10 @@ class GpgUI:
         frame.header(title, "back")
 
     def keys(self, frame):
-        self.content(frame, "List Trusted Keys")
+        self.content(frame, "List GPG Keys")
 
     def details(self, frame):
-        self.content(frame, "Trusted Key")
+        self.content(frame, "GPG Key")
 
     def export_choice(self, frame):
         title = "Export Private Key" if self.export_secret else "Export Public Key"
@@ -473,7 +470,7 @@ class GpgUI:
         frame.header("Private Key" if self.export_secret else "Public Key", "back")
 
     def review(self, frame):
-        self.content(frame, "Load Trusted Key", review=True)
+        self.content(frame, "Load GPG Key", review=True)
 
     def result(self, frame):
         self.content(frame, "Success" if self.outcome.ok else "Error")

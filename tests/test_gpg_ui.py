@@ -50,12 +50,12 @@ class FakeBackend:
     def inspect_key(self, data, timestamp=None):
         self.calls.append(("inspect", data, timestamp))
         if not self.good:
-            return Outcome(False, "The trusted key could not be read.", [CommandResult("Key Details", 2, "", "gpg: no valid OpenPGP data found.")])
+            return Outcome(False, "The GPG key could not be read.", [CommandResult("Key Details", 2, "", "gpg: no valid OpenPGP data found.")])
         return Outcome(True, keys=parse_keys(COLONS), stages=[CommandResult("Key Details", 0, COLONS, "key preview diagnostics")])
 
     def import_key(self, data, timestamp=None):
         self.calls.append(("import", data, timestamp))
-        return Outcome(True, stages=[CommandResult("Import Trusted Key", 0, f"[GNUPG:] IMPORT_OK 1 {FPR}\n[GNUPG:] IMPORT_RES 1 0 1", "gpg: public key imported")])
+        return Outcome(True, stages=[CommandResult("Import GPG Key", 0, f"[GNUPG:] IMPORT_OK 1 {FPR}\n[GNUPG:] IMPORT_RES 1 0 1", "gpg: public key imported")])
 
     def verify(self, relative, storage, timestamp, checksums):
         self.calls.append(("verify", relative, storage, timestamp, checksums))
@@ -91,7 +91,7 @@ def _settle(app):
 def _review(source="file", good=True):
     app = _app()
     app.gpg.backend.good = good
-    _tap(app, "Load Trusted Key")
+    _tap(app, "Load GPG Key")
     assert app.screen == "gpg-key-source"
     assert "gpg-date" not in app.back
     if source == "file":
@@ -114,9 +114,9 @@ def test_gpg_menu_is_below_file_system_and_all_three_routes_are_available():
     assert rows["GPG"][3] == rows["Settings"][1]
     _tap(app, "GPG")
     app.render()
-    assert {hit["label"] for hit in app.hits} >= {"List Trusted Keys", "Load Trusted Key", "Verify Signature"}
+    assert {hit["label"] for hit in app.hits} >= {"List GPG Keys", "Load GPG Key", "Verify Signature"}
     version = next(item for item in app.texts if item["text"] == "gpg (GnuPG) 2.4.8")
-    first = next(hit for hit in app.hits if hit["label"] == "List Trusted Keys")
+    first = next(hit for hit in app.hits if hit["label"] == "List GPG Keys")
     assert version["box"][3] <= first["box"][1]
     assert version["box"][1] >= HEADER
     assert abs((version["box"][0] + version["box"][2]) / 2 - WIDTH / 2) < 2
@@ -126,7 +126,7 @@ def test_gpg_menu_omits_the_version_line_when_gpg_has_no_stdout():
     app = _app()
     app.gpg.backend.version_text = ""
     app.render()
-    button = next(hit for hit in app.hits if hit["label"] == "List Trusted Keys")
+    button = next(hit for hit in app.hits if hit["label"] == "List GPG Keys")
     assert button["box"][1] == HEADER + 24
     assert not any(item["text"].startswith("gpg (") for item in app.texts)
 
@@ -177,7 +177,7 @@ def test_key_is_only_imported_after_confirmation_and_cancel_discards_content(sou
 def _listed(*, secret=False):
     app = _app()
     app.gpg.backend.secret = secret
-    _tap(app, "List Trusted Keys")
+    _tap(app, "List GPG Keys")
     _settle(app)
     return app
 
@@ -223,7 +223,6 @@ def test_secret_key_can_be_exported_as_a_private_key_and_a_large_key_has_no_qr()
     _tap(app, "gpg-open:0")
     app.scroll["gpg-key-details"] = 10**9
     app.render()
-    assert any(row[2] == "This key has a private key." for row in app.gpg.rows)
     _tap(app, "Export Private Key")
     _settle(app)
     assert app.gpg.backend.calls[-1] == ("export", FPR, True)
@@ -252,7 +251,7 @@ def test_failed_export_shows_the_error_screen():
 
 def test_listing_keys_does_not_ask_for_a_date_and_back_returns_to_gpg():
     app = _app()
-    _tap(app, "List Trusted Keys")
+    _tap(app, "List GPG Keys")
     assert app.screen == "gpg-working"
     assert app.back == ["gpg"]
     _settle(app)
@@ -319,7 +318,7 @@ def test_work_starts_after_the_first_frame_and_completion_starts_a_fresh_input_g
 
     monkeypatch.setattr("concurrent.futures.ThreadPoolExecutor", ImmediateExecutor)
     app = _app()
-    _tap(app, "List Trusted Keys")
+    _tap(app, "List GPG Keys")
     assert app.screen == "gpg-working" and not app.gpg.backend.calls
     app.render()
     assert not app.gpg.backend.calls
@@ -334,7 +333,7 @@ def test_work_starts_after_the_first_frame_and_completion_starts_a_fresh_input_g
 def test_web_emulator_reports_unavailable_commands_without_fabricating_results():
     app = _app()
     app.gpg.backend.supported = False
-    _tap(app, "List Trusted Keys")
+    _tap(app, "List GPG Keys")
     app.render()
     app.render()
     assert app.screen == "gpg-result" and not app.gpg.outcome.ok
@@ -364,7 +363,7 @@ def test_gpg_screens_save_screenshots(real_backend):
     _tap(app, "back")
     _tap(app, "back")
     _tap(app, "back")
-    _tap(app, "Load Trusted Key")
+    _tap(app, "Load GPG Key")
     record.shot(app, "key-source")
     _tap(app, "Scan QR Code")
     app.accept_qr(b"test key")
@@ -379,16 +378,26 @@ def test_gpg_screens_save_screenshots(real_backend):
     app.scroll["gpg-result"] = 10**9
     record.shot(app, "import-success-bottom")
     app = _app()
-    _tap(app, "List Trusted Keys")
+    _tap(app, "List GPG Keys")
     _settle(app)
-    record.shot(app, "trusted-keys")
+    record.shot(app, "gpg-keys")
     _tap(app, "gpg-open:0")
-    record.shot(app, "trusted-key")
+    record.shot(app, "gpg-key")
     app.scroll["gpg-key-details"] = 10**9
-    record.shot(app, "trusted-key-bottom")
+    record.shot(app, "gpg-key-bottom")
     _tap(app, "Export Public Key")
     _settle(app)
     record.shot(app, "export-public")
+    app = _listed(secret=True)
+    _tap(app, "gpg-open:0")
+    app.scroll["gpg-key-details"] = 10**9
+    record.shot(app, "gpg-key-private")
+    assert "Export Private Key" in {hit["label"] for hit in app.hits}
+    _tap(app, "Export Private Key")
+    _settle(app)
+    record.shot(app, "export-private")
+    _tap(app, "Show QR Code")
+    record.shot(app, "private-key-qr")
     app = _app()
     _tap(app, "Verify Signature")
     record.shot(app, "verification-formats")

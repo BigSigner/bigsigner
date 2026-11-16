@@ -213,13 +213,13 @@ class GpgBackend:
             raise GpgError("The command could not be started: " + str(exc)) from exc
 
     def list_keys(self, timestamp=None):
-        listed = self.command("Trusted Keys", ["--with-colons", "--with-fingerprint", "--list-keys"], timestamp=timestamp)
+        listed = self.command("GPG Keys", ["--with-colons", "--with-fingerprint", "--list-keys"], timestamp=timestamp)
         if listed.returncode:
-            return Outcome(False, "Could not list trusted keys.", [listed])
+            return Outcome(False, "Could not list GPG keys.", [listed])
         secret = self.command("Secret Keys", ["--with-colons", "--with-fingerprint", "--list-secret-keys"], timestamp=timestamp, agent=True)
         stages = [listed, secret]
         if secret.returncode:
-            return Outcome(False, "Could not list trusted keys.", stages)
+            return Outcome(False, "Could not list GPG keys.", stages)
         try:
             keys = parse_keys(listed.stdout)
             secret_ids = {key.fingerprint for key in parse_keys(secret.stdout, secret=True)}
@@ -248,7 +248,7 @@ class GpgBackend:
     def inspect_key(self, content, timestamp=None):
         result = self.command("Key Details", ["--with-colons", "--show-keys", "--with-fingerprint"], data=content, timestamp=timestamp)
         if result.returncode:
-            return Outcome(False, "The trusted key could not be read.", [result])
+            return Outcome(False, "The GPG key could not be read.", [result])
         try:
             keys = parse_keys(result.stdout, secret=True)
             if not keys:
@@ -258,12 +258,12 @@ class GpgBackend:
         return Outcome(True, stages=[result], keys=keys)
 
     def import_key(self, content, timestamp=None):
-        result = self.command("Import Trusted Key", ["--status-fd", "1", "--import"], data=content, timestamp=timestamp, agent=True)
+        result = self.command("Import GPG Key", ["--status-fd", "1", "--import"], data=content, timestamp=timestamp, agent=True)
         names = status_names(result.stdout)
         summaries = [line.split()[2:] for line in result.stdout.splitlines() if line.startswith("[GNUPG:] IMPORT_RES ")]
         processed = any(parts and parts[0].isdigit() and int(parts[0]) > 0 for parts in summaries)
         ok = result.returncode == 0 and processed and not names.intersection({"IMPORT_PROBLEM", "FAILURE", "NODATA"})
-        return Outcome(ok, "" if ok else "The trusted key could not be imported.", [result])
+        return Outcome(ok, "" if ok else "The GPG key could not be imported.", [result])
 
     @staticmethod
     def _read_manifest(path):
