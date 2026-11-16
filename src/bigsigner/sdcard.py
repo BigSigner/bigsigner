@@ -137,6 +137,34 @@ def read_text(relative: str, *, raw: bool = False, storage: str = "sd") -> str:
     return text if raw else text.strip()
 
 
+def ascii_text(data: bytes) -> bool:
+    """True when every byte is printable ASCII, a tab, or CR/LF."""
+    return all(byte in (9, 10, 13) or 32 <= byte < 127 for byte in data)
+
+
+def file_is_ascii_text(relative: str, *, storage: str = "sd") -> bool:
+    """True when the whole file is ASCII text.
+
+    A disk file is read in chunks and the scan stops at the first other byte.
+    """
+    card = _memory_card(storage)
+    if card is not None:
+        return ascii_text(_file_bytes(relative, card, MEMORY_CAPACITY))
+    path = _disk_path(relative, storage)
+    if not path.is_file():
+        raise SdError("That is not a file.")
+    try:
+        with open(path, "rb") as handle:
+            while True:
+                chunk = handle.read(65536)
+                if not chunk:
+                    return True
+                if not ascii_text(chunk):
+                    return False
+    except OSError as exc:
+        raise SdError("That is not a file.") from exc
+
+
 def read_bytes(relative: str, *, storage: str = "sd", max_bytes: int = 256_000) -> bytes:
     """Read at most max_bytes, refusing larger files (256000 bytes by default)."""
     card = _memory_card(storage)

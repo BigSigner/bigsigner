@@ -3,8 +3,7 @@
 from pathlib import Path
 import re
 
-from .. import sdcard
-from ..qr import MAX_BYTE_PAYLOAD
+from .. import file_qr, sdcard
 from .canvas import BODY_SIZE, HEADER, HEIGHT, INK, MARGIN, MUTED, RED, TITLE_SIZE, WIDTH, Frame, Icons, font, wrap
 from .text_editor import TextEditor
 
@@ -15,7 +14,7 @@ SD_DELETE_NOTE = "Deleted content on SD cards may still be restored. Wipe the SD
 
 
 def is_text(data):
-    return all(byte in (9, 10, 13) or 32 <= byte < 127 for byte in data)
+    return sdcard.ascii_text(data)
 
 
 class FileSystemUI:
@@ -29,6 +28,13 @@ class FileSystemUI:
         self.name_mode = "create"
         self.destination_storage = "sd"
         self.destination_dir = ""
+        self.qr_parts: list = []
+        self.qr_index = 0
+        self.qr_note = ""
+        self.qr_mono = ""
+        self.qr_command = ""
+        self._text_key = None
+        self._text_value = False
         self.painters = {
             "filesystem": app._storage,
             "fs-details": self.details,
@@ -40,6 +46,7 @@ class FileSystemUI:
             "fs-move": self.move_browser,
             "fs-delete": self.delete_warning,
             "fs-qr-warning": self.qr_warning,
+            "fs-qr-guide": self.guide,
         }
 
     def open(self):
@@ -85,12 +92,17 @@ class FileSystemUI:
                 self.is_new = False
                 self.open_data()
             elif action == "fs-show-qr":
-                from .app import QR_BRIGHTNESS_DEFAULT
-
-                data = sdcard.read_bytes(self.path, storage=self.storage, max_bytes=MAX_BYTE_PAYLOAD)
-                app._open_qr(data)
-                app.qr_kind = "file"
-                app.qr_brightness = QR_BRIGHTNESS_DEFAULT
+                self._show_text_qr()
+            elif action == "fs-show-binary":
+                self._show_binary_qr()
+            elif action == "fs-show-base64":
+                self._show_base64_qr()
+            elif action == "fs-qr-open":
+                self._open_parts()
+            elif action == "fs-qr-prev":
+                self._step_part(-1)
+            elif action == "fs-qr-next":
+                self._step_part(1)
             elif action == "fs-new-directory":
                 self.begin_name("directory", "")
             elif action == "fs-new-file":
@@ -237,29 +249,103 @@ class FileSystemUI:
         self.editor.load(self.editor.original)
         self.app.back_one()
 
+    def _file_bytes(self, limit: int) -> bytes:
+        size = sdcard.file_size(self.path, storage=self.storage)
+        if size > limit:
+            raise sdcard.SdError("That file is too large.")
+        return sdcard.read_bytes(self.path, storage=self.storage, max_bytes=limit)
+
+    def _show_text_qr(self):
+        data = self._file_bytes(file_qr.QR_SPLIT_LIMIT)
+        if not is_text(data):
+            raise sdcard.SdError("That file is not text.")
+        if len(data) <= file_qr.TEXT_DIRECT:
+            self._show_codes([data])
+        else:
+            self._show_guide(file_qr.spaced_parts(file_qr.gzip_base64(data)))
+
+    def _show_binary_qr(self):
+        self._show_codes([self._file_bytes(file_qr.BINARY_DIRECT)])
+
+    def _show_base64_qr(self):
+        data = self._file_bytes(file_qr.QR_SPLIT_LIMIT)
+        if len(data) <= file_qr.BASE64_DIRECT:
+            encoded = file_qr.plain_base64(data)
+            self._show_codes(
+                [encoded],
+                note="Save this QR code as file. Decoding the file is done with:",
+                mono=file_qr.BASE64_DECODE,
+            )
+        else:
+            self._show_guide(file_qr.spaced_parts(file_qr.gzip_base64(data)))
+
+    def _show_codes(self, parts, note="", mono=""):
+        from .app import QR_BRIGHTNESS_DEFAULT
+
+        app = self.app
+        self.qr_parts = parts
+        self.qr_index = 0
+        self.qr_note = note
+        self.qr_mono = mono
+        app.qr_text = parts[0]
+        app._open_qr(parts[0])
+        app.qr_kind = "file"
+        app.qr_brightness = QR_BRIGHTNESS_DEFAULT
+
+    def _show_guide(self, parts):
+        app = self.app
+        self.qr_parts = parts
+        self.qr_index = 0
+        self.qr_note = ""
+        self.qr_mono = ""
+        self.qr_command = file_qr.recovery_command(Path(self.path).name)
+        app.scroll["fs-qr-guide"] = 0
+        app.go("fs-qr-guide")
+
+    def _open_parts(self):
+        if not self.qr_parts:
+            return
+        self.qr_index = 0
+        self._show_codes(self.qr_parts)
+
+    def _step_part(self, delta: int):
+        if len(self.qr_parts) < 2 or self.app.screen != "qr":
+            return
+        self.qr_index = (self.qr_index + delta) % len(self.qr_parts)
+        self.app.qr_text = self.qr_parts[self.qr_index]
+        self.app.qr_zoom = None
+
+    def _is_ascii_file(self, size: int) -> bool:
+        key = (self.storage, self.path, size)
+        if self._text_key != key:
+            self._text_key = key
+            self._text_value = sdcard.file_is_ascii_text(self.path, storage=self.storage)
+        return self._text_value
+
     def details(self, frame):
         app = self.app
         try:
             size = sdcard.file_size(self.path, storage=self.storage)
+            text = self._is_ascii_file(size)
         except sdcard.SdError as exc:
             frame.header("File Details", "back")
             frame.text(str(exc), MARGIN, HEADER + 24, size=TITLE_SIZE, fill=RED)
             return
-        end = self._details_flow(frame, size, False, 0)
+        end = self._details_flow(frame, size, text, False, 0)
         offset = app._scroll_offset("fs-details", end, clearance=20)
-        self._details_flow(frame, size, True, offset)
+        self._details_flow(frame, size, text, True, offset)
         frame.header("File Details", "back")
 
     @staticmethod
-    def centered(frame, text, y, size, *, mono=False):
+    def centered(frame, text, y, size, *, mono=False, fill=INK):
         face = font(size, mono=mono)
         for line in wrap(frame.draw, text, face, WIDTH - 2 * MARGIN):
             width = frame.draw.textlength(line, font=face)
-            frame.text(line, (WIDTH - width) / 2, y, size=size, mono=mono)
+            frame.text(line, (WIDTH - width) / 2, y, size=size, mono=mono, fill=fill)
             y += size + 8
         return y
 
-    def _details_flow(self, frame, size, paint, offset):
+    def _details_flow(self, frame, size, text, paint, offset):
         app = self.app
         y = HEADER + 20
         size_text = f"{size:,} {'byte' if size == 1 else 'bytes'}"
@@ -279,23 +365,145 @@ class FileSystemUI:
         if size > OPEN_LIMIT:
             y = app._flow_text(frame, y, "Files larger than 50 KB cannot be opened.", paint, offset, 28, MUTED)
             y += 8
-        y = app._flow_button(frame, y, "Show QR", "fs-show-qr", paint, offset, enabled=size <= MAX_BYTE_PAYLOAD)
-        if size > MAX_BYTE_PAYLOAD:
-            y = app._flow_text(frame, y, "The file content is too large for a single QR code.", paint, offset, 28, MUTED)
-            y += 8
+        if text:
+            y = app._flow_button(frame, y, "Show QR", "fs-show-qr", paint, offset, enabled=size <= file_qr.QR_SPLIT_LIMIT)
+            if size > file_qr.QR_SPLIT_LIMIT:
+                y = app._flow_text(frame, y, "This file is too long to show as a QR code.", paint, offset, 28, MUTED)
+                y += 8
+        else:
+            y = self._binary_qr_row(frame, y, size, paint, offset)
         y = app._flow_button(frame, y, "Rename", "fs-rename", paint, offset)
         y = app._flow_button(frame, y, "Move", "fs-move", paint, offset)
         return app._flow_button(frame, y, "Delete", "fs-delete", paint, offset, color=RED)
 
+    def _binary_qr_row(self, frame, y, size, paint, offset):
+        app = self.app
+        label = "Show QR Code"
+        if paint:
+            self.centered(frame, label, y - offset, BODY_SIZE, fill=MUTED)
+        y += app._text_height(frame, label, BODY_SIZE) + 8
+        binary_ok = size <= file_qr.BINARY_DIRECT
+        base64_ok = size <= file_qr.QR_SPLIT_LIMIT
+        height = max(frame.button_height("Binary"), frame.button_height("Base64"))
+        top = y - offset
+        gap = 12
+        width = (WIDTH - 2 * MARGIN - gap) // 2
+        if paint and top + height > HEADER and top < HEIGHT:
+            text_delta = frame._button_metrics("Base64", False)[4]
+            frame.button_box(
+                (MARGIN, top, MARGIN + width, top + height), "Binary", "fs-show-binary",
+                text_delta=text_delta, enabled=binary_ok,
+            )
+            frame.button_box(
+                (MARGIN + width + gap, top, WIDTH - MARGIN, top + height), "Base64", "fs-show-base64",
+                text_delta=text_delta, enabled=base64_ok,
+            )
+        y += height + 12
+        if not binary_ok or not base64_ok:
+            y = app._flow_text(frame, y, "Large files cannot be displayed in some QR formats.", paint, offset, 28, MUTED)
+            y += 8
+        return y
+
+    def guide(self, frame):
+        app = self.app
+        label = "Show QR Code" if len(self.qr_parts) == 1 else "Show QR Codes"
+        button_h = frame.button_height(label)
+        footer = HEIGHT - 16 - button_h
+        frame.clip_bottom = footer - 20
+        end = self._guide_body(frame, False, 0)
+        offset = app._scroll_offset("fs-qr-guide", end, clearance=HEIGHT - footer + 16)
+        self._guide_body(frame, True, offset)
+        frame.clip_bottom = HEIGHT
+        frame.button(footer, label, "fs-qr-open")
+        frame.header("File QR", "back")
+
+    def _guide_body(self, frame, paint, offset):
+        app = self.app
+        count = len(self.qr_parts)
+        codes = "1 QR code" if count == 1 else f"{count} QR codes"
+        intro = (
+            f"This file is large and has been split over {codes}. "
+            "Save the content of each QR code in a file. "
+            "Name them file-part-00, file-part-01, and so on, starting with the first QR code. "
+            "On a Mac or Linux, run:"
+        )
+        y = HEADER + 20
+        y = app._flow_text(frame, y, intro, paint, offset, BODY_SIZE)
+        y += 8
+        return self._command_block(frame, y, paint, offset)
+
+    def _command_block(self, frame, y, paint, offset):
+        """The recovery command at the title size. Quoted words are not split on their spaces."""
+        size = TITLE_SIZE
+        face = font(size, mono=True)
+        width = WIDTH - 2 * MARGIN
+        lines = []
+        for paragraph in self.qr_command.split("\n"):
+            current = ""
+            for word in file_qr.shell_words(paragraph):
+                trial = word if not current else f"{current} {word}"
+                if frame.draw.textlength(trial, font=face) <= width:
+                    current = trial
+                    continue
+                if current:
+                    lines.append(current)
+                if frame.draw.textlength(word, font=face) <= width:
+                    current = word
+                    continue
+                chunk = ""
+                for char in word:
+                    if frame.draw.textlength(chunk + char, font=face) <= width:
+                        chunk += char
+                    else:
+                        lines.append(chunk)
+                        chunk = char
+                current = chunk
+            if current:
+                lines.append(current)
+        clip_top = getattr(frame, "clip_top", HEADER)
+        clip_bottom = getattr(frame, "clip_bottom", HEIGHT)
+        for line in lines:
+            shown = y - offset
+            # A line that starts above the button still has to finish above it.
+            if paint and shown >= clip_top and shown + size <= clip_bottom:
+                frame.draw.text((MARGIN, shown), line, font=face, fill=INK)
+                frame.mark(line, frame.draw.textbbox((MARGIN, shown), line, font=face))
+            y += size + 8
+        return y
+
     def qr(self, frame):
         from .app import QR_BRIGHTNESS_DEFAULT, _qr_image, _qr_light
 
+        app = self.app
+        many = len(self.qr_parts) > 1
+        top = HEADER + 16
         light = _qr_light(QR_BRIGHTNESS_DEFAULT)
         frame.draw.rectangle((0, 0, WIDTH, HEIGHT), fill=light)
-        top = HEADER + 24
-        image = _qr_image(self.app.qr_text, WIDTH - 2 * MARGIN, light)
-        frame.image.paste(image, (MARGIN, top))
-        self.app._brightness_control(frame, top + image.height + 24)
+        if many:
+            bright_y = HEIGHT - 88 - 12 - 52
+            box = min(WIDTH - 2 * MARGIN, bright_y - 12 - top)
+        else:
+            below = 52 + 16
+            if self.qr_note:
+                below += app._text_height(frame, self.qr_note, 28) + 8
+            if self.qr_mono:
+                below += app._text_height(frame, self.qr_mono, 28, mono=True) + 8
+            box = min(WIDTH - 2 * MARGIN, HEIGHT - 16 - below - top)
+        image = _qr_image(app.qr_text, max(160, box), light)
+        frame.image.paste(image, ((WIDTH - image.width) // 2, top))
+        if many:
+            app._brightness_control(frame, HEIGHT - 88 - 12 - 52)
+            app._format_switcher(
+                frame, f"{self.qr_index + 1} of {len(self.qr_parts)}", "fs-qr-prev", "fs-qr-next",
+            )
+        else:
+            bright_y = top + image.height + 12
+            app._brightness_control(frame, bright_y)
+            y = bright_y + 52 + 12
+            if self.qr_note:
+                y = frame.text(self.qr_note, MARGIN, y, size=28)
+            if self.qr_mono:
+                frame.text(self.qr_mono, MARGIN, y + 4, size=28, mono=True)
         frame.header("File QR", "back")
 
     def new_source(self, frame):

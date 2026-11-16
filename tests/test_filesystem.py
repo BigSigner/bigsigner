@@ -7,11 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from bigsigner import sdcard
-from bigsigner.qr import MAX_BYTE_PAYLOAD
+from bigsigner import file_qr, sdcard
 from bigsigner.ui.app import App, QR_BRIGHTNESS_DEFAULT
 from bigsigner.ui.canvas import BLUE, HEADER, HEIGHT, MARGIN, WIDTH
-from bigsigner.ui.filesystem import OPEN_LIMIT, SD_DELETE_NOTE, SEQUENCE_NOTE
+from bigsigner.ui.filesystem import OPEN_LIMIT, SD_DELETE_NOTE, SEQUENCE_NOTE, is_text
 from test_sdcard import _tap
 
 
@@ -37,6 +36,16 @@ def _browser(files=None, storage="sd", dirs=None):
     assert app.screen == "sd"
     app.render()
     return app
+
+
+def _noisy(count):
+    """Bytes that do not shrink much under gzip, so a QR split has several parts."""
+    value = 1
+    out = bytearray()
+    for _ in range(count):
+        value = (value * 1103515245 + 12345) & 0x7FFFFFFF
+        out.append(value & 0xFF)
+    return bytes(out)
 
 
 def _details(data=b"hello", storage="sd", name="file.txt"):
@@ -242,34 +251,32 @@ def test_file_details_show_exact_size_and_open_limit(size, can_open):
         assert {hit["label"] for hit in app.hits} >= {"Rename", "Move", "Delete"}
 
 
-@pytest.mark.parametrize("size", [0, MAX_BYTE_PAYLOAD, MAX_BYTE_PAYLOAD + 1, OPEN_LIMIT + 1])
-def test_file_qr_capacity_uses_file_size_without_reading_oversized_content(size, monkeypatch):
-    original = sdcard.read_bytes
-    reads = []
-
-    def read(path, **kwargs):
-        reads.append(kwargs["max_bytes"])
-        return original(path, **kwargs)
-
-    monkeypatch.setattr(sdcard, "read_bytes", read)
+@pytest.mark.parametrize("size", [0, file_qr.TEXT_DIRECT, file_qr.TEXT_DIRECT + 1, file_qr.QR_SPLIT_LIMIT, file_qr.QR_SPLIT_LIMIT + 1, OPEN_LIMIT + 1])
+def test_text_file_qr_follows_the_size_limits(size):
     app = _details(b"x" * size)
-    assert not reads
-    enabled = size <= MAX_BYTE_PAYLOAD
+    enabled = size <= file_qr.QR_SPLIT_LIMIT
     assert any(hit["action"] == "fs-show-qr" for hit in app.hits) == enabled
-    if enabled:
-        _tap(app, "Show QR")
-        assert reads == [MAX_BYTE_PAYLOAD]
+    if not enabled:
+        assert "too long to show as a QR code." in " ".join(item["text"] for item in app.texts)
+        return
+    _tap(app, "Show QR")
+    if size <= file_qr.TEXT_DIRECT:
         assert app.screen == "qr" and app.qr_kind == "file"
+        assert app._qr_payload() == b"x" * size
         app.render()
     else:
-        assert "too large for a single QR code." in " ".join(item["text"] for item in app.texts)
+        assert app.screen == "fs-qr-guide"
+        app.scroll["fs-qr-guide"] = 10**9
+        app.render()
+        assert "'file.txt'" in app.fs.qr_command
+        assert "'file.txt'" in " ".join(item["text"] for item in app.texts)
 
 
 @pytest.mark.parametrize("storage", ["sd", "temporary"])
 @pytest.mark.parametrize("data", [b"  hello\r\nworld! \n", bytes(range(256))])
 def test_file_qr_preserves_bytes_and_dims_the_whole_screen(storage, data):
     app = _details(data, storage=storage)
-    _tap(app, "Show QR")
+    _tap(app, "Show QR" if is_text(data) else "Binary")
     assert app._qr_payload() == data
     normal = app.render()
     assert "File QR" in [item["text"] for item in app.texts]
@@ -288,10 +295,74 @@ def test_file_qr_preserves_bytes_and_dims_the_whole_screen(storage, data):
 
 def test_file_qr_refuses_a_file_that_grows_after_details_are_shown():
     app = _details(b"small")
-    sdcard.write_text("file.txt", "x" * (MAX_BYTE_PAYLOAD + 1))
+    sdcard.write_text("file.txt", "x" * (file_qr.QR_SPLIT_LIMIT + 1))
     app._act("fs-show-qr")
     assert app.screen == "fs-details"
     assert app.notice_error and "too large" in app.notice
+
+
+@pytest.mark.parametrize(
+    "size,binary,base64",
+    [(1, True, True), (file_qr.BINARY_DIRECT, True, True), (file_qr.BINARY_DIRECT + 1, False, True), (file_qr.QR_SPLIT_LIMIT, False, True), (file_qr.QR_SPLIT_LIMIT + 1, False, False)],
+)
+def test_binary_file_offers_binary_and_base64_qr(size, binary, base64):
+    app = _details(bytes(index % 256 for index in range(size)) or b"\xff")
+    actions = {hit["action"] for hit in app.hits}
+    assert "fs-show-qr" not in actions
+    assert ("fs-show-binary" in actions) == binary
+    assert ("fs-show-base64" in actions) == base64
+    assert ("Large files cannot be displayed in some QR formats." in " ".join(item["text"] for item in app.texts)) == (not binary or not base64)
+
+
+def test_split_guide_quotes_spaces_and_a_single_quote_in_the_file_name():
+    app = _details(b"y" * 500, name="my file's data.bin")
+    _tap(app, "Show QR")
+    assert app.screen == "fs-qr-guide"
+    assert app.fs.qr_command.endswith("'my file'\\''s data.bin'")
+    app.render()
+    assert app.scroll_max["fs-qr-guide"] > 0
+
+
+def test_short_binary_base64_is_one_qr_with_the_decode_command():
+    data = bytes(range(200))
+    app = _details(data)
+    _tap(app, "Base64")
+    assert app.screen == "qr" and app._qr_payload() == file_qr.plain_base64(data)
+    app.render()
+    shown = " ".join(item["text"] for item in app.texts)
+    assert file_qr.BASE64_DECODE in shown
+    assert {hit["action"] for hit in app.hits} >= {"brightness-down", "brightness-up", "back"}
+
+
+def test_long_binary_base64_splits_and_pages_with_brightness():
+    data = _noisy(1500)
+    app = _details(data)
+    _tap(app, "Base64")
+    assert app.screen == "fs-qr-guide" and len(app.fs.qr_parts) > 1
+    app.scroll["fs-qr-guide"] = 10**9
+    app.render()
+    shown = " ".join(item["text"] for item in app.texts)
+    assert "set -o pipefail" in app.fs.qr_command and "'file.txt'" in shown
+    assert app.scroll_max["fs-qr-guide"] > 0
+    app.scroll["fs-qr-guide"] = 0
+    app.pointer_down(200, 400)
+    app.pointer_move(200, 200)
+    app.pointer_up(200, 200)
+    assert app.scroll["fs-qr-guide"] > 0
+    app._scroll_at = None
+    _tap(app, "Show QR Codes")
+    assert app.screen == "qr" and app.qr_kind == "file"
+    first = app._qr_payload()
+    assert first.startswith(" " * (len(app.fs.qr_parts) + 1))
+    assert not first.endswith(" ")
+    app.render()
+    assert {hit["action"] for hit in app.hits} >= {"brightness-down", "brightness-up", "fs-qr-next"}
+    _tap(app, ">")
+    second = app._qr_payload()
+    assert second != first and second.endswith(" ")
+    _tap(app, "back")
+    assert app.screen == "fs-qr-guide"
+    assert app.qr_brightness == QR_BRIGHTNESS_DEFAULT
 
 
 def test_text_edit_save_disabled_until_changed_and_back_warns():
@@ -521,6 +592,18 @@ def test_filesystem_screens_save_screenshots():
     record.shot(app, "sd-delete-warning")
     app = _details(b"x" * (OPEN_LIMIT + 1))
     record.shot(app, "too-large")
+    app = _details(bytes(range(200)))
+    record.shot(app, "binary-choice")
+    record.click(app, "Base64")
+    record.shot(app, "base64-direct")
+    app = _details(_noisy(1500))
+    record.shot(app, "binary-large-choice")
+    record.click(app, "Base64")
+    record.shot(app, "split-guide")
+    record.click(app, "Show QR Codes")
+    record.shot(app, "split-qr")
+    record.click(app, ">")
+    record.shot(app, "split-qr-next")
     app = _details(bytes(range(256)) * 100)
     record.click(app, "Open")
     record.shot(app, "binary")

@@ -334,7 +334,7 @@ class Frame:
             self.hit(box, action, label or text)
         return y + height + 12
 
-    def button_box(self, box, text: str, action: str, color=BLUE, text_delta: float | None = None):
+    def button_box(self, box, text: str, action: str, color=BLUE, text_delta: float | None = None, enabled: bool = True):
         """A button drawn in a given box, with the same label placement as `button`.
 
         ``text_delta`` pins the baseline. Side-by-side labels share one value so a
@@ -343,12 +343,17 @@ class Frame:
         face, lines, line_h, _height, own_delta, _icon_size, _icon_gap = self._button_metrics(text, False)
         if text_delta is None:
             text_delta = own_delta
+        text_fill = WHITE
+        if not enabled:
+            color = (186, 190, 196)
+            text_fill = (132, 136, 142)
         text_top = box[1] + text_delta
         self.draw.rounded_rectangle(box, radius=14, fill=color)
         for index, line in enumerate(lines):
             width = self.draw.textlength(line, font=face)
-            self.draw.text(((box[0] + box[2] - width) / 2, text_top + index * line_h), line, font=face, fill=WHITE)
-        self.hit(box, action, text)
+            self.draw.text(((box[0] + box[2] - width) / 2, text_top + index * line_h), line, font=face, fill=text_fill)
+        if enabled:
+            self.hit(box, action, text)
 
     def fingerprint_icon(self, x: int, y: int, size: int = 28, fill=MUTED):
         self.glyph(Icons.FINGERPRINT, x + size / 2, y + size / 2, size, fill)
