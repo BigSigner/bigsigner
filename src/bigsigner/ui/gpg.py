@@ -1,17 +1,25 @@
 """GPG key review, date selection, and signature/checksum result screens."""
 
 import calendar
+import os
 import re
+import time
 
 from .. import sdcard
+from ..entropy import camera_digest
 from ..gpg import GpgBackend, GpgError, KEY_LIMIT, Outcome
 from ..qr import MAX_BYTE_PAYLOAD
 from .canvas import BLUE, BODY_SIZE, HEADER, HEIGHT, INK, LINE, MARGIN, MUTED, PAPER, RED, TITLE_SIZE, WARNING, WHITE, WIDTH, Frame, Icons, font, wrap
 
 
-DATE_NOTE = "Some GPG signatures and keys expire. Set the current date so they can be checked correctly. The signer has no reliable clock."
+DATE_NOTE = "Some GPG signatures and keys expire. Set the current date so they can be checked correctly. The air-gapped device has no reliable clock."
+SUBKEY_TIME_NOTE = "This time is written on the new subkey. The air-gapped device has no reliable clock."
+EXPIRE_NOTE = "This is the UTC time when the subkey expires."
+SUBKEY_NOTE = "Adding a subkey requires the certificate's private key."
 PRIVATE_NOTE = "Contains a private key"
 _USAGE = (("c", "Certification"), ("s", "Signing"), ("e", "Encryption"), ("a", "Authentication"))
+_SUBKEY_ALGOS = (("ed25519", "Ed25519"), ("cv25519", "Curve25519"), ("rsa3072", "RSA-3072"), ("rsa4096", "RSA-4096"))
+_SUBKEY_USAGES = (("sign", "Signing"), ("encr", "Encryption"), ("auth", "Authentication"))
 
 
 class GpgUI:
@@ -19,6 +27,13 @@ class GpgUI:
         self.app = app
         self.backend = backend or GpgBackend()
         self.date = dict(year=2026, month=6, day=15)
+        self.subkey_clock = dict(year=2026, month=6, day=15, hour=0, minute=0)
+        self.clock = "date"
+        self.subkey_algo = "ed25519"
+        self.subkey_usage = "sign"
+        self.subkey_expire = None
+        self.expire_clock = dict(year=2027, month=6, day=15, hour=0)
+        self.details_back = []
         self.operation = "detached"
         self.edit_field = "year"
         self.draft = ""
@@ -43,10 +58,12 @@ class GpgUI:
         self.job_kind = ""
         self.work_shown = False
         self.painters = {"gpg": self.home, "gpg-formats": self.formats, "gpg-date": self.date_screen,
-                         "gpg-number": self.number, "gpg-key-source": self.key_source,
-                         "gpg-working": self.working, "gpg-keys": self.keys,
+                         "gpg-subkey-time": self.date_screen, "gpg-subkey-expire": self.date_screen,
+                         "gpg-number": self.number,
+                         "gpg-key-source": self.key_source, "gpg-working": self.working, "gpg-keys": self.keys,
                          "gpg-key-details": self.details, "gpg-export": self.export_choice,
-                         "gpg-key-qr": self.key_qr, "gpg-review": self.review, "gpg-result": self.result}
+                         "gpg-key-qr": self.key_qr, "gpg-review": self.review, "gpg-result": self.result,
+                         "gpg-subkey-options": self.subkey_options}
 
     def open(self):
         app = self.app
@@ -58,21 +75,41 @@ class GpgUI:
         app.menu = app.add_menu = False
         app.open_dropdown = None
 
+    def active_clock(self):
+        if self.clock == "subkey":
+            return self.subkey_clock
+        if self.clock == "expire":
+            return self.expire_clock
+        return self.date
+
     def timestamp(self):
         date = self.date
         return calendar.timegm((date["year"], date["month"], date["day"], 0, 0, 0))
 
+    def subkey_timestamp(self):
+        clock = self.subkey_clock
+        return calendar.timegm((clock["year"], clock["month"], clock["day"], clock["hour"], clock["minute"], 0))
+
     def limits(self, field):
-        return {"year": (1970, 9999), "month": (1, 12),
-                "day": (1, calendar.monthrange(self.date["year"], self.date["month"])[1])}[field]
+        clock = self.active_clock()
+        if field == "hour":
+            return (0, 23)
+        if field == "minute":
+            return (0, 59)
+        if field == "year":
+            return (1970, 9999)
+        if field == "month":
+            return (1, 12)
+        return (1, calendar.monthrange(clock["year"], clock["month"])[1])
 
     def set_date(self, field, value):
         lo, hi = self.limits(field)
         if not lo <= value <= hi:
             self.date_error = f"{field.title()} must be between {lo} and {hi}."
             return False
-        self.date[field] = value
-        self.date["day"] = min(self.date["day"], self.limits("day")[1])
+        clock = self.active_clock()
+        clock[field] = value
+        clock["day"] = min(clock["day"], self.limits("day")[1])
         self.date_error = ""
         return True
 
@@ -86,13 +123,15 @@ class GpgUI:
             app.go("gpg-formats")
         elif action.startswith("gpg-date:"):
             self.operation = action.split(":", 1)[1]
+            self.clock = "date"
             app.go("gpg-date")
         elif action.startswith("gpg-date-step:"):
             field, delta = action.split(":")[1:]
-            self.set_date(field, self.date[field] + int(delta))
+            clock = self.active_clock()
+            self.set_date(field, clock[field] + int(delta))
         elif action.startswith("gpg-date-edit:"):
             self.edit_field = action.split(":", 1)[1]
-            self.draft = str(self.date[self.edit_field])
+            self.draft = str(self.active_clock()[self.edit_field])
             self.replace_digit = True
             self.date_error = ""
             app.go("gpg-number")
@@ -110,7 +149,37 @@ class GpgUI:
             if self.draft and self.set_date(self.edit_field, int(self.draft)):
                 app.back_one()
         elif action == "gpg-date-continue":
-            app._open_sd("gpg-verify")
+            if self.clock == "subkey":
+                self._start_add_subkey()
+            else:
+                app._open_sd("gpg-verify")
+        elif action == "gpg-add-subkey":
+            key = self.selected
+            if key is None or not key.secret_available:
+                return
+            self.details_back = list(app.back)
+            app.camera_frames = []
+            app.camera_final = b""
+            app.camera_purpose = "gpg"
+            app.go("camera")
+        elif action == "gpg-subkey-time":
+            self.clock = "subkey"
+            app.open_dropdown = None
+            app.go("gpg-subkey-time")
+        elif action == "gpg-subkey-expire":
+            self.clock = "expire"
+            app.open_dropdown = None
+            if self.subkey_expire:
+                self.expire_clock = dict(self.subkey_expire)
+            else:
+                self.expire_clock = self._draft_expiration()
+            app.go("gpg-subkey-expire")
+        elif action == "gpg-expire-clear":
+            self.subkey_expire = None
+            app.back_one()
+        elif action == "gpg-expire-save":
+            self.subkey_expire = dict(self.expire_clock)
+            app.back_one()
         elif action == "gpg-load-file":
             app._open_sd("gpg-key")
         elif action == "gpg-scan-key":
@@ -244,6 +313,15 @@ class GpgUI:
         elif outcome.ok and self.job_kind in ("list", "preview"):
             self.build_keys(summary=self.job_kind == "list")
             self.app.screen = "gpg-review" if self.job_kind == "preview" else "gpg-keys"
+        elif outcome.ok and self.job_kind == "add-subkey":
+            fingerprint = self.selected.fingerprint if self.selected else ""
+            match = next((key for key in outcome.keys if key.fingerprint == fingerprint), None)
+            if match is not None:
+                self.selected = match
+            self.build_details()
+            self.app.back = list(self.details_back)
+            self.app.screen = "gpg-key-details"
+            self.app.set_notice("The subkey was added.")
         else:
             self.key_data = b""
             self.build_result()
@@ -279,23 +357,36 @@ class GpgUI:
 
     def date_screen(self, frame):
         app = self.app
-        frame.header("Date", "back")
-        y = frame.text(DATE_NOTE, MARGIN, HEADER + 16, size=28)
+        kind = self.clock if self.clock in ("subkey", "expire") else "date"
+        notes = {"subkey": SUBKEY_TIME_NOTE, "expire": EXPIRE_NOTE, "date": DATE_NOTE}
+        fields = {"subkey": ("year", "month", "day", "hour", "minute"),
+                  "expire": ("year", "month", "day", "hour"),
+                  "date": ("year", "month", "day")}
+        footers = {"subkey": "Seconds are 00 UTC.", "expire": "Minutes are 00 UTC.", "date": "UTC · 00:00:00"}
+        frame.header({"subkey": "Time", "expire": "Expires", "date": "Date"}[kind], "back")
+        y = frame.text(notes[kind], MARGIN, HEADER + 16, size=28)
         y += 16
-        for name in ("year", "month", "day"):
+        clock = self.active_clock()
+        for name in fields[kind]:
             lo, hi = self.limits(name)
-            app._brightness_button(frame, (MARGIN, y, MARGIN + 64, y + 64), "-", self.date[name] > lo, f"gpg-date-step:{name}:-1")
-            app._brightness_button(frame, (WIDTH - MARGIN - 64, y, WIDTH - MARGIN, y + 64), "+", self.date[name] < hi, f"gpg-date-step:{name}:1")
+            app._brightness_button(frame, (MARGIN, y, MARGIN + 64, y + 64), "-", clock[name] > lo, f"gpg-date-step:{name}:-1")
+            app._brightness_button(frame, (WIDTH - MARGIN - 64, y, WIDTH - MARGIN, y + 64), "+", clock[name] < hi, f"gpg-date-step:{name}:1")
             label = name.title() + ": "
-            value = str(self.date[name]) if name == "year" else f"{self.date[name]:02d}"
+            value = str(clock[name]) if name == "year" else f"{clock[name]:02d}"
             face = font(TITLE_SIZE)
             x = (WIDTH - frame.draw.textlength(label + value, font=face)) / 2
             frame.text(label, x, y + 10, size=TITLE_SIZE, fill=MUTED)
             frame.text(value, x + frame.draw.textlength(label, font=face), y + 10, size=TITLE_SIZE)
             frame.hit((MARGIN + 76, y, WIDTH - MARGIN - 76, y + 64), f"gpg-date-edit:{name}", name.title())
             y += 80
-        frame.text("UTC · 00:00:00", MARGIN, y, size=24, fill=MUTED)
-        frame.button(HEIGHT - 110, "Continue", "gpg-date-continue")
+        frame.text(footers[kind], MARGIN, y, size=24, fill=MUTED)
+        if kind == "expire":
+            set_top = HEIGHT - 110
+            clear_top = set_top - 16 - frame.button_height("No Expiration")
+            frame.button(clear_top, "No Expiration", "gpg-expire-clear")
+            frame.button(set_top, "Set Expiration", "gpg-expire-save")
+        else:
+            frame.button(HEIGHT - 110, "Add a Subkey" if kind == "subkey" else "Continue", "gpg-date-continue")
 
     def number(self, frame):
         frame.header("Set " + self.edit_field.title(), "back")
@@ -319,7 +410,7 @@ class GpgUI:
     def working(self, frame):
         frame.header("GPG")
         labels = {"list": "Listing GPG Keys…", "preview": "Reading GPG Key…", "import": "Importing GPG Key…",
-                  "verify": "Verifying Signature…", "export": self._export_progress()}
+                  "verify": "Verifying Signature…", "export": self._export_progress(), "add-subkey": "Adding a Subkey…"}
         frame.text(labels.get(self.job_kind, "Working…"), MARGIN, HEADER + 40, size=BODY_SIZE)
         self.work_shown = True
 
@@ -328,9 +419,9 @@ class GpgUI:
         self.content_end = HEADER + 20
         self.scratch = Frame()
 
-    def add_button(self, text, action, *, inset=0):
+    def add_button(self, text, action, *, inset=0, enabled=True):
         height = self.scratch.button_height(text, inset=inset)
-        self.buttons.append((self.content_end, text, action, height, inset))
+        self.buttons.append((self.content_end, text, action, height, inset, enabled))
         self.content_end += height + 12
 
     def add_text(self, text, *, fill=INK, size=TITLE_SIZE, mono=False, center=False, inset=0):
@@ -410,7 +501,7 @@ class GpgUI:
             self.add_text(value, mono=mono, inset=16)
         self.content_end += 8
 
-    def _card(self, values, fields, *, open_action="", private=False, heading="", buttons=()):
+    def _card(self, values, fields, *, open_action="", private=False, heading="", buttons=(), note=""):
         top = self.content_end
         self.content_end += 16
         if heading:
@@ -423,8 +514,12 @@ class GpgUI:
                 self.content_end += 8
         if buttons:
             self.content_end += 4
-            for text, action in buttons:
-                self.add_button(text, action, inset=16)
+            for item in buttons:
+                text, action = item[0], item[1]
+                enabled = item[2] if len(item) > 2 else True
+                self.add_button(text, action, inset=16, enabled=enabled)
+            if note:
+                self.add_text(note, fill=MUTED, size=28, inset=16)
         self.content_end += 8
         self.cards.append((MARGIN, top, WIDTH - MARGIN, self.content_end))
         self.card_actions.append(open_action)
@@ -446,12 +541,16 @@ class GpgUI:
                       "Key ID:": key.key_id, "Algorithm:": key.algorithm, "Usage:": self.usage_text(key.capabilities),
                       "Created:": key.created, "Expires:": key.expires, "Validity:": key.validity}
             buttons = []
+            note = ""
             if exports:
                 buttons.append(("Export Public Key", "gpg-export-public"))
                 if key.secret_available:
                     buttons.append(("Export Private Key", "gpg-export-private"))
+                buttons.append(("Add a Subkey", "gpg-add-subkey", bool(key.secret_available)))
+                if not key.secret_available:
+                    note = SUBKEY_NOTE
             self._card(values, fields, open_action=f"gpg-open:{index}" if open_cards else "",
-                       private=not summary and key.contains_private, buttons=buttons)
+                       private=not summary and key.contains_private, buttons=buttons, note=note)
             if not summary:
                 labels = [self._subkey_export_label(sub) if sub.get("secret") else "" for sub in key.subkeys]
                 for sub_index, sub in enumerate(key.subkeys):
@@ -519,10 +618,10 @@ class GpgUI:
                 frame.draw.rounded_rectangle((left, top - offset, right, end - offset), radius=12, fill=WHITE, outline=LINE, width=2)
                 if action:
                     frame.hit((left, max(top - offset, HEADER), right, min(end - offset, bottom)), action, "GPG Key")
-        for y, text, action, _height, inset in self.buttons:
+        for y, text, action, _height, inset, enabled in self.buttons:
             top = y - offset
             if top >= HEADER and top < bottom:
-                frame.button(top, text, action, inset=inset)
+                frame.button(top, text, action, inset=inset, enabled=enabled)
         for x, y, text, size, fill, mono in self.rows:
             y -= offset
             if y + size + 8 > HEADER and y < bottom:
@@ -558,6 +657,104 @@ class GpgUI:
         frame.image.paste(image, (MARGIN, top))
         self.app._brightness_control(frame, top + image.height + 24)
         frame.header(self._export_title().removeprefix("Export "), "back")
+
+    def subkey_options(self, frame):
+        app = self.app
+        frame.header("Add a Subkey", "back")
+        y = HEADER + 16
+        y = self._choice(frame, y, "Algorithm", "gpg-algo", _SUBKEY_ALGOS, self.subkey_algo)
+        usages = self._usage_options()
+        y = self._choice(frame, y + 16, "Usage", "gpg-usage", usages, self.subkey_usage, enabled=len(usages) > 1)
+        y = self._expire_field(frame, y + 16)
+        frame.button(max(y + 24, HEIGHT - 110), "Continue", "gpg-subkey-time")
+        if app.open_dropdown == "gpg-algo":
+            app._dropdown_menu(frame, self._choice_box, "gpg-algo", _SUBKEY_ALGOS, self.subkey_algo)
+        elif app.open_dropdown == "gpg-usage" and len(usages) > 1:
+            app._dropdown_menu(frame, self._choice_box, "gpg-usage", usages, self.subkey_usage)
+
+    def _choice(self, frame, y, label, name, options, selected, *, enabled=True):
+        y = frame.text(label, MARGIN, y, size=TITLE_SIZE, fill=MUTED)
+        shown = dict(options)[selected]
+        box = self.app._dropdown_field(frame, y + 8, name, shown, enabled=enabled)
+        if self.app.open_dropdown == name:
+            self._choice_box = box
+        return box[3]
+
+    def _expire_field(self, frame, y):
+        y = frame.text("Expires", MARGIN, y, size=TITLE_SIZE, fill=MUTED)
+        shown = self.expire_label()
+        top = y + 8
+        height = 64
+        box = (MARGIN, top, WIDTH - MARGIN, top + height)
+        frame.draw.rounded_rectangle(box, radius=14, fill=WHITE, outline=LINE, width=2)
+        face = font(TITLE_SIZE)
+        left, ascent, _right, descent = frame.draw.textbbox((0, 0), shown, font=face)
+        text_x = MARGIN + 20 - left
+        text_y = top + (height - (descent - ascent)) / 2 - ascent
+        frame.draw.text((text_x, text_y), shown, font=face, fill=INK)
+        frame.mark(shown, frame.draw.textbbox((text_x, text_y), shown, font=face))
+        frame.hit(box, "gpg-subkey-expire", shown)
+        return box[3]
+
+    def expire_label(self):
+        clock = self.subkey_expire
+        if not clock:
+            return "No Expiration"
+        return f"{clock['year']:04d}-{clock['month']:02d}-{clock['day']:02d} {clock['hour']:02d}:00 UTC"
+
+    def expire_argument(self):
+        clock = self.subkey_expire
+        if not clock:
+            return "never"
+        return f"{clock['year']:04d}{clock['month']:02d}{clock['day']:02d}T{clock['hour']:02d}0000"
+
+    def _draft_expiration(self):
+        created = self.subkey_clock
+        year = created["year"] + 1
+        month = created["month"]
+        day = min(created["day"], calendar.monthrange(year, month)[1])
+        return dict(year=year, month=month, day=day, hour=created["hour"])
+
+    def _usage_options(self):
+        if self.subkey_algo == "cv25519":
+            return (("encr", "Encryption"),)
+        if self.subkey_algo == "ed25519":
+            return tuple(item for item in _SUBKEY_USAGES if item[0] != "encr")
+        return _SUBKEY_USAGES
+
+    def choose(self, name, key):
+        if name == "gpg-algo" and key in dict(_SUBKEY_ALGOS):
+            self.subkey_algo = key
+            if key == "cv25519":
+                self.subkey_usage = "encr"
+            elif key == "ed25519" and self.subkey_usage == "encr":
+                self.subkey_usage = "sign"
+        elif name == "gpg-usage" and key in dict(self._usage_options()):
+            self.subkey_usage = key
+
+    def accept_camera(self, frames, final):
+        serial = os.environ.get("BIGSIGNER_CPU_SERIAL", "bigsigner-emulator").encode()
+        digest = camera_digest(frames, final, serial, str(time.time()))
+        self.app.camera_frames = []
+        self.app.camera_final = b""
+        try:
+            self.backend.mix_entropy(digest)
+        except GpgError as exc:
+            self.show_error(str(exc))
+            return
+        self.subkey_algo = "ed25519"
+        self.subkey_usage = "sign"
+        self.subkey_expire = None
+        self.app.open_dropdown = None
+        self.app.go("gpg-subkey-options")
+
+    def _start_add_subkey(self):
+        key = self.selected
+        if key is None or not key.secret_available or not key.fingerprint:
+            return
+        algo, usage, expire = self.subkey_algo, self.subkey_usage, self.expire_argument()
+        timestamp = self.subkey_timestamp()
+        self.start("add-subkey", lambda: self.backend.add_subkey(key.fingerprint, algo, usage, expire, timestamp))
 
     def review(self, frame):
         self.content(frame, "Load GPG Key", review=True)

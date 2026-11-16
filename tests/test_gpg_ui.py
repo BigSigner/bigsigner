@@ -63,6 +63,17 @@ class FakeBackend:
         self.calls.append(("import", data, timestamp))
         return Outcome(True, stages=[CommandResult("Import GPG Key", 0, f"[GNUPG:] IMPORT_OK 1 {FPR}\n[GNUPG:] IMPORT_RES 1 0 1", "gpg: public key imported")])
 
+    def mix_entropy(self, digest):
+        self.calls.append(("mix", digest))
+
+    def add_subkey(self, fingerprint, algo, usage, expire, timestamp):
+        self.calls.append(("add-subkey", fingerprint, algo, usage, expire, timestamp))
+        keys = parse_keys(COLONS)
+        keys[0].secret = True
+        keys[0].secret_available = True
+        keys[0].contains_private = True
+        return Outcome(True, keys=keys, stages=[CommandResult("Add a Subkey", 0)])
+
     def verify(self, relative, storage, timestamp, checksums):
         self.calls.append(("verify", relative, storage, timestamp, checksums))
         stages = [CommandResult("Signature Verification", 0, f"[GNUPG:] VALIDSIG {FPR}\n", "gpg: Good signature")]
@@ -302,7 +313,8 @@ def test_each_subkey_shows_its_usage_fingerprint_and_keeps_its_export_under_it()
     usages = [row for row in app.gpg.rows if row[2] == "Usage:"]
     values = [row for row in app.gpg.rows if row[2] in ("Certification", "Signing", "Encryption", "Authentication")]
     assert [row[1] for row in usages] == [row[1] for row in values]
-    for y, _text, _action, height, inset in app.gpg.buttons:
+    for item in app.gpg.buttons:
+        y, _text, _action, height, inset = item[:5]
         assert inset == 16
         assert any(top < y and y + height < bottom for _left, top, _right, bottom in app.gpg.cards)
     notes = [row for row in app.gpg.rows if row[2] == PRIVATE_NOTE]
@@ -321,6 +333,78 @@ def test_each_subkey_shows_its_usage_fingerprint_and_keeps_its_export_under_it()
     _tap(app, "Export Private Signing Subkey")
     _settle(app)
     assert app.gpg.backend.calls[-1] == ("export", signing, True, True)
+
+
+def test_adding_a_subkey_is_disabled_without_the_certificate_secret():
+    from bigsigner.ui.gpg import SUBKEY_NOTE
+
+    app = _listed()
+    _tap(app, "gpg-open:0")
+    _reveal(app, "Add a Subkey")
+    app.render()
+    button = next(item for item in app.gpg.buttons if item[1] == "Add a Subkey")
+    assert button[5] is False
+    assert "gpg-add-subkey" not in {hit["action"] for hit in app.hits}
+    note = next(row[1] for row in app.gpg.rows if row[2].startswith("Adding a subkey"))
+    card = next(card for card in app.gpg.cards if card[1] < button[0] < card[3])
+    assert button[0] < note < card[3]
+
+
+def test_add_subkey_mixes_the_camera_hash_and_uses_the_typed_time(monkeypatch):
+    import calendar
+    import time
+
+    from bigsigner.entropy import camera_digest
+
+    monkeypatch.setattr(time, "time", lambda: 100)
+    app = _listed(secret=True)
+    _tap(app, "gpg-open:0")
+    _reveal(app, "Add a Subkey")
+    _tap(app, "Add a Subkey")
+    assert app.screen == "camera" and app.camera_purpose == "gpg"
+    app.render()
+    assert any(item["text"].startswith("Point the camera at a") for item in app.texts)
+    assert "OS random number generation entropy" in " ".join(item["text"] for item in app.texts)
+    assert not any("word seed" in item["text"] for item in app.texts)
+    app.camera_frames = [b"one"]
+    app.camera_final = b"scene"
+    _tap(app, "Capture")
+    digest = camera_digest([b"one"], b"scene", b"bigsigner-emulator", "100")
+    assert app.gpg.backend.calls[-1] == ("mix", digest)
+    assert app.screen == "gpg-subkey-options"
+    assert app.gpg.subkey_algo == "ed25519" and app.gpg.subkey_usage == "sign"
+    assert app.gpg.expire_argument() == "never"
+    _tap(app, "No Expiration")
+    assert app.screen == "gpg-subkey-expire"
+    app.render()
+    assert any(item["text"].startswith("Hour:") for item in app.texts)
+    assert not any(item["text"].startswith("Minute:") for item in app.texts)
+    app.gpg.set_date("hour", 5)
+    _tap(app, "Set Expiration")
+    assert app.screen == "gpg-subkey-options"
+    app.render()
+    assert any(item["text"] == "2027-06-15 05:00 UTC" for item in app.texts)
+    app.gpg.choose("gpg-algo", "ed25519")
+    app.gpg.choose("gpg-usage", "auth")
+    app.render()
+    _tap(app, "Continue")
+    assert app.screen == "gpg-subkey-time"
+    app.render()
+    assert any(item["text"].startswith("Hour:") for item in app.texts)
+    assert any(item["text"].startswith("Minute:") for item in app.texts)
+    button = next(hit for hit in app.hits if hit["label"] == "Add a Subkey")
+    seconds = next(item for item in app.texts if item["text"] == "Seconds are 00 UTC.")
+    assert seconds["box"][3] < button["box"][1]
+    app.gpg.set_date("hour", 3)
+    app.gpg.set_date("minute", 4)
+    _tap(app, "Add a Subkey")
+    _settle(app)
+    assert app.screen == "gpg-key-details"
+    assert app.gpg.backend.calls[-1] == ("add-subkey", FPR, "ed25519", "auth", "20270615T050000", calendar.timegm((2026, 6, 15, 3, 4, 0)))
+    app.gpg.clock = "date"
+    app.screen = "gpg-date"
+    app.render()
+    assert not any(item["text"] == "Hour:" for item in app.texts)
 
 
 def test_failed_export_shows_the_error_screen():
@@ -470,6 +554,8 @@ def test_gpg_screens_save_screenshots(real_backend):
     record.shot(app, "gpg-keys")
     record.click(app, "gpg-open:0")
     record.shot(app, "gpg-key")
+    _reveal(app, "Add a Subkey")
+    record.shot(app, "add-subkey-disabled")
     _reveal(app, "Export Public Key")
     record.shot(app, "gpg-key-bottom")
     record.click(app, "Export Public Key")
@@ -527,6 +613,30 @@ def test_gpg_screens_save_screenshots(real_backend):
         app.gpg.selected = key
         app.screen = "gpg-key-details"
         app.gpg.build_details()
+    _reveal(app, "Add a Subkey")
+    record.shot(app, "add-subkey")
+    record.click(app, "Add a Subkey")
+    record.shot(app, "subkey-camera")
+    app.camera_final = b"scene"
+    app.camera_frames = [b"scene"]
+    record.click(app, "Capture")
+    record.shot(app, "subkey-options")
+    record.click(app, "Ed25519")
+    record.shot(app, "subkey-algorithm")
+    record.click(app, "dropdown-pick-gpg-algo-ed25519")
+    record.click(app, "Signing")
+    record.shot(app, "subkey-usage")
+    record.click(app, "dropdown-pick-gpg-usage-sign")
+    record.click(app, "No Expiration")
+    record.shot(app, "subkey-expire")
+    record.click(app, "Set Expiration")
+    record.shot(app, "subkey-expires-set")
+    record.click(app, "Continue")
+    record.shot(app, "subkey-time")
+    record.click(app, "Add a Subkey")
+    record.shot(app, "adding-subkey")
+    _settle(app)
+    record.shot(app, "subkey-added")
     app = _app()
     record.click(app, "Verify Signature")
     record.shot(app, "verification-formats")

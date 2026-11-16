@@ -22,6 +22,18 @@ def mnemonic_from_coins(flips: str) -> str:
     return _from_ascii(flips, sixteen=len(flips) == COINS_12)
 
 
+def camera_digest(frames: list[bytes], final: bytes, serial: bytes, timestamp: str) -> bytes:
+    """The camera chain SeedSigner uses, as 32 bytes.
+
+    The same pictures with a different serial or timestamp do not repeat.
+    """
+    digest = hashlib.sha256(serial).digest()
+    digest = hashlib.sha256(digest + timestamp.encode("utf-8")).digest()
+    for frame in frames:
+        digest = hashlib.sha256(digest + frame).digest()
+    return hashlib.sha256(digest + final).digest()
+
+
 def mnemonic_from_camera(
     frames: list[bytes], final: bytes, serial: bytes, timestamp: str, words: int = 24
 ) -> str:
@@ -31,11 +43,7 @@ def mnemonic_from_camera(
     """
     if words not in (12, 24):
         raise ValueError("Camera entropy can make a 12-word or 24-word seed.")
-    digest = hashlib.sha256(serial).digest()
-    digest = hashlib.sha256(digest + timestamp.encode("utf-8")).digest()
-    for frame in frames:
-        digest = hashlib.sha256(digest + frame).digest()
-    digest = hashlib.sha256(digest + final).digest()
+    digest = camera_digest(frames, final, serial, timestamp)
     if words == 12:
         digest = digest[:16]
     return bip39.mnemonic_from_bytes(digest)

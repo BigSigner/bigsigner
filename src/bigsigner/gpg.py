@@ -2,9 +2,11 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import fcntl
 import os
 from pathlib import Path
 import re
+import struct
 import subprocess
 import sys
 
@@ -12,6 +14,46 @@ from . import sdcard
 
 KEY_LIMIT = 1_048_576
 CHECKSUM_LIMIT = 4_194_304
+# Linux RNDADDENTROPY is _IOW('R', 0x03, int[2]). The size in the request is 8.
+_RNDADDENTROPY = (1 << 30) | (8 << 16) | (ord("R") << 8) | 3
+_SUBKEY_ALGOS = {"ed25519", "cv25519", "rsa3072", "rsa4096"}
+_SUBKEY_USAGES = {"sign", "encr", "auth"}
+
+
+def mix_kernel_entropy(digest: bytes) -> None:
+    """Mix the camera digest into the kernel pool.
+
+    The entropy count is 0. The digest is 32 bytes wide, and that width is not
+    a measurement of how unpredictable the pictures were. The bytes are still mixed.
+    """
+    if len(digest) != 32:
+        raise GpgError("The camera digest is not 32 bytes.")
+    argument = struct.pack("ii32s", 0, 32, digest)
+    try:
+        fd = os.open("/dev/random", os.O_RDWR)
+    except OSError as exc:
+        raise GpgError("The camera capture could not be mixed into the Linux random number generator.") from exc
+    try:
+        fcntl.ioctl(fd, _RNDADDENTROPY, argument)
+    except OSError as exc:
+        raise GpgError("The camera capture could not be mixed into the Linux random number generator.") from exc
+    finally:
+        os.close(fd)
+
+
+def quick_add_arguments(fingerprint: str, algo: str, usage: str, expire: str) -> list[str]:
+    """Positional arguments for ``gpg --quick-add-key``.
+
+    Algorithm, usage, and expiration are always named. ``never`` is no
+    expiration. A set time is ``YYYYMMDDThhmmss`` in UTC.
+    """
+    if algo not in _SUBKEY_ALGOS or usage not in _SUBKEY_USAGES:
+        raise GpgError("The subkey choice is not valid.")
+    if expire != "never" and not re.fullmatch(r"\d{8}T\d{6}", expire):
+        raise GpgError("The subkey expiration is not valid.")
+    if not re.fullmatch(r"[0-9A-F]{32}|[0-9A-F]{40}|[0-9A-F]{64}", fingerprint):
+        raise GpgError("The key fingerprint is not valid.")
+    return [fingerprint, algo, usage, expire]
 
 
 class GpgError(Exception):
@@ -196,7 +238,7 @@ class GpgBackend:
         self._version_line = lines[0] if lines else ""
         return self._version_line
 
-    def command(self, name, args, *, data=None, cwd=None, timestamp=None, checksums=False, agent=False):
+    def command(self, name, args, *, data=None, cwd=None, timestamp=None, checksums=False, agent=False, passphrase=None):
         home = self._home()
         if checksums:
             argv = ["sha256sum", *args]
@@ -209,6 +251,8 @@ class GpgBackend:
             argv += ["--no-auto-key-retrieve", "--no-auto-key-import", "--auto-key-locate", "clear"]
             if timestamp is not None:
                 argv += ["--faked-system-time", str(timestamp)]
+            if passphrase is not None:
+                argv += ["--pinentry-mode", "loopback", "--passphrase", passphrase]
             argv += args
         env = dict(os.environ, GNUPGHOME=str(home), LC_ALL="C", LANG="C", TZ="UTC")
         try:
@@ -271,6 +315,32 @@ class GpgBackend:
         marker = "-----BEGIN PGP PRIVATE KEY BLOCK-----" if secret else "-----BEGIN PGP PUBLIC KEY BLOCK-----"
         ok = result.returncode == 0 and marker in result.stdout
         return Outcome(ok, "" if ok else "The key could not be exported.", [result])
+
+    def mix_entropy(self, digest: bytes):
+        if not self.supported:
+            raise GpgError("GPG commands are not available in the web emulator. Use the BigSigner device.")
+        mix_kernel_entropy(digest)
+
+    def add_subkey(self, fingerprint: str, algo: str, usage: str, expire: str, timestamp: int):
+        """Add one subkey with ``gpg --quick-add-key`` at the typed UTC time."""
+        try:
+            positional = quick_add_arguments(fingerprint, algo, usage, expire)
+        except GpgError as exc:
+            return Outcome(False, str(exc))
+        added = self.command(
+            "Add a Subkey",
+            ["--quick-add-key", *positional],
+            timestamp=timestamp,
+            agent=True,
+            passphrase="",
+        )
+        if added.returncode:
+            return Outcome(False, "The subkey could not be added.", [added])
+        listed = self.list_keys()
+        stages = [added, *listed.stages]
+        if not listed.ok:
+            return Outcome(False, listed.message, stages)
+        return Outcome(True, stages=stages, keys=listed.keys)
 
     def inspect_key(self, content, timestamp=None):
         result = self.command("Key Details", ["--with-colons", "--show-keys", "--with-fingerprint"], data=content, timestamp=timestamp)

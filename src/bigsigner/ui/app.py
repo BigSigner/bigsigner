@@ -599,6 +599,7 @@ class App:
         self._seed_warning_message = ""
         self.camera_frames = []
         self.camera_final = b""
+        self.camera_purpose = "seed"
         self.scroll = {}
         self.scroll_max = {}
         self.keyboard_top = None
@@ -1218,6 +1219,7 @@ class App:
         self.go("coins")
 
     def _act_gen_camera(self):
+        self.camera_purpose = "seed"
         self.camera_frames = []
         self.camera_final = b""
         self.go("camera")
@@ -1653,6 +1655,8 @@ class App:
                 self._set_seed_length(int(key))
             elif name == "bip85-words":
                 self.bip85_words = int(key)
+            elif name.startswith("gpg-"):
+                self.gpg.choose(name, key)
             self.open_dropdown = None
         elif action.startswith("dropdown-"):
             name = action[len("dropdown-") :]
@@ -2317,6 +2321,8 @@ class App:
             return None
         if self.screen == "scan":
             return (0, HEADER, WIDTH, HEIGHT - 108)
+        if self.screen == "camera" and self.camera_purpose == "gpg":
+            return (MARGIN, HEADER + 16, WIDTH - MARGIN, HEIGHT - 290)
         if self.screen == "camera":
             return (MARGIN, HEADER + 108, WIDTH - MARGIN, HEIGHT - 290)
         return None
@@ -2575,16 +2581,38 @@ class App:
         self.menu = False
 
     def _camera(self, frame: Frame):
-        frame.header("Camera", "back")
-        frame.text("Point the camera at a detailed scene.", MARGIN, HEADER + 16, size=TITLE_SIZE)
-        self._viewfinder(frame)
-        frame.text(
-            f"This capture makes a {self.entropy_words}-word seed. The same scene on another device does not repeat.",
-            MARGIN,
-            HEIGHT - 278,
-            size=TITLE_SIZE,
-        )
+        if self.camera_purpose == "gpg":
+            self._gpg_camera_header(frame)
+            self._viewfinder(frame)
+            frame.text(
+                "This capture is mixed into the OS random number generation entropy",
+                MARGIN,
+                HEIGHT - 278,
+                size=TITLE_SIZE,
+            )
+        else:
+            frame.header("Camera", "back")
+            frame.text("Point the camera at a detailed scene.", MARGIN, HEADER + 16, size=TITLE_SIZE)
+            self._viewfinder(frame)
+            frame.text(
+                f"This capture makes a {self.entropy_words}-word seed. The same scene on another device does not repeat.",
+                MARGIN,
+                HEIGHT - 278,
+                size=TITLE_SIZE,
+            )
         frame.button(HEIGHT - 110, "Capture", "camera-capture")
+
+    def _gpg_camera_header(self, frame: Frame):
+        """The pointing sentence is the title. It wraps, because one 32px line does not fit."""
+        frame.draw.rectangle((0, 0, WIDTH, HEADER), fill=NAVY)
+        frame.hit((0, 0, 84, HEADER), "back", "back")
+        frame.glyph(Icons.BACK, 42, HEADER / 2, 42, WHITE)
+        face = font(28)
+        y = 8
+        for line in wrap(frame.draw, "Point the camera at a detailed random scene.", face, WIDTH - 84 - MARGIN):
+            frame.draw.text((84, y), line, font=face, fill=WHITE)
+            frame.mark(line, frame.draw.textbbox((84, y), line, font=face))
+            y += 34
 
     def _entropy(self, frame: Frame):
         words = self.pending_mnemonic.split()
@@ -2661,6 +2689,11 @@ class App:
     def _capture_camera(self):
         if not self.camera_final:
             self.set_error("The camera has not captured a picture yet.")
+            return
+        if self.camera_purpose == "gpg":
+            frames, final = list(self.camera_frames), self.camera_final
+            self.camera_purpose = "seed"
+            self.gpg.accept_camera(frames, final)
             return
         serial = os.environ.get("BIGSIGNER_CPU_SERIAL", "bigsigner-emulator").encode()
         mnemonic = mnemonic_from_camera(

@@ -1,15 +1,19 @@
 """GnuPG parsing, process status, and real detached/clear-signed test vectors."""
 
 from pathlib import Path
+import calendar
 import os
 import shutil
+import struct
 import subprocess
 import tempfile
 
 import pytest
 
 from bigsigner import sdcard
-from bigsigner.gpg import CommandResult, GpgBackend, GpgError, check_manifest_paths, parse_keys, signature_ok
+from bigsigner.gpg import (
+    CommandResult, GpgBackend, GpgError, check_manifest_paths, mix_kernel_entropy, parse_keys, quick_add_arguments, signature_ok,
+)
 
 VECTORS = Path(__file__).parent / "vectors" / "gpg"
 VERIFY_TIME = 1748736000  # 2025-06-01 00:00 UTC, within the fixture key's lifetime.
@@ -392,3 +396,53 @@ def test_real_expired_key_is_refused_at_the_selected_time(real_backend):
     result = backend.verify("release.txt.asc", "sd", 1798761600)
     assert not result.ok
     assert "EXPKEYSIG" in result.stages[0].stdout
+
+
+def test_quick_add_arguments_name_the_algorithm_usage_and_expiration():
+    assert quick_add_arguments(FPR, "ed25519", "sign", "never") == [FPR, "ed25519", "sign", "never"]
+    assert quick_add_arguments(FPR, "ed25519", "sign", "20270615T050000") == [FPR, "ed25519", "sign", "20270615T050000"]
+    with pytest.raises(GpgError):
+        quick_add_arguments(FPR, "ed25519", "sign", "365")
+
+
+def test_camera_digest_is_mixed_without_claiming_256_bits(monkeypatch):
+    seen = {}
+
+    def opener(path, _flags):
+        seen["path"] = path
+        return 7
+
+    def ioctl(_fd, request, argument):
+        seen["request"] = request
+        seen["argument"] = bytes(argument)
+
+    monkeypatch.setattr(os, "open", opener)
+    monkeypatch.setattr(os, "close", lambda _fd: None)
+    monkeypatch.setattr("bigsigner.gpg.fcntl.ioctl", ioctl)
+    mix_kernel_entropy(b"\xab" * 32)
+    assert seen["path"] == "/dev/random"
+    assert seen["request"] == (1 << 30) | (8 << 16) | (ord("R") << 8) | 3
+    assert seen["argument"] == struct.pack("ii32s", 0, 32, b"\xab" * 32)
+
+
+def test_real_quick_add_key_stamps_the_typed_time(real_backend, monkeypatch):
+    backend, _root = real_backend
+    monkeypatch.setattr("bigsigner.gpg.mix_kernel_entropy", lambda _digest: None)
+    backend.mix_entropy(b"\x11" * 32)
+    env = dict(os.environ, GNUPGHOME=str(backend.home), LC_ALL="C", LANG="C", TZ="UTC")
+    generated = subprocess.run(
+        ["gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
+         "--faked-system-time", str(calendar.timegm((2019, 6, 1, 0, 0, 0))),
+         "--quick-gen-key", "Add Subkey <add@example.invalid>", "ed25519", "cert", "never"],
+        capture_output=True, env=env)
+    assert generated.returncode == 0, generated.stderr.decode()
+    fingerprint = backend.list_keys().keys[0].fingerprint
+    stamp = calendar.timegm((2020, 1, 2, 3, 4, 0))
+    added = backend.add_subkey(fingerprint, "ed25519", "auth", "20210304T050000", stamp)
+    assert added.ok, added
+    listed = next(key for key in added.keys if key.fingerprint == fingerprint)
+    created = next(sub for sub in listed.subkeys if "a" in sub["capabilities"].lower())
+    from datetime import datetime, timezone
+    moment = datetime.fromtimestamp(stamp, timezone.utc)
+    assert created["created"] == moment.strftime("%Y-%m-%d %H:%M UTC")
+    assert created["expires"] == "2021-03-04 05:00 UTC"
