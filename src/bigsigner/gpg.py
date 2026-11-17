@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import fcntl
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -83,6 +84,8 @@ class PublicKey:
     secret: bool = False
     secret_available: bool = False
     contains_private: bool = False
+    needs_passphrase: bool = False
+    keygrip: str = ""
     capabilities: str = ""
 
 
@@ -149,6 +152,13 @@ def parse_keys(output: str, *, secret: bool = False) -> list[PublicKey]:
                 values["contains_private"] = contains_private
                 current.subkeys.append(values)
                 target = values
+        elif kind == "grp" and target is not None:
+            grip = parts[9].upper()
+            if re.fullmatch(r"[0-9A-F]{40}", grip):
+                if isinstance(target, PublicKey):
+                    target.keygrip = grip
+                else:
+                    target["keygrip"] = grip
         elif kind == "fpr" and target is not None:
             fingerprint = parts[9].upper()
             if len(fingerprint) in (32, 40, 64) and re.fullmatch(r"[0-9A-F]+", fingerprint):
@@ -172,6 +182,62 @@ def signature_ok(result: CommandResult) -> bool:
     names = status_names(result.stdout)
     failures = {"BADSIG", "ERRSIG", "NO_PUBKEY", "EXPSIG", "EXPKEYSIG", "REVKEYSIG", "NODATA", "FAILURE", "BADARMOR"}
     return result.returncode == 0 and "VALIDSIG" in names and not names.intersection(failures)
+
+
+# These signature formats do not take a random nonce. ECDSA, DSA, and any
+# algorithm the colon record does not name still need a mixed camera capture.
+_DETERMINISTIC_SIGNATURES = {"RSA", "Ed25519", "EdDSA", "Ed448"}
+CHECKSUM_NAME = "SHA256SUMS"
+CHECKSUM_SIGNATURE = "SHA256SUMS.asc"
+
+
+def passphrase_required(keyinfo_line: str) -> bool:
+    """True when gpg-agent's KEYINFO protection field is ``P``.
+
+    ``C`` is an unprotected secret, including one saved with an empty passphrase.
+    ``-`` means the protection is not known. Only ``P`` is a passphrase.
+    """
+    parts = keyinfo_line.split()
+    return len(parts) > 7 and parts[0] == "S" and parts[1] == "KEYINFO" and parts[7] == "P"
+
+
+def signature_is_deterministic(algorithm: str) -> bool:
+    """True when this signing key's signature bytes do not depend on the kernel RNG."""
+    return algorithm.split(" (", 1)[0] in _DETERMINISTIC_SIGNATURES
+
+
+def sha256_manifest(directory: Path) -> bytes:
+    """GNU binary-mode lines for the files directly in ``directory``.
+
+    Subfolders, the checksum file, and its signature are omitted. A symlink
+    that resolves outside the folder is omitted too.
+    """
+    root = directory.resolve()
+    lines = []
+    for child in sorted(directory.iterdir(), key=lambda item: item.name.encode()):
+        if child.name in (CHECKSUM_NAME, CHECKSUM_SIGNATURE) or not child.is_file():
+            continue
+        if child.is_symlink():
+            try:
+                child.resolve().relative_to(root)
+            except (ValueError, OSError):
+                continue
+        digest = hashlib.sha256()
+        with child.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        lines.append(_manifest_line(child.name, digest.hexdigest()))
+    if not lines:
+        raise GpgError("This folder has no files to sign.")
+    return b"".join(lines)
+
+
+def _manifest_line(name: str, digest: str) -> bytes:
+    raw = name.encode("utf-8")
+    if any(byte in raw for byte in (b"\\", b"\n", b"\r")):
+        escaped = raw.replace(b"\\", b"\\\\").replace(b"\n", b"\\n").replace(b"\r", b"\\r")
+        return b"\\" + digest.encode("ascii") + b" *" + escaped + b"\n"
+    return f"{digest} *{name}\n".encode("utf-8")
 
 
 def check_manifest_paths(content: bytes, directory: Path) -> None:
@@ -272,7 +338,7 @@ class GpgBackend:
         listed = self.command("GPG Keys", ["--with-colons", "--with-fingerprint", "--list-keys"], timestamp=timestamp)
         if listed.returncode:
             return Outcome(False, "Could not list GPG keys.", [listed])
-        secret = self.command("Secret Keys", ["--with-colons", "--with-fingerprint", "--list-secret-keys"], timestamp=timestamp, agent=True)
+        secret = self.command("Secret Keys", ["--with-colons", "--with-fingerprint", "--with-keygrip", "--list-secret-keys"], timestamp=timestamp, agent=True)
         stages = [listed, secret]
         if secret.returncode:
             return Outcome(False, "Could not list GPG keys.", stages)
@@ -286,12 +352,28 @@ class GpgBackend:
             key.secret = found is not None
             key.secret_available = bool(found and found.secret_available)
             key.contains_private = bool(found and found.contains_private)
+            key.keygrip = found.keygrip if found else ""
+            key.needs_passphrase = key.secret_available and self._passphrase_required(key.keygrip)
             found_subs = {sub.get("fingerprint"): sub for sub in found.subkeys} if found else {}
             for sub in key.subkeys:
                 match = found_subs.get(sub.get("fingerprint"))
                 sub["secret"] = bool(match and match.get("secret"))
                 sub["contains_private"] = bool(match and match.get("contains_private"))
+                sub["keygrip"] = match.get("keygrip", "") if match else ""
+                sub["needs_passphrase"] = bool(sub["secret"] and self._passphrase_required(sub["keygrip"]))
         return Outcome(True, stages=stages, keys=keys)
+
+    def _passphrase_required(self, grip: str) -> bool:
+        """Ask gpg-agent whether this secret keygrip is stored under a passphrase."""
+        if not re.fullmatch(r"[0-9A-F]{40}", grip):
+            return False
+        env = dict(os.environ, GNUPGHOME=str(self._home()), LC_ALL="C", LANG="C", TZ="UTC")
+        try:
+            result = subprocess.run(["gpg-connect-agent", f"keyinfo {grip}", "/bye"],
+                                    stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=30)
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return False
+        return any(passphrase_required(line) for line in result.stdout.decode("utf-8", "replace").splitlines())
 
     def export_key(self, fingerprint: str, *, secret: bool = False, subkey: bool = False):
         """ASCII-armored public key, private certificate, or one private subkey.
@@ -369,6 +451,31 @@ class GpgBackend:
         if len(content) > CHECKSUM_LIMIT:
             raise GpgError("The signed checksum content is larger than 4 MiB.")
         return content
+
+    def sign_file(self, fingerprint: str, relative: str, storage: str, timestamp: int):
+        """Detached armored signature ``<name>.asc`` for one file, using that exact key."""
+        path = sdcard.native_path(relative, storage=storage)
+        if path is None or not path.is_file():
+            raise GpgError("Signing a file requires the device filesystem.")
+        signed = self._detach_sign(fingerprint, path, path.with_name(path.name + ".asc"), timestamp)
+        return Outcome(signed.returncode == 0, "" if signed.returncode == 0 else "The file could not be signed.", [signed])
+
+    def sign_folder(self, fingerprint: str, relative: str, storage: str, timestamp: int):
+        """Write SHA256SUMS for the files in one folder, then sign that file."""
+        directory = sdcard.native_path(relative, storage=storage)
+        if directory is None or not directory.is_dir():
+            raise GpgError("Signing a folder requires the device filesystem.")
+        manifest = sha256_manifest(directory)
+        (directory / CHECKSUM_NAME).write_bytes(manifest)
+        signed = self._detach_sign(fingerprint, directory / CHECKSUM_NAME, directory / CHECKSUM_SIGNATURE, timestamp)
+        return Outcome(signed.returncode == 0, "" if signed.returncode == 0 else "The folder could not be signed.", [signed])
+
+    def _detach_sign(self, fingerprint: str, source: Path, output: Path, timestamp: int):
+        if not re.fullmatch(r"[0-9A-F]{32}|[0-9A-F]{40}|[0-9A-F]{64}", fingerprint):
+            raise GpgError("The key fingerprint is not valid.")
+        args = ["--yes", "--armor", "--detach-sign", "--digest-algo", "SHA256",
+                "--local-user", fingerprint + "!", "--output", output.name, "--", source.name]
+        return self.command("Sign File", args, cwd=source.parent, timestamp=timestamp, agent=True, passphrase="")
 
     def verify(self, relative, storage, timestamp, checksums=False):
         self._home()

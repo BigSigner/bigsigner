@@ -1955,7 +1955,7 @@ class App:
         self.go("sd")
 
     def _read_sd_file(self, relative: str):
-        if self.sd_expect in ("gpg-key", "gpg-verify"):
+        if self.sd_expect in ("gpg-key", "gpg-verify", "gpg-sign-file"):
             self.gpg.accept_file(relative)
             return
         if self.sd_expect == "psbt":
@@ -2251,8 +2251,11 @@ class App:
                 verb = "fs-move-into" if moving else "sd-into"
                 rows.append((entry["name"] + "/", f"{verb}:{relative}"))
             elif not moving:
-                verb = "fs-select" if managing else "sd-write" if exporting else "sd-read"
-                rows.append((entry["name"], f"{verb}:{relative}"))
+                if self.sd_expect == "gpg-sign-folder":
+                    rows.append((entry["name"], ""))
+                else:
+                    verb = "fs-select" if managing else "sd-write" if exporting else "sd-read"
+                    rows.append((entry["name"], f"{verb}:{relative}"))
         usage_height = 32 if usage is not None else 0
         list_top = HEADER + 60 + usage_height
         name_width = WIDTH - 2 * MARGIN - 32
@@ -2265,9 +2268,10 @@ class App:
             placed.append((top, height, lines, label, action))
             top += height + 8
         end = top if placed else list_top
-        button_h = frame.button_height("Move Here" if moving else "New File") if exporting or moving else 0
-        clearance = button_h + 28 if exporting or moving else 96
-        list_bottom = HEIGHT - clearance if exporting or moving else HEIGHT
+        signing_folder = self.sd_expect == "gpg-sign-folder"
+        button_h = frame.button_height("Move Here" if moving else "Sign This Folder" if signing_folder else "New File") if exporting or moving or signing_folder else 0
+        clearance = button_h + 28 if exporting or moving or signing_folder else 96
+        list_bottom = HEIGHT - clearance if exporting or moving or signing_folder else HEIGHT
         offset = self._scroll_offset("fs-move" if moving else "sd", end, clearance=clearance)
         for row_top, height, lines, label, action in placed:
             self._sd_row(frame, row_top - offset, list_top, list_bottom, height, lines, label, action)
@@ -2279,6 +2283,9 @@ class App:
                 frame.button(HEIGHT - 16 - button_h, "Move Here", "fs-move-here", enabled=enabled)
             else:
                 frame.button(HEIGHT - 16 - button_h, "New File", "export-new")
+        elif signing_folder:
+            frame.draw.rectangle((0, list_bottom, WIDTH, HEIGHT), fill=PAPER)
+            frame.button(HEIGHT - 16 - button_h, "Sign This Folder", "gpg-sign-folder-here")
         frame.header(title, "back")
         frame.draw.rectangle((0, HEADER, WIDTH, list_top), fill=PAPER)
         if usage is not None:
@@ -2313,7 +2320,8 @@ class App:
             if y + TITLE_SIZE > list_top:
                 frame.draw.text((MARGIN + 16, y), line, font=face, fill=INK)
             y += TITLE_SIZE + 8
-        frame.hit((MARGIN, max(top, list_top), WIDTH - MARGIN, min(top + height, list_bottom)), action, label)
+        if action:
+            frame.hit((MARGIN, max(top, list_top), WIDTH - MARGIN, min(top + height, list_bottom)), action, label)
 
     def camera_preview_box(self):
         """Where the live camera picture is drawn, in screen pixels. None hides it."""
@@ -6271,6 +6279,10 @@ class App:
             return "Delete this wallet? Its keys stay loaded."
         if self.confirm == "replace-file":
             return f'Replace "{Path(self.export_path).name}"?'
+        if self.confirm == "gpg-sign-subfolders":
+            return "This folder contains subfolders. Files inside them are not included."
+        if self.confirm == "gpg-sign-replace":
+            return self.gpg.overwrite_message()
         if self.confirm == "open-wallet-key" and self._wallet_key_target is not None:
             return "Go to Seed Key?" if self._wallet_key_target[2] else "Go to External Key?"
         if self.confirm == "account-warning":
@@ -6399,6 +6411,10 @@ class App:
             self._accept_account_warning()
         elif kind == "replace-file":
             self._write_export()
+        elif kind == "gpg-sign-subfolders":
+            self.gpg.overwrite_or_time()
+        elif kind == "gpg-sign-replace":
+            self.gpg.open_sign_time()
 
     def _descriptor_choice_message(self) -> str:
         if self.descriptor_choice and self.descriptor_choice.get("multisig"):

@@ -66,6 +66,14 @@ class FakeBackend:
     def mix_entropy(self, digest):
         self.calls.append(("mix", digest))
 
+    def sign_file(self, fingerprint, relative, storage, timestamp):
+        self.calls.append(("sign-file", fingerprint, relative, storage, timestamp))
+        return Outcome(True, stages=[CommandResult("Sign File", 0, "", "gpg: Good signature")])
+
+    def sign_folder(self, fingerprint, relative, storage, timestamp):
+        self.calls.append(("sign-folder", fingerprint, relative, storage, timestamp))
+        return Outcome(True, stages=[CommandResult("Sign File", 0, "", "gpg: Good signature")])
+
     def add_subkey(self, fingerprint, algo, usage, expire, timestamp):
         self.calls.append(("add-subkey", fingerprint, algo, usage, expire, timestamp))
         keys = parse_keys(COLONS)
@@ -512,6 +520,95 @@ def test_web_emulator_reports_unavailable_commands_without_fabricating_results()
     assert not app.gpg.backend.calls
 
 
+def test_sign_file_follows_the_selected_key_and_warns_before_replacing(monkeypatch):
+    import calendar
+
+    signing, encryption = "A" * 40, "B" * 40
+
+    def sub(key_id, fingerprint, capabilities, algo, bits):
+        return f"sub:-:{bits}:{algo}:{key_id}:1704067200:0:::::{capabilities}:\nfpr:::::::::{fingerprint}:\n"
+
+    text = (
+        f"pub:-:256:19:1111111111111111:1704067200:0:::::c:\nfpr:::::::::{FPR}:\n"
+        "uid:-::::::::Certificate Only <cert@example.invalid>:\n"
+        + sub("2222222222222222", signing, "s", "22", "255")
+        + sub("3333333333333333", encryption, "e", "18", "255")
+    )
+    app = _app()
+    key, = parse_keys(text)
+    app.gpg.selected = key
+    app.screen = "gpg-key-details"
+    app.gpg.build_details()
+    app.render()
+    labels = [item[1] for item in app.gpg.buttons]
+    assert "Sign File" in labels
+    assert labels.count("Sign File") == 1
+    button = next(item for item in app.gpg.buttons if item[1] == "Sign File")
+    assert button[5] is False
+    note = next(row[1] for row in app.gpg.rows if row[2].startswith("Signing a file"))
+    card = next(card for card in app.gpg.cards if card[1] < button[0] < card[3])
+    assert button[0] < note < card[3]
+    assert not any(item[1] == "Sign File" and item[0] < note for item in app.gpg.buttons if item is not button)
+    key.subkeys[0]["secret"] = True
+    key.subkeys[0]["needs_passphrase"] = True
+    app.gpg.build_details()
+    app.render()
+    button = next(item for item in app.gpg.buttons if item[1] == "Sign File")
+    assert button[5] is False
+    note = next(row[1] for row in app.gpg.rows if row[2].startswith("Signing a file requires a key"))
+    card = next(card for card in app.gpg.cards if card[1] < button[0] < card[3])
+    assert button[0] < note < card[3]
+    assert "gpg-sign-subkey:0" not in {hit["action"] for hit in app.hits}
+    key.subkeys[0]["needs_passphrase"] = False
+    app.gpg.build_details()
+    _reveal(app, "Sign File")
+    _tap(app, "Sign File")
+    assert app.screen == "gpg-sign-choice"
+    sdcard.mount_memory({"dirs": ["packet", "packet/extra"], "files": {
+        "readme.txt": "hello\n", "readme.txt.asc": "old",
+        "packet/readme.txt": "hello\n", "packet/SHA256SUMS": "old", "packet/extra/skip.txt": "no\n",
+    }})
+    _tap(app, "Sign a Single File")
+    _tap(app, "SD Card")
+    _tap(app, "readme.txt")
+    assert app.confirm == "gpg-sign-replace"
+    assert "readme.txt.asc already exists" in app.gpg.overwrite_message()
+    _tap(app, "Confirm")
+    assert app.screen == "gpg-sign-time"
+    app.gpg.set_date("hour", 3)
+    app.gpg.set_date("minute", 4)
+    _tap(app, "Sign File")
+    _settle(app)
+    assert app.gpg.backend.calls[-1] == ("sign-file", signing, "readme.txt", "sd", calendar.timegm((2026, 6, 15, 3, 4, 0)))
+    app.screen = "gpg-sign-choice"
+    _tap(app, "Sign All Files in a Folder")
+    _tap(app, "SD Card")
+    _tap(app, "packet/")
+    _tap(app, "Sign This Folder")
+    assert app.confirm == "gpg-sign-subfolders"
+    _tap(app, "Confirm")
+    assert app.confirm == "gpg-sign-replace"
+    _tap(app, "Confirm")
+    assert app.screen == "gpg-sign-time"
+    _tap(app, "Sign File")
+    _settle(app)
+    assert app.gpg.backend.calls[-1][0] == "sign-folder"
+    assert app.gpg.backend.calls[-1][1] == signing
+    assert app.gpg.backend.calls[-1][2] == "packet"
+    key.subkeys[0]["algorithm"] = "ECDSA (256 bits)"
+    app.screen = "gpg-key-details"
+    app.gpg.build_details()
+    _reveal(app, "Sign File")
+    _tap(app, "Sign File")
+    assert app.screen == "camera" and app.camera_purpose == "gpg"
+    monkeypatch.setattr("time.time", lambda: 100)
+    app.camera_frames = [b"one"]
+    app.camera_final = b"scene"
+    _tap(app, "Capture")
+    assert app.gpg.backend.calls[-1][0] == "mix"
+    assert app.screen == "gpg-sign-choice"
+
+
 def test_gpg_screens_save_screenshots(real_backend):
     from test_ui import ScreenRecord
 
@@ -556,6 +653,8 @@ def test_gpg_screens_save_screenshots(real_backend):
     record.shot(app, "gpg-key")
     _reveal(app, "Add a Subkey")
     record.shot(app, "add-subkey-disabled")
+    _reveal(app, "Sign File")
+    record.shot(app, "sign-file-disabled")
     _reveal(app, "Export Public Key")
     record.shot(app, "gpg-key-bottom")
     record.click(app, "Export Public Key")
@@ -637,6 +736,61 @@ def test_gpg_screens_save_screenshots(real_backend):
     record.shot(app, "adding-subkey")
     _settle(app)
     record.shot(app, "subkey-added")
+    signing = "A" * 40
+    text = (
+        f"pub:-:256:19:1111111111111111:1704067200:0:::::c:\nfpr:::::::::{FPR}:\n"
+        "uid:-::::::::BigSigner Test <test@example.invalid>:\n"
+        f"sub:-:255:22:2222222222222222:1704067200:0:::::s:\nfpr:::::::::{signing}:\n"
+    )
+    app = _app()
+    sdcard.mount_memory({"dirs": ["packet", "packet/extra"], "files": {
+        "readme.txt": "hello\n", "readme.txt.asc": "old signature",
+        "packet/readme.txt": "hello\n", "packet/SHA256SUMS": "old", "packet/SHA256SUMS.asc": "old signature",
+        "packet/extra/skip.txt": "no\n",
+    }})
+    key, = parse_keys(text)
+    key.subkeys[0]["secret"] = True
+    key.subkeys[0]["contains_private"] = True
+    key.subkeys[0]["needs_passphrase"] = True
+    app.gpg.selected = key
+    app.screen = "gpg-key-details"
+    app.gpg.build_details()
+    _reveal(app, "Sign File")
+    record.shot(app, "sign-file-passphrase")
+    key.subkeys[0]["needs_passphrase"] = False
+    app.gpg.build_details()
+    _reveal(app, "Sign File")
+    record.shot(app, "sign-file")
+    record.click(app, "Sign File")
+    record.shot(app, "sign-choice")
+    record.click(app, "Sign a Single File")
+    record.click(app, "SD Card")
+    record.click(app, "readme.txt")
+    record.shot(app, "sign-replace")
+    record.click(app, "Confirm")
+    record.shot(app, "sign-time")
+    record.click(app, "Sign File")
+    record.shot(app, "signing-file")
+    _settle(app)
+    record.shot(app, "sign-result")
+    app.screen = "gpg-sign-choice"
+    record.click(app, "Sign All Files in a Folder")
+    record.click(app, "SD Card")
+    record.click(app, "packet/")
+    record.shot(app, "sign-folder")
+    record.click(app, "Sign This Folder")
+    record.shot(app, "sign-subfolders")
+    record.click(app, "Confirm")
+    record.shot(app, "sign-folder-replace")
+    record.click(app, "Confirm")
+    record.shot(app, "sign-folder-time")
+    key.subkeys[0]["algorithm"] = "ECDSA (256 bits)"
+    app.gpg.build_details()
+    app.screen = "gpg-key-details"
+    app.back = ["gpg"]
+    _reveal(app, "Sign File")
+    record.click(app, "Sign File")
+    record.shot(app, "sign-camera")
     app = _app()
     record.click(app, "Verify Signature")
     record.shot(app, "verification-formats")

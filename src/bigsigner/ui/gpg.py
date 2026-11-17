@@ -2,12 +2,13 @@
 
 import calendar
 import os
+from pathlib import Path
 import re
 import time
 
 from .. import sdcard
 from ..entropy import camera_digest
-from ..gpg import GpgBackend, GpgError, KEY_LIMIT, Outcome
+from ..gpg import CHECKSUM_NAME, CHECKSUM_SIGNATURE, GpgBackend, GpgError, KEY_LIMIT, Outcome, signature_is_deterministic
 from ..qr import MAX_BYTE_PAYLOAD
 from .canvas import BLUE, BODY_SIZE, HEADER, HEIGHT, INK, LINE, MARGIN, MUTED, PAPER, RED, TITLE_SIZE, WARNING, WHITE, WIDTH, Frame, Icons, font, wrap
 
@@ -15,6 +16,9 @@ from .canvas import BLUE, BODY_SIZE, HEADER, HEIGHT, INK, LINE, MARGIN, MUTED, P
 DATE_NOTE = "Some GPG signatures and keys expire. Set the current date so they can be checked correctly. The air-gapped device has no reliable clock."
 SUBKEY_TIME_NOTE = "This time is written on the new subkey. The air-gapped device has no reliable clock."
 EXPIRE_NOTE = "This is the UTC time when the subkey expires."
+SIGN_NOTE = "Signing a file requires this key's private key."
+SIGN_PASSPHRASE_NOTE = "Signing a file requires a key with no passphrase."
+SIGN_TIME_NOTE = "This time is written on the signature. The air-gapped device has no reliable clock."
 SUBKEY_NOTE = "Adding a subkey requires the certificate's private key."
 PRIVATE_NOTE = "Contains a private key"
 _USAGE = (("c", "Certification"), ("s", "Signing"), ("e", "Encryption"), ("a", "Authentication"))
@@ -33,6 +37,14 @@ class GpgUI:
         self.subkey_usage = "sign"
         self.subkey_expire = None
         self.expire_clock = dict(year=2027, month=6, day=15, hour=0)
+        self.sign_clock = dict(year=2026, month=6, day=15, hour=0, minute=0)
+        self.sign_fingerprint = ""
+        self.sign_algorithm = ""
+        self.sign_relative = ""
+        self.sign_storage = "sd"
+        self.sign_folder = False
+        self.sign_overwrite = []
+        self.camera_for = ""
         self.details_back = []
         self.operation = "detached"
         self.edit_field = "year"
@@ -63,7 +75,8 @@ class GpgUI:
                          "gpg-key-source": self.key_source, "gpg-working": self.working, "gpg-keys": self.keys,
                          "gpg-key-details": self.details, "gpg-export": self.export_choice,
                          "gpg-key-qr": self.key_qr, "gpg-review": self.review, "gpg-result": self.result,
-                         "gpg-subkey-options": self.subkey_options}
+                         "gpg-subkey-options": self.subkey_options,
+                         "gpg-sign-choice": self.sign_choice, "gpg-sign-time": self.date_screen}
 
     def open(self):
         app = self.app
@@ -80,6 +93,8 @@ class GpgUI:
             return self.subkey_clock
         if self.clock == "expire":
             return self.expire_clock
+        if self.clock == "sign":
+            return self.sign_clock
         return self.date
 
     def timestamp(self):
@@ -88,6 +103,10 @@ class GpgUI:
 
     def subkey_timestamp(self):
         clock = self.subkey_clock
+        return calendar.timegm((clock["year"], clock["month"], clock["day"], clock["hour"], clock["minute"], 0))
+
+    def sign_timestamp(self):
+        clock = self.sign_clock
         return calendar.timegm((clock["year"], clock["month"], clock["day"], clock["hour"], clock["minute"], 0))
 
     def limits(self, field):
@@ -151,8 +170,28 @@ class GpgUI:
         elif action == "gpg-date-continue":
             if self.clock == "subkey":
                 self._start_add_subkey()
+            elif self.clock == "sign":
+                self._start_sign()
             else:
                 app._open_sd("gpg-verify")
+        elif action == "gpg-sign":
+            key = self.selected
+            if key is not None:
+                self._begin_sign(key.fingerprint, key.algorithm, bool(key.secret_available), key.needs_passphrase)
+        elif action.startswith("gpg-sign-subkey:"):
+            key = self.selected
+            index = int(action.split(":", 1)[1])
+            if key is not None and 0 <= index < len(key.subkeys):
+                sub = key.subkeys[index]
+                self._begin_sign(sub.get("fingerprint", ""), sub.get("algorithm", ""), bool(sub.get("secret")), bool(sub.get("needs_passphrase")))
+        elif action == "gpg-sign-file":
+            app._open_sd("gpg-sign-file")
+        elif action == "gpg-sign-folder":
+            app._open_sd("gpg-sign-folder")
+        elif action == "gpg-sign-folder-here":
+            self._choose_sign_folder()
+        elif action == "gpg-sign-commit":
+            self._start_sign()
         elif action == "gpg-add-subkey":
             key = self.selected
             if key is None or not key.secret_available:
@@ -161,6 +200,7 @@ class GpgUI:
             app.camera_frames = []
             app.camera_final = b""
             app.camera_purpose = "gpg"
+            self.camera_for = "subkey"
             app.go("camera")
         elif action == "gpg-subkey-time":
             self.clock = "subkey"
@@ -260,6 +300,9 @@ class GpgUI:
             if app.sd_expect == "gpg-key":
                 self.accept_key(sdcard.read_bytes(relative, storage=app.sd_storage, max_bytes=KEY_LIMIT))
                 return
+            if app.sd_expect == "gpg-sign-file":
+                self._choose_sign_file(relative)
+                return
             if not relative.lower().endswith(".asc"):
                 raise GpgError("Choose an .asc signature file.")
             storage, timestamp = app.sd_storage, self.timestamp()
@@ -357,13 +400,15 @@ class GpgUI:
 
     def date_screen(self, frame):
         app = self.app
-        kind = self.clock if self.clock in ("subkey", "expire") else "date"
-        notes = {"subkey": SUBKEY_TIME_NOTE, "expire": EXPIRE_NOTE, "date": DATE_NOTE}
+        kind = self.clock if self.clock in ("subkey", "expire", "sign") else "date"
+        notes = {"subkey": SUBKEY_TIME_NOTE, "expire": EXPIRE_NOTE, "sign": SIGN_TIME_NOTE, "date": DATE_NOTE}
         fields = {"subkey": ("year", "month", "day", "hour", "minute"),
                   "expire": ("year", "month", "day", "hour"),
+                  "sign": ("year", "month", "day", "hour", "minute"),
                   "date": ("year", "month", "day")}
-        footers = {"subkey": "Seconds are 00 UTC.", "expire": "Minutes are 00 UTC.", "date": "UTC · 00:00:00"}
-        frame.header({"subkey": "Time", "expire": "Expires", "date": "Date"}[kind], "back")
+        footers = {"subkey": "Seconds are 00 UTC.", "expire": "Minutes are 00 UTC.",
+                   "sign": "Seconds are 00 UTC.", "date": "UTC · 00:00:00"}
+        frame.header({"subkey": "Time", "expire": "Expires", "sign": "Time", "date": "Date"}[kind], "back")
         y = frame.text(notes[kind], MARGIN, HEADER + 16, size=28)
         y += 16
         clock = self.active_clock()
@@ -385,6 +430,8 @@ class GpgUI:
             clear_top = set_top - 16 - frame.button_height("No Expiration")
             frame.button(clear_top, "No Expiration", "gpg-expire-clear")
             frame.button(set_top, "Set Expiration", "gpg-expire-save")
+        elif kind == "sign":
+            frame.button(HEIGHT - 110, "Sign File", "gpg-sign-commit")
         else:
             frame.button(HEIGHT - 110, "Add a Subkey" if kind == "subkey" else "Continue", "gpg-date-continue")
 
@@ -410,7 +457,8 @@ class GpgUI:
     def working(self, frame):
         frame.header("GPG")
         labels = {"list": "Listing GPG Keys…", "preview": "Reading GPG Key…", "import": "Importing GPG Key…",
-                  "verify": "Verifying Signature…", "export": self._export_progress(), "add-subkey": "Adding a Subkey…"}
+                  "verify": "Verifying Signature…", "export": self._export_progress(),
+                  "add-subkey": "Adding a Subkey…", "sign": "Signing File…"}
         frame.text(labels.get(self.job_kind, "Working…"), MARGIN, HEADER + 40, size=BODY_SIZE)
         self.work_shown = True
 
@@ -518,6 +566,8 @@ class GpgUI:
                 text, action = item[0], item[1]
                 enabled = item[2] if len(item) > 2 else True
                 self.add_button(text, action, inset=16, enabled=enabled)
+                if len(item) > 3 and item[3]:
+                    self.add_text(item[3], fill=MUTED, size=28, inset=16)
             if note:
                 self.add_text(note, fill=MUTED, size=28, inset=16)
         self.content_end += 8
@@ -541,16 +591,16 @@ class GpgUI:
                       "Key ID:": key.key_id, "Algorithm:": key.algorithm, "Usage:": self.usage_text(key.capabilities),
                       "Created:": key.created, "Expires:": key.expires, "Validity:": key.validity}
             buttons = []
-            note = ""
             if exports:
                 buttons.append(("Export Public Key", "gpg-export-public"))
                 if key.secret_available:
                     buttons.append(("Export Private Key", "gpg-export-private"))
-                buttons.append(("Add a Subkey", "gpg-add-subkey", bool(key.secret_available)))
-                if not key.secret_available:
-                    note = SUBKEY_NOTE
+                buttons.append(("Add a Subkey", "gpg-add-subkey", bool(key.secret_available),
+                                 "" if key.secret_available else SUBKEY_NOTE))
+                if "s" in key.capabilities.lower():
+                    buttons.append(self._sign_button("gpg-sign", bool(key.secret_available), key.needs_passphrase))
             self._card(values, fields, open_action=f"gpg-open:{index}" if open_cards else "",
-                       private=not summary and key.contains_private, buttons=buttons, note=note)
+                       private=not summary and key.contains_private, buttons=buttons)
             if not summary:
                 labels = [self._subkey_export_label(sub) if sub.get("secret") else "" for sub in key.subkeys]
                 for sub_index, sub in enumerate(key.subkeys):
@@ -560,6 +610,8 @@ class GpgUI:
                         if labels.count(label) > 1 and sub.get("key_id"):
                             label = f"{label} {sub['key_id']}"
                         buttons.append((label, f"gpg-export-subkey:{sub_index}"))
+                    if exports and "s" in sub.get("capabilities", "").lower():
+                        buttons.append(self._sign_button(f"gpg-sign-subkey:{sub_index}", bool(sub.get("secret")), bool(sub.get("needs_passphrase"))))
                     self._card({"Usage:": self.usage_text(sub.get("capabilities", "")), "Algorithm:": sub.get("algorithm", ""),
                                 "Fingerprint:": sub.get("fingerprint", ""), "Key ID:": sub.get("key_id", ""),
                                 "Created:": sub.get("created", ""), "Expires:": sub.get("expires", ""),
@@ -740,13 +792,108 @@ class GpgUI:
         try:
             self.backend.mix_entropy(digest)
         except GpgError as exc:
+            self.camera_for = ""
             self.show_error(str(exc))
             return
+        if self.camera_for == "sign":
+            self.camera_for = ""
+            self.app.go("gpg-sign-choice")
+            return
+        self.camera_for = ""
         self.subkey_algo = "ed25519"
         self.subkey_usage = "sign"
         self.subkey_expire = None
         self.app.open_dropdown = None
         self.app.go("gpg-subkey-options")
+
+    def sign_choice(self, frame):
+        frame.header("Sign File", "back")
+        y = frame.button(HEADER + 24, "Sign a Single File", "gpg-sign-file")
+        frame.button(y + 12, "Sign All Files in a Folder", "gpg-sign-folder")
+
+    def _sign_button(self, action, secret, needs_passphrase):
+        if not secret:
+            return ("Sign File", action, False, SIGN_NOTE)
+        if needs_passphrase:
+            return ("Sign File", action, False, SIGN_PASSPHRASE_NOTE)
+        return ("Sign File", action, True, "")
+
+    def _begin_sign(self, fingerprint, algorithm, secret, needs_passphrase=False):
+        if not secret or not fingerprint or needs_passphrase:
+            return
+        self.sign_fingerprint = fingerprint
+        self.sign_algorithm = algorithm
+        app = self.app
+        if signature_is_deterministic(algorithm):
+            app.go("gpg-sign-choice")
+            return
+        app.camera_frames = []
+        app.camera_final = b""
+        app.camera_purpose = "gpg"
+        self.camera_for = "sign"
+        app.go("camera")
+
+    def _choose_sign_file(self, relative):
+        self.sign_folder = False
+        self.sign_relative = relative
+        self.sign_storage = self.app.sd_storage
+        name = Path(relative).name + ".asc"
+        parent = str(Path(relative).parent) if "/" in relative.replace("\\", "/") else ""
+        if parent == ".":
+            parent = ""
+        self.sign_overwrite = [name] if sdcard.file_exists(sdcard.child_path(parent, name), storage=self.sign_storage) else []
+        self._overwrite_or_time()
+
+    def _choose_sign_folder(self):
+        app = self.app
+        try:
+            entries = sdcard.list_folder(app.sd_dir, storage=app.sd_storage)
+        except sdcard.SdError as exc:
+            app.set_error(str(exc))
+            return
+        files = [item["name"] for item in entries if item["kind"] == "file" and item["name"] not in (CHECKSUM_NAME, CHECKSUM_SIGNATURE)]
+        if not files:
+            app.set_error("This folder has no files to sign.")
+            return
+        self.sign_folder = True
+        self.sign_relative = app.sd_dir
+        self.sign_storage = app.sd_storage
+        self.sign_overwrite = [name for name in (CHECKSUM_NAME, CHECKSUM_SIGNATURE)
+                               if sdcard.file_exists(sdcard.child_path(app.sd_dir, name), storage=app.sd_storage)]
+        if any(item["kind"] == "dir" for item in entries):
+            app.confirm = "gpg-sign-subfolders"
+            return
+        self._overwrite_or_time()
+
+    def overwrite_or_time(self):
+        if self.sign_overwrite:
+            self.app.confirm = "gpg-sign-replace"
+            return
+        self.open_sign_time()
+
+    def _overwrite_or_time(self):
+        self.overwrite_or_time()
+
+    def open_sign_time(self):
+        self.clock = "sign"
+        self.app.open_dropdown = None
+        self.app.go("gpg-sign-time")
+
+    def overwrite_message(self):
+        names = self.sign_overwrite
+        if len(names) == 1:
+            return f"{names[0]} already exists and will be replaced."
+        return " and ".join(names) + " already exist and will be replaced."
+
+    def _start_sign(self):
+        if not self.sign_fingerprint:
+            return
+        fingerprint, relative, storage = self.sign_fingerprint, self.sign_relative, self.sign_storage
+        timestamp = self.sign_timestamp()
+        if self.sign_folder:
+            self.start("sign", lambda: self.backend.sign_folder(fingerprint, relative, storage, timestamp))
+        else:
+            self.start("sign", lambda: self.backend.sign_file(fingerprint, relative, storage, timestamp))
 
     def _start_add_subkey(self):
         key = self.selected

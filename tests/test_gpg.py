@@ -12,7 +12,8 @@ import pytest
 
 from bigsigner import sdcard
 from bigsigner.gpg import (
-    CommandResult, GpgBackend, GpgError, check_manifest_paths, mix_kernel_entropy, parse_keys, quick_add_arguments, signature_ok,
+    CHECKSUM_NAME, CommandResult, GpgBackend, GpgError, check_manifest_paths, mix_kernel_entropy, parse_keys,
+    passphrase_required, quick_add_arguments, sha256_manifest, signature_is_deterministic, signature_ok,
 )
 
 VECTORS = Path(__file__).parent / "vectors" / "gpg"
@@ -423,6 +424,78 @@ def test_camera_digest_is_mixed_without_claiming_256_bits(monkeypatch):
     assert seen["path"] == "/dev/random"
     assert seen["request"] == (1 << 30) | (8 << 16) | (ord("R") << 8) | 3
     assert seen["argument"] == struct.pack("ii32s", 0, 32, b"\xab" * 32)
+
+
+def test_keyinfo_passphrase_flag_is_only_p():
+    assert passphrase_required("S KEYINFO " + "A" * 40 + " D - - - P - - -")
+    assert not passphrase_required("S KEYINFO " + "A" * 40 + " D - - - C - - -")
+    assert not passphrase_required("S KEYINFO " + "A" * 40 + " D - - - - - - -")
+
+
+def test_sha256_manifest_lists_only_the_files_in_that_folder(tmp_path):
+    folder = tmp_path / "packet"
+    nested = folder / "extra"
+    nested.mkdir(parents=True)
+    (folder / "readme.txt").write_bytes(b"hello\n")
+    (nested / "skip.txt").write_bytes(b"no\n")
+    (folder / CHECKSUM_NAME).write_bytes(b"old\n")
+    manifest = sha256_manifest(folder)
+    text = manifest.decode()
+    assert "readme.txt" in text
+    assert "skip.txt" not in text
+    assert CHECKSUM_NAME not in text.split("*", 1)[-1]
+    check_manifest_paths(manifest, folder)
+    assert signature_is_deterministic("RSA (3072 bits)")
+    assert signature_is_deterministic("EdDSA (255 bits)")
+    assert not signature_is_deterministic("ECDSA (256 bits)")
+    assert not signature_is_deterministic("DSA (2048 bits)")
+
+
+def test_real_list_marks_a_passphrase_and_leaves_an_empty_one_clear(real_backend):
+    backend, _root = real_backend
+    env = dict(os.environ, GNUPGHOME=str(backend.home), LC_ALL="C", LANG="C", TZ="UTC")
+    for passphrase, name in (("", "Empty <empty@example.invalid>"), ("correct horse", "Locked <locked@example.invalid>")):
+        generated = subprocess.run(
+            ["gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", passphrase,
+             "--quick-gen-key", name, "ed25519", "sign", "never"],
+            capture_output=True, env=env)
+        assert generated.returncode == 0, generated.stderr.decode()
+    listed = backend.list_keys()
+    assert listed.ok, listed
+    by_name = {key.user_ids[0]: key for key in listed.keys}
+    assert by_name["Empty <empty@example.invalid>"].needs_passphrase is False
+    assert by_name["Locked <locked@example.invalid>"].needs_passphrase is True
+
+
+def test_real_detached_signature_uses_the_named_key_and_typed_time(real_backend):
+    backend, root = real_backend
+    env = dict(os.environ, GNUPGHOME=str(backend.home), LC_ALL="C", LANG="C", TZ="UTC")
+    generated = subprocess.run(
+        ["gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
+         "--faked-system-time", str(calendar.timegm((2019, 6, 1, 0, 0, 0))),
+         "--quick-gen-key", "Signer <signer@example.invalid>", "ed25519", "sign", "never"],
+        capture_output=True, env=env)
+    assert generated.returncode == 0, generated.stderr.decode()
+    fingerprint = backend.list_keys().keys[0].fingerprint
+    folder = root / "packet"
+    (folder / "extra").mkdir(parents=True)
+    (folder / "readme.txt").write_bytes(b"hello\n")
+    (folder / "extra" / "skip.txt").write_bytes(b"no\n")
+    stamp = calendar.timegm((2020, 1, 2, 3, 4, 0))
+    signed = backend.sign_folder(fingerprint, "packet", "sd", stamp)
+    assert signed.ok, signed
+    manifest = (folder / "SHA256SUMS").read_text()
+    assert "readme.txt" in manifest and "skip.txt" not in manifest
+    verified = subprocess.run(
+        ["gpg", "--batch", "--status-fd", "1", "--verify", "--", "SHA256SUMS.asc", "SHA256SUMS"],
+        capture_output=True, cwd=folder, env=env)
+    assert verified.returncode == 0, verified.stderr.decode()
+    assert fingerprint in verified.stdout.decode()
+    assert str(stamp) in verified.stdout.decode()
+    (root / "readme.txt").write_bytes(b"one file\n")
+    one = backend.sign_file(fingerprint, "readme.txt", "sd", stamp)
+    assert one.ok, one
+    assert (root / "readme.txt.asc").is_file()
 
 
 def test_real_quick_add_key_stamps_the_typed_time(real_backend, monkeypatch):
