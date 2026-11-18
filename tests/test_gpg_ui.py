@@ -1,5 +1,6 @@
 """GPG menu, date entry, confirmation boundaries, and result rendering."""
 
+import base64
 from concurrent.futures import Future
 from pathlib import Path
 
@@ -640,6 +641,44 @@ def test_gpg_screens_save_screenshots(real_backend):
     record.click(app, "back")
     record.click(app, "Load GPG Key")
     record.shot(app, "key-source")
+    from test_domain import ABANDON
+
+    bip = _app(fixture_date=False)
+    record.click(bip, "Load GPG Key")
+    record.click(bip, "Load from Bitcoin Seed (BIP-85)")
+    record.shot(bip, "bip85-no-seed")
+    added = bip.session.add_mnemonic(ABANDON.split())
+    record.click(bip, "back")
+    record.click(bip, "Load from Bitcoin Seed (BIP-85)")
+    record.shot(bip, "bip85-seed")
+    record.click(bip, "gpg-bip85-pick:" + added["fingerprint"].hex())
+    record.shot(bip, "bip85-options")
+    record.click(bip, "dropdown-gpg-bits")
+    record.shot(bip, "bip85-bits")
+    record.click(bip, "3072 bits")
+    record.click(bip, "Index")
+    record.shot(bip, "bip85-index")
+    record.click(bip, "back")
+    record.click(bip, "Continue")
+    record.shot(bip, "bip85-details")
+    record.click(bip, "dropdown-gpg-role")
+    record.shot(bip, "bip85-role")
+    record.click(bip, "Certificate Only")
+    record.click(bip, "Name")
+    record.shot(bip, "bip85-name")
+    bip.gpg.bip85_draft = "Ada Lovelace"
+    record.click(bip, "Save")
+    record.click(bip, "Email")
+    bip.gpg.bip85_draft = "ada@example.invalid"
+    record.click(bip, "Save")
+    record.shot(bip, "bip85-filled")
+    record.click(bip, "Expires")
+    record.shot(bip, "bip85-expire")
+    record.click(bip, "Set Expiration")
+    record.click(bip, "Create Key")
+    record.shot(bip, "bip85-working")
+    _settle(bip)
+    record.shot(bip, "bip85-result")
     record.click(app, "Scan QR Code")
     app.accept_qr(b"test key")
     record.shot(app, "working")
@@ -834,3 +873,60 @@ def test_gpg_screens_save_screenshots(real_backend):
         record.shot(app, label)
         app.scroll["gpg-result"] = 10**9
         record.shot(app, label + "-bottom")
+
+
+def test_bip85_load_asks_for_a_seed_and_imports_one_primary_key():
+    from test_domain import ABANDON
+
+    app = _app()
+    _tap(app, "Load GPG Key")
+    _tap(app, "Load from Bitcoin Seed (BIP-85)")
+    app.render()
+    assert "Load a seed before deriving a GPG key." in " ".join(item["text"] for item in app.texts)
+    added = app.session.add_mnemonic(ABANDON.split())
+    _tap(app, "back")
+    _tap(app, "Load from Bitcoin Seed (BIP-85)")
+    app.render()
+    assert any(item["text"] == "Select Seed" for item in app.texts)
+    assert added["fingerprint"].hex() in {item["text"] for item in app.texts}
+    assert "abandon\u2026" in {item["text"] for item in app.texts}
+    _tap(app, "gpg-bip85-pick:" + added["fingerprint"].hex())
+    app.render()
+    text = " ".join(item["text"] for item in app.texts)
+    assert "BigSigner only generates primary keys, not subkeys." in text
+    assert any("m/83696968h/828365h/4096h/0h" in item["text"] for item in app.texts)
+    _tap(app, "+")
+    assert app.gpg.bip85_index == 1
+    _tap(app, "dropdown-gpg-bits")
+    _tap(app, "3072 bits")
+    app.render()
+    assert any("m/83696968h/828365h/3072h/1h" in item["text"] for item in app.texts)
+    _tap(app, "Continue")
+    app.render()
+    assert app.screen == "gpg-bip85-details"
+    assert "gpg-bip85-create" not in {hit["action"] for hit in app.hits}
+    _tap(app, "dropdown-gpg-role")
+    _tap(app, "Certificate Only")
+    _tap(app, "Name")
+    for char in "Ada Lovelace":
+        app._act("passkey- " if char == " " else "passkey-" + char)
+    _tap(app, "Save")
+    app.render()
+    assert "gpg-bip85-create" in {hit["action"] for hit in app.hits}
+    _tap(app, "Email")
+    for char in "ada@example.invalid":
+        app._act("passkey-" + char)
+    _tap(app, "Save")
+    _tap(app, "Expires")
+    app.render()
+    assert not any(item["text"].startswith("Hour") for item in app.texts)
+    assert any(item["text"] == "The time is 00:00:00 UTC." for item in app.texts)
+    _tap(app, "Set Expiration")
+    assert app.gpg.bip85_expires == dict(year=2026, month=6, day=15)
+    _tap(app, "Create Key")
+    _settle(app)
+    kind, data, _timestamp = app.gpg.backend.calls[-1]
+    assert kind == "import"
+    body = b"".join(line.strip() for line in data.splitlines() if line and not line.startswith(b"-----"))
+    assert b"Ada Lovelace <ada@example.invalid>" in base64.b64decode(body)
+    assert app.screen == "gpg-result"

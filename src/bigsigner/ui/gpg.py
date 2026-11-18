@@ -7,6 +7,7 @@ import re
 import time
 
 from .. import sdcard
+from ..bip85gpg import creation_text, expiration_seconds, identity, path_text, secret_armor
 from ..entropy import camera_digest
 from ..gpg import CHECKSUM_NAME, CHECKSUM_SIGNATURE, GpgBackend, GpgError, KEY_LIMIT, Outcome
 from ..qr import MAX_BYTE_PAYLOAD
@@ -19,11 +20,14 @@ EXPIRE_NOTE = "This is the UTC time when the subkey expires."
 SIGN_NOTE = "Signing a file requires this key's private key."
 SIGN_PASSPHRASE_NOTE = "Signing a file requires a key with no passphrase."
 SIGN_TIME_NOTE = "This time is written on the signature. The air-gapped device has no reliable clock."
+BIP85_EXPIRE_NOTE = "This date is written on the certificate. It does not change the RSA private key."
 SUBKEY_NOTE = "Adding a subkey requires the certificate's private key."
 PRIVATE_NOTE = "Contains a private key"
 _USAGE = (("c", "Certification"), ("s", "Signing"), ("e", "Encryption"), ("a", "Authentication"))
 _SUBKEY_ALGOS = (("ed25519", "Ed25519"), ("cv25519", "Curve25519"), ("rsa3072", "RSA-3072"), ("rsa4096", "RSA-4096"))
 _SUBKEY_USAGES = (("sign", "Signing"), ("encr", "Encryption"), ("auth", "Authentication"))
+_BIP85_BITS = (("3072", "3072 bits"), ("4096", "4096 bits"))
+_BIP85_ROLES = (("cert", "Certificate Only"), ("cert-sign", "Certificate and Signing"))
 
 
 class GpgUI:
@@ -45,6 +49,16 @@ class GpgUI:
         self.sign_folder = False
         self.sign_overwrite = []
         self.camera_for = ""
+        self.bip85_fp = None
+        self.bip85_bits = 4096
+        self.bip85_index = 0
+        self.bip85_role = "cert-sign"
+        self.bip85_name = ""
+        self.bip85_email = ""
+        self.bip85_expires = None
+        self.bip85_clock = dict(year=2026, month=6, day=15)
+        self.bip85_field = "name"
+        self.bip85_draft = ""
         self.details_back = []
         self.operation = "detached"
         self.edit_field = "year"
@@ -76,7 +90,10 @@ class GpgUI:
                          "gpg-key-details": self.details, "gpg-export": self.export_choice,
                          "gpg-key-qr": self.key_qr, "gpg-review": self.review, "gpg-result": self.result,
                          "gpg-subkey-options": self.subkey_options,
-                         "gpg-sign-choice": self.sign_choice, "gpg-sign-time": self.date_screen}
+                         "gpg-sign-choice": self.sign_choice, "gpg-sign-time": self.date_screen,
+                         "gpg-bip85-seed": self.bip85_seeds, "gpg-bip85": self.bip85_options,
+                         "gpg-bip85-details": self.bip85_details, "gpg-bip85-text": self.bip85_text,
+                         "gpg-bip85-expire": self.date_screen}
 
     def open(self):
         app = self.app
@@ -95,6 +112,8 @@ class GpgUI:
             return self.expire_clock
         if self.clock == "sign":
             return self.sign_clock
+        if self.clock == "bip85":
+            return self.bip85_clock
         return self.date
 
     def timestamp(self):
@@ -220,6 +239,41 @@ class GpgUI:
         elif action == "gpg-expire-save":
             self.subkey_expire = dict(self.expire_clock)
             app.back_one()
+        elif action == "gpg-load-seed":
+            self._open_bip85()
+        elif action.startswith("gpg-bip85-pick:"):
+            self._pick_bip85_seed(action.split(":", 1)[1])
+        elif action == "gpg-bip85-dec" and self.bip85_index > 0:
+            self.bip85_index -= 1
+        elif action == "gpg-bip85-inc" and self.bip85_index < 0x7FFFFFFF:
+            self.bip85_index += 1
+        elif action == "gpg-bip85-edit":
+            self._edit_bip85_index()
+        elif action == "gpg-bip85-continue":
+            app.open_dropdown = None
+            app.go("gpg-bip85-details")
+        elif action == "gpg-bip85-name":
+            self._edit_bip85_text("name")
+        elif action == "gpg-bip85-email":
+            self._edit_bip85_text("email")
+        elif action == "gpg-bip85-text-save":
+            if self.bip85_field == "email":
+                self.bip85_email = self.bip85_draft
+            else:
+                self.bip85_name = self.bip85_draft
+            app.back_one()
+        elif action == "gpg-bip85-expire":
+            self.clock = "bip85"
+            app.open_dropdown = None
+            self.bip85_clock = dict(self.bip85_expires or dict(year=2026, month=6, day=15))
+            app.go("gpg-bip85-expire")
+        elif action == "gpg-bip85-clear":
+            self.bip85_expires = None
+            app.back_one()
+        elif action == "gpg-bip85-save":
+            self._save_bip85_expiration()
+        elif action == "gpg-bip85-create":
+            self._create_bip85()
         elif action == "gpg-load-file":
             app._open_sd("gpg-key")
         elif action == "gpg-scan-key":
@@ -400,15 +454,18 @@ class GpgUI:
 
     def date_screen(self, frame):
         app = self.app
-        kind = self.clock if self.clock in ("subkey", "expire", "sign") else "date"
-        notes = {"subkey": SUBKEY_TIME_NOTE, "expire": EXPIRE_NOTE, "sign": SIGN_TIME_NOTE, "date": DATE_NOTE}
+        kind = self.clock if self.clock in ("subkey", "expire", "sign", "bip85") else "date"
+        notes = {"subkey": SUBKEY_TIME_NOTE, "expire": EXPIRE_NOTE, "sign": SIGN_TIME_NOTE,
+                 "date": DATE_NOTE, "bip85": BIP85_EXPIRE_NOTE}
         fields = {"subkey": ("year", "month", "day", "hour", "minute"),
                   "expire": ("year", "month", "day", "hour"),
                   "sign": ("year", "month", "day", "hour", "minute"),
-                  "date": ("year", "month", "day")}
+                  "date": ("year", "month", "day"),
+                  "bip85": ("year", "month", "day")}
         footers = {"subkey": "Seconds are 00 UTC.", "expire": "Minutes are 00 UTC.",
-                   "sign": "Seconds are 00 UTC.", "date": "UTC · 00:00:00"}
-        frame.header({"subkey": "Time", "expire": "Expires", "sign": "Time", "date": "Date"}[kind], "back")
+                   "sign": "Seconds are 00 UTC.", "date": "UTC · 00:00:00",
+                   "bip85": "The time is 00:00:00 UTC."}
+        frame.header({"subkey": "Time", "expire": "Expires", "sign": "Time", "date": "Date", "bip85": "Expires"}[kind], "back")
         y = frame.text(notes[kind], MARGIN, HEADER + 16, size=28)
         y += 16
         clock = self.active_clock()
@@ -425,11 +482,13 @@ class GpgUI:
             frame.hit((MARGIN + 76, y, WIDTH - MARGIN - 76, y + 64), f"gpg-date-edit:{name}", name.title())
             y += 80
         frame.text(footers[kind], MARGIN, y, size=24, fill=MUTED)
-        if kind == "expire":
+        if kind in ("expire", "bip85"):
             set_top = HEIGHT - 110
             clear_top = set_top - 16 - frame.button_height("No Expiration")
-            frame.button(clear_top, "No Expiration", "gpg-expire-clear")
-            frame.button(set_top, "Set Expiration", "gpg-expire-save")
+            clear_action = "gpg-bip85-clear" if kind == "bip85" else "gpg-expire-clear"
+            save_action = "gpg-bip85-save" if kind == "bip85" else "gpg-expire-save"
+            frame.button(clear_top, "No Expiration", clear_action)
+            frame.button(set_top, "Set Expiration", save_action)
         elif kind == "sign":
             frame.button(HEIGHT - 110, "Sign File", "gpg-sign-commit")
         else:
@@ -452,13 +511,15 @@ class GpgUI:
     def key_source(self, frame):
         frame.header("Load GPG Key", "back")
         y = frame.button(HEADER + 24, "Load from File", "gpg-load-file", icon=Icons.FILE, awesome=True)
-        frame.button(y, "Scan QR Code", "gpg-scan-key", icon=Icons.CAMERA, awesome=True)
+        y = frame.button(y, "Scan QR Code", "gpg-scan-key", icon=Icons.CAMERA, awesome=True)
+        frame.button(y, "Load from Bitcoin Seed (BIP-85)", "gpg-load-seed", icon=Icons.SEED, awesome=True)
 
     def working(self, frame):
         frame.header("GPG")
         labels = {"list": "Listing GPG Keys…", "preview": "Reading GPG Key…", "import": "Importing GPG Key…",
                   "verify": "Verifying Signature…", "export": self._export_progress(),
-                  "add-subkey": "Adding a Subkey…", "sign": "Signing File…"}
+                  "add-subkey": "Adding a Subkey…", "sign": "Signing File…",
+                  "bip85": "Creating a GPG Key…"}
         frame.text(labels.get(self.job_kind, "Working…"), MARGIN, HEADER + 40, size=BODY_SIZE)
         self.work_shown = True
 
@@ -783,6 +844,10 @@ class GpgUI:
                 self.subkey_usage = "sign"
         elif name == "gpg-usage" and key in dict(self._usage_options()):
             self.subkey_usage = key
+        elif name == "gpg-bits" and key in dict(_BIP85_BITS):
+            self.bip85_bits = int(key)
+        elif name == "gpg-role" and key in dict(_BIP85_ROLES):
+            self.bip85_role = key
 
     def accept_camera(self, frames, final):
         serial = os.environ.get("BIGSIGNER_CPU_SERIAL", "bigsigner-emulator").encode()
@@ -899,6 +964,204 @@ class GpgUI:
         algo, usage, expire = self.subkey_algo, self.subkey_usage, self.expire_argument()
         timestamp = self.subkey_timestamp()
         self.start("add-subkey", lambda: self.backend.add_subkey(key.fingerprint, algo, usage, expire, timestamp))
+
+    def _seed_records(self):
+        found = []
+        for record in self.app.session.fingerprints.values():
+            for key in record.keys:
+                if key.has_seed and getattr(key, "root", None) is not None:
+                    found.append((key.added, record))
+                    break
+        found.sort(key=lambda item: item[0])
+        return [record for _added, record in found]
+
+    def _open_bip85(self):
+        self.bip85_bits = 4096
+        self.bip85_index = 0
+        self.bip85_role = "cert-sign"
+        self.bip85_name = ""
+        self.bip85_email = ""
+        self.bip85_expires = None
+        self.bip85_fp = None
+        self.app.open_dropdown = None
+        self.app.go("gpg-bip85-seed")
+
+    def _pick_bip85_seed(self, fingerprint):
+        try:
+            fp = bytes.fromhex(fingerprint)
+        except ValueError:
+            return
+        if not any(record.fingerprint == fp for record in self._seed_records()):
+            self.app.set_error("This seed is no longer loaded.")
+            return
+        self.bip85_fp = fp
+        self.app.open_dropdown = None
+        self.app.go("gpg-bip85")
+
+    def _edit_bip85_index(self):
+        if self.bip85_fp not in self.app.session.fingerprints:
+            self.app.set_error("This seed is no longer loaded.")
+            return
+        self.app.account_fp = self.bip85_fp
+        self.app.account_text = str(self.bip85_index)
+        self.app.account_for = "gpg-bip85"
+        self.app.go("account")
+
+    def _edit_bip85_text(self, field):
+        self.bip85_field = field
+        self.bip85_draft = self.bip85_name if field == "name" else self.bip85_email
+        self.app.passphrase_mode = "lower"
+        self.app.go("gpg-bip85-text")
+
+    def type_bip85(self, key):
+        if key in ("enter", "\n"):
+            return
+        if key == "backspace":
+            self.bip85_draft = self.bip85_draft[:-1]
+            return
+        if len(self.bip85_draft) >= 128 or len(key) != 1:
+            return
+        self.bip85_draft += key
+
+    def _save_bip85_expiration(self):
+        clock = self.bip85_clock
+        try:
+            expiration_seconds((clock["year"], clock["month"], clock["day"]))
+        except ValueError as exc:
+            self.app.set_error(str(exc))
+            return
+        self.bip85_expires = dict(year=clock["year"], month=clock["month"], day=clock["day"])
+        self.app.back_one()
+
+    def _create_bip85(self):
+        try:
+            identity(self.bip85_name, self.bip85_email)
+            expires = None
+            if self.bip85_expires is not None:
+                expires = (self.bip85_expires["year"], self.bip85_expires["month"], self.bip85_expires["day"])
+                expiration_seconds(expires)
+        except ValueError as exc:
+            self.app.set_error(str(exc))
+            return
+        fingerprint, bits, index = self.bip85_fp, self.bip85_bits, self.bip85_index
+        name, email = self.bip85_name, self.bip85_email
+        signing = self.bip85_role == "cert-sign"
+        session = self.app.session
+
+        def job():
+            root = None
+            record = session.fingerprints.get(fingerprint)
+            if record is not None:
+                for key in record.keys:
+                    if key.has_seed and getattr(key, "root", None) is not None:
+                        root = key.root
+                        break
+            if root is None:
+                return Outcome(False, "This seed is no longer loaded.")
+            try:
+                payload = secret_armor(root, bits, index, name, email, signing=signing, expires_on=expires)
+            except ValueError as exc:
+                return Outcome(False, str(exc))
+            return self.backend.import_key(payload.encode())
+
+        self.start("bip85", job)
+
+    def bip85_seeds(self, frame):
+        app = self.app
+        records = self._seed_records()
+        if not records:
+            frame.header("Select Seed", "back")
+            frame.text("Load a seed before deriving a GPG key.", MARGIN, HEADER + 24, size=TITLE_SIZE)
+            return
+        y = HEADER + 24
+        placed = []
+        for record in records:
+            placed.append((y, record))
+            y += app._key_card_height(frame, record) + 12
+        offset = app._scroll_offset("gpg-bip85-seed", y, clearance=24)
+        for top, record in placed:
+            card_top = top - offset
+            height = app._key_card_height(frame, record)
+            if card_top >= HEIGHT or card_top + height <= HEADER:
+                continue
+            frame.draw.rounded_rectangle((MARGIN, card_top, WIDTH - MARGIN, card_top + height), radius=16, fill=WHITE, outline=LINE)
+            app._key_card_body(frame, card_top, record, record.fingerprint, paint=True)
+            frame.hit(
+                (MARGIN, max(card_top, HEADER), WIDTH - MARGIN, min(card_top + height, HEIGHT)),
+                "gpg-bip85-pick:" + record.fingerprint.hex(),
+                record.nickname,
+            )
+        frame.header("Select Seed", "back")
+
+    def bip85_options(self, frame):
+        app = self.app
+        frame.header("BIP-85 RSA Key", "back")
+        if not any(record.fingerprint == self.bip85_fp for record in self._seed_records()):
+            frame.text("This seed is no longer loaded.", MARGIN, HEADER + 24, size=TITLE_SIZE)
+            return
+        y = HEADER + 16
+        y = self._choice(frame, y, "Number of Bits", "gpg-bits", _BIP85_BITS, str(self.bip85_bits))
+        y = app._account_selector(
+            frame, y + 16, self.bip85_index, True, 0, caption="Index",
+            down="gpg-bip85-dec", up="gpg-bip85-inc", edit="gpg-bip85-edit", maximum=0x7FFFFFFF,
+        )
+        y = frame.text("Derivation Path:", MARGIN, y, size=TITLE_SIZE, fill=MUTED)
+        face = font(22, mono=True)
+        for line in wrap(frame.draw, path_text(self.bip85_bits, self.bip85_index), face, WIDTH - 2 * MARGIN):
+            width = frame.draw.textlength(line, font=face)
+            frame.draw.text((max(MARGIN, (WIDTH - width) / 2), y), line, font=face, fill=MUTED)
+            frame.mark(line, frame.draw.textbbox((max(MARGIN, (WIDTH - width) / 2), y), line, font=face))
+            y += 30
+        y += 8
+        y = frame.text("BigSigner only generates primary keys, not subkeys.", MARGIN, y, size=28, fill=MUTED)
+        frame.button(y + 16, "Continue", "gpg-bip85-continue")
+        if app.open_dropdown == "gpg-bits":
+            app._dropdown_menu(frame, self._choice_box, "gpg-bits", _BIP85_BITS, str(self.bip85_bits))
+
+    def bip85_details(self, frame):
+        app = self.app
+        frame.header("Primary Key", "back")
+        y = HEADER + 16
+        y = self._choice(frame, y, "Usage", "gpg-role", _BIP85_ROLES, self.bip85_role)
+        y = self._bip85_value(frame, y + 16, "Name", self.bip85_name, "Required", "gpg-bip85-name")
+        y = self._bip85_value(frame, y + 16, "Email", self.bip85_email, "Optional", "gpg-bip85-email")
+        expires = "No Expiration" if not self.bip85_expires else (
+            f"{self.bip85_expires['year']:04d}-{self.bip85_expires['month']:02d}-{self.bip85_expires['day']:02d}"
+        )
+        y = self._bip85_value(frame, y + 16, "Expires", expires, expires, "gpg-bip85-expire")
+        y = frame.text("Created " + creation_text() + ", as BIP-85 requires.", MARGIN, y + 12, size=28, fill=MUTED)
+        frame.button(y + 16, "Create Key", "gpg-bip85-create", enabled=bool(self.bip85_name.strip()))
+        if app.open_dropdown == "gpg-role":
+            app._dropdown_menu(frame, self._choice_box, "gpg-role", _BIP85_ROLES, self.bip85_role)
+
+    def _bip85_value(self, frame, y, label, value, placeholder, action):
+        y = frame.text(label, MARGIN, y, size=TITLE_SIZE, fill=MUTED)
+        top = y + 8
+        height = 64
+        box = (MARGIN, top, WIDTH - MARGIN, top + height)
+        frame.draw.rounded_rectangle(box, radius=14, fill=WHITE, outline=LINE, width=2)
+        shown = value or placeholder
+        face = font(TITLE_SIZE)
+        room = box[2] - box[0] - 40
+        if frame.draw.textlength(shown, font=face) > room:
+            while shown and frame.draw.textlength(shown + "…", font=face) > room:
+                shown = shown[:-1]
+            shown += "…"
+        _left, ascent, _right, descent = frame.draw.textbbox((0, 0), shown, font=face)
+        text_x = MARGIN + 20
+        text_y = top + (height - (descent - ascent)) / 2 - ascent
+        frame.draw.text((text_x, text_y), shown, font=face, fill=INK if value else MUTED)
+        frame.mark(shown, frame.draw.textbbox((text_x, text_y), shown, font=face))
+        frame.hit(box, action, label)
+        return box[3]
+
+    def bip85_text(self, frame):
+        title = "Email" if self.bip85_field == "email" else "Name"
+        frame.header(title, "back")
+        box = (MARGIN, HEADER + 16, WIDTH - MARGIN, HEADER + 88)
+        self.app._paint_hscroll_field(frame, box, self.bip85_draft, len(self.bip85_draft), title)
+        frame.button(box[3] + 12, "Save", "gpg-bip85-text-save")
+        self.app._passphrase_keyboard(frame)
 
     def review(self, frame):
         self.content(frame, "Load GPG Key", review=True)
