@@ -88,6 +88,7 @@ class Icons:
 
     CAMERA = "\uf030"  # Font Awesome, the same camera glyph SeedSigner uses
     FILE = "\uf15b"  # Font Awesome file
+    FOLDER = "\uf07b"  # Font Awesome folder
     DICE = "\uf522"  # Font Awesome dice
     COINS = "\uf51e"  # Font Awesome coins
     EYE = "\uf06e"  # Font Awesome eye, for a key expression that is not a seed

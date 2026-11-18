@@ -2307,7 +2307,7 @@ class App:
             frame.text(message, MARGIN, message_y, size=TITLE_SIZE)
         if managing:
             if self.add_menu:
-                self._speed_dial(frame, (("New Directory", "fs-new-directory", None), ("New File", "fs-new-file", Icons.FILE)))
+                self._speed_dial(frame, (("New Folder", "fs-new-directory", Icons.FOLDER), ("New File", "fs-new-file", Icons.FILE)))
             self._plus(frame, "toggle-add", Icons.CLOSE if self.add_menu else Icons.PLUS)
 
     def _sd_row(self, frame: Frame, top: int, list_top: int, list_bottom: int, height: int, lines: list[str], label: str, action: str):

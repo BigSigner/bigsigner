@@ -559,7 +559,7 @@ class FileSystemUI:
 
     def name(self, frame):
         app = self.app
-        title = {"directory": "New Directory", "create": "New File", "rename": "Rename File"}[self.name_mode]
+        title = {"directory": "New Folder", "create": "New File", "rename": "Rename File"}[self.name_mode]
         frame.header(title, "back")
         box = (MARGIN, HEADER + 16, WIDTH - MARGIN, HEADER + 88)
         app._paint_hscroll_field(frame, box, app.filename, app.filename_cursor, "Name")

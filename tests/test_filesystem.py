@@ -215,7 +215,7 @@ def test_browser_usage_plus_menu_and_create_directory_and_file():
     app = _browser()
     assert any(item["text"].startswith("Used:") for item in app.texts)
     _tap(app, "plus")
-    _tap(app, "New Directory")
+    _tap(app, "New Folder")
     for key in "folder":
         app._act("passkey-" + key)
     _tap(app, "Save")
