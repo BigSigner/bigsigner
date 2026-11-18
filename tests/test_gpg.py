@@ -519,3 +519,48 @@ def test_real_quick_add_key_stamps_the_typed_time(real_backend, monkeypatch):
     moment = datetime.fromtimestamp(stamp, timezone.utc)
     assert created["created"] == moment.strftime("%Y-%m-%d %H:%M UTC")
     assert created["expires"] == "2021-03-04 05:00 UTC"
+
+
+def test_encrypt_file_rejects_a_fingerprint_that_is_not_hex(tmp_path, monkeypatch):
+    root = tmp_path / "sd"
+    root.mkdir()
+    (root / "note.txt").write_bytes(b"hi")
+    monkeypatch.setattr(sdcard, "native_path", lambda relative, **kwargs: root / relative)
+    with pytest.raises(GpgError, match="fingerprint"):
+        GpgBackend(tmp_path / "gpg").encrypt_file(["not-a-key"], "note.txt", "note.txt.enc.asc", "sd")
+
+
+def test_real_encrypt_file_uses_the_exact_subkey(real_backend):
+    backend, root = real_backend
+    env = dict(os.environ, GNUPGHOME=str(backend.home), LC_ALL="C", LANG="C", TZ="UTC")
+    generated = subprocess.run(
+        ["gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
+         "--quick-gen-key", "Encrypt <enc@example.invalid>", "ed25519", "cert", "never"],
+        capture_output=True, env=env)
+    assert generated.returncode == 0, generated.stderr.decode()
+    fingerprint = backend.list_keys().keys[0].fingerprint
+    for _repeat in range(2):
+        added = subprocess.run(
+            ["gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
+             "--quick-add-key", fingerprint, "cv25519", "encrypt", "never"],
+            capture_output=True, env=env)
+        assert added.returncode == 0, added.stderr.decode()
+    listed = backend.list_keys()
+    assert listed.ok, listed
+    subkeys = [sub["fingerprint"] for sub in listed.keys[0].subkeys if "e" in sub["capabilities"].lower()]
+    assert len(subkeys) == 2
+    chosen, other = subkeys
+    (root / "note.txt").write_bytes(b"hello airgap\n")
+    encrypted = backend.encrypt_file([chosen], "note.txt", "note.txt.enc.asc", "sd")
+    assert encrypted.ok, encrypted
+    armor = (root / "note.txt.enc.asc").read_text()
+    assert armor.lstrip().startswith("-----BEGIN PGP MESSAGE-----")
+    packets = subprocess.run(["gpg", "--list-packets", str(root / "note.txt.enc.asc")], capture_output=True, env=env)
+    shown = packets.stdout.decode().lower() + packets.stderr.decode().lower()
+    assert chosen[-16:].lower() in shown
+    assert other[-16:].lower() not in shown
+    decrypted = subprocess.run(
+        ["gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "", "--decrypt", str(root / "note.txt.enc.asc")],
+        capture_output=True, env=env)
+    assert decrypted.returncode == 0, decrypted.stderr.decode()
+    assert decrypted.stdout == b"hello airgap\n"

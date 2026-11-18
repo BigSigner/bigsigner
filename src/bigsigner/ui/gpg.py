@@ -78,6 +78,10 @@ class GpgUI:
         self.export_subkey = False
         self.export_fingerprint = ""
         self.export_title = ""
+        self.encrypt_selected = set()
+        self.encrypt_source = ""
+        self.encrypt_storage = "sd"
+        self.encrypt_name = ""
         self.job = None
         self.future = None
         self.executor = None
@@ -93,7 +97,8 @@ class GpgUI:
                          "gpg-sign-choice": self.sign_choice, "gpg-sign-time": self.date_screen,
                          "gpg-bip85-seed": self.bip85_seeds, "gpg-bip85": self.bip85_options,
                          "gpg-bip85-details": self.bip85_details, "gpg-bip85-text": self.bip85_text,
-                         "gpg-bip85-expire": self.date_screen}
+                         "gpg-bip85-expire": self.date_screen,
+                         "gpg-encrypt-keys": self.encrypt_keys, "gpg-encrypt-name": self.encrypt_name_screen}
 
     def open(self):
         app = self.app
@@ -155,6 +160,21 @@ class GpgUI:
         app = self.app
         if action == "gpg-list":
             self.start("list", self.backend.list_keys)
+        elif action == "gpg-encrypt":
+            self.encrypt_selected = set()
+            self.start("encrypt-list", self.backend.list_keys)
+        elif action.startswith("gpg-encrypt-toggle:"):
+            fingerprint = action.split(":", 1)[1]
+            if fingerprint in self.encrypt_selected:
+                self.encrypt_selected.discard(fingerprint)
+            else:
+                self.encrypt_selected.add(fingerprint)
+            self.build_encrypt_keys()
+        elif action == "gpg-encrypt-continue":
+            if self._selected_fingerprints():
+                app._open_sd("gpg-encrypt-file")
+        elif action == "gpg-encrypt-commit":
+            self._commit_encrypt()
         elif action == "gpg-load":
             app.go("gpg-key-source")
         elif action == "gpg-formats":
@@ -357,6 +377,9 @@ class GpgUI:
             if app.sd_expect == "gpg-sign-file":
                 self._choose_sign_file(relative)
                 return
+            if app.sd_expect == "gpg-encrypt-file":
+                self._choose_encrypt_file(relative)
+                return
             if not relative.lower().endswith(".asc"):
                 raise GpgError("Choose an .asc signature file.")
             storage, timestamp = app.sd_storage, self.timestamp()
@@ -410,6 +433,9 @@ class GpgUI:
         elif outcome.ok and self.job_kind in ("list", "preview"):
             self.build_keys(summary=self.job_kind == "list")
             self.app.screen = "gpg-review" if self.job_kind == "preview" else "gpg-keys"
+        elif outcome.ok and self.job_kind == "encrypt-list":
+            self.build_encrypt_keys()
+            self.app.screen = "gpg-encrypt-keys"
         elif outcome.ok and self.job_kind == "add-subkey":
             fingerprint = self.selected.fingerprint if self.selected else ""
             match = next((key for key in outcome.keys if key.fingerprint == fingerprint), None)
@@ -443,6 +469,7 @@ class GpgUI:
         y = frame.button(y, "List GPG Keys", "gpg-list")
         y = frame.button(y, "Load GPG Key", "gpg-load")
         y = frame.button(y, "Verify Signature", "gpg-formats")
+        y = frame.button(y, "Encrypt To", "gpg-encrypt")
         frame.text("GPG keys stay in RAM and are cleared on reboot.", MARGIN, y + 12, size=28, fill=MUTED)
 
     def formats(self, frame):
@@ -519,7 +546,8 @@ class GpgUI:
         labels = {"list": "Listing GPG Keys…", "preview": "Reading GPG Key…", "import": "Importing GPG Key…",
                   "verify": "Verifying Signature…", "export": self._export_progress(),
                   "add-subkey": "Adding a Subkey…", "sign": "Signing File…",
-                  "bip85": "Creating a GPG Key…"}
+                  "bip85": "Creating a GPG Key…", "encrypt-list": "Listing GPG Keys…",
+                  "encrypt": "Encrypting File…"}
         frame.text(labels.get(self.job_kind, "Working…"), MARGIN, HEADER + 40, size=BODY_SIZE)
         self.work_shown = True
 
@@ -640,6 +668,113 @@ class GpgUI:
         key = self.selected
         self._key_cards([] if key is None else [key], summary=False, open_cards=False, exports=True)
 
+    def build_encrypt_keys(self):
+        self.reset_layout()
+        keys = [key for key in self.outcome.keys if self._encryption_subkeys(key)]
+        if not keys:
+            self.add_text("No encryption subkeys are loaded.")
+            return
+        for key in keys:
+            top = self.content_end
+            self.content_end += 16
+            for user_id in key.user_ids or [key.fingerprint]:
+                self.add_text(user_id, inset=16)
+            self.content_end += 8
+            for sub in self._encryption_subkeys(key):
+                self.add_text("Encryption", fill=MUTED, inset=16)
+                self._add_value("Algorithm:", sub.get("algorithm", ""))
+                self._add_value("Fingerprint:", sub.get("fingerprint", ""))
+                label = "Selected" if sub.get("fingerprint") in self.encrypt_selected else "Select"
+                self.add_button(label, "gpg-encrypt-toggle:" + sub.get("fingerprint", ""), inset=16)
+                self.content_end += 8
+            self.content_end += 8
+            self.cards.append((MARGIN, top, WIDTH - MARGIN, self.content_end))
+            self.card_actions.append("")
+            self.content_end += 16
+
+    def encrypt_keys(self, frame):
+        ready = bool(self._selected_fingerprints())
+        self.content(frame, "Encrypt To", footer=("Continue", "gpg-encrypt-continue", ready))
+
+    def encrypt_name_screen(self, frame):
+        frame.header("Encrypted File", "back")
+        box = (MARGIN, HEADER + 16, WIDTH - MARGIN, HEADER + 88)
+        self.app._paint_hscroll_field(frame, box, self.encrypt_name, len(self.encrypt_name), "File name")
+        y = frame.button(box[3] + 16, "Encrypt", "gpg-encrypt-commit", enabled=bool(self.encrypt_name.strip()))
+        frame.text("Saved in the same folder as the original file.", MARGIN, y, size=28, fill=MUTED)
+        self.app._passphrase_keyboard(frame)
+
+    def _encryption_subkeys(self, key):
+        return [sub for sub in key.subkeys if "e" in sub.get("capabilities", "").lower() and sub.get("fingerprint")]
+
+    def _selected_fingerprints(self):
+        chosen = []
+        for key in self.outcome.keys:
+            for sub in self._encryption_subkeys(key):
+                fingerprint = sub.get("fingerprint", "")
+                if fingerprint in self.encrypt_selected:
+                    chosen.append(fingerprint)
+        return chosen
+
+    def _choose_encrypt_file(self, relative):
+        from .app import _unused_filename
+
+        self.close_picker()
+        self.encrypt_source = relative
+        self.encrypt_storage = self.app.sd_storage
+        parent = self._encrypt_parent()
+        try:
+            taken = {item["name"] for item in sdcard.list_folder(parent, storage=self.encrypt_storage)}
+        except sdcard.SdError:
+            taken = set()
+        self.encrypt_name = _unused_filename(Path(relative).name + ".enc.asc", taken)
+        self.app.passphrase_mode = "lower"
+        self.app.go("gpg-encrypt-name")
+
+    def _encrypt_parent(self):
+        parent = str(Path(self.encrypt_source.replace("\\", "/")).parent)
+        return "" if parent == "." else parent
+
+    def type_encrypt_name(self, key):
+        if key in ("enter", "\n"):
+            return
+        if key == "backspace":
+            self.encrypt_name = self.encrypt_name[:-1]
+            return
+        if len(key) != 1 or len(self.encrypt_name.encode()) >= 240:
+            return
+        self.encrypt_name += key
+
+    def encrypt_overwrite_message(self):
+        return f"{self.encrypt_name.strip()} already exists and will be replaced."
+
+    def _commit_encrypt(self):
+        name = self.encrypt_name.strip()
+        if not name or name in (".", "..") or "/" in name or "\\" in name or "\x00" in name:
+            self.app.set_error("The file name is not valid.")
+            return
+        if name == Path(self.encrypt_source).name:
+            self.app.set_error("Choose a different file name.")
+            return
+        self.encrypt_name = name
+        try:
+            exists = sdcard.file_exists(sdcard.child_path(self._encrypt_parent(), name), storage=self.encrypt_storage)
+        except sdcard.SdError as exc:
+            self.app.set_error(str(exc))
+            return
+        if exists:
+            self.app.confirm = "gpg-encrypt-replace"
+            return
+        self.start_encrypt()
+
+    def start_encrypt(self):
+        fingerprints = self._selected_fingerprints()
+        if not fingerprints:
+            return
+        name = self.encrypt_name.strip()
+        source, storage = self.encrypt_source, self.encrypt_storage
+        self.start("encrypt", lambda: self.backend.encrypt_file(fingerprints, source, name, storage))
+
     def _key_cards(self, keys, *, summary, open_cards, exports=False):
         self.reset_layout()
         if not keys and summary:
@@ -723,9 +858,11 @@ class GpgUI:
                 self.add_output(stage.stderr, fill=RED)
             self.content_end += 20
 
-    def content(self, frame, title, review=False):
-        offset = self.app._scroll_offset(self.app.screen, self.content_end, clearance=132 if review else 20)
-        bottom = HEIGHT - 128 if review else HEIGHT
+    def content(self, frame, title, review=False, footer=None):
+        gap = 20
+        footer_h = gap + frame.button_height(footer[0]) + gap if footer else 0
+        offset = self.app._scroll_offset(self.app.screen, self.content_end, clearance=(footer_h + 12) if footer else (132 if review else 20))
+        bottom = HEIGHT - footer_h if footer else (HEIGHT - 128 if review else HEIGHT)
         for (left, top, right, end), action in zip(self.cards, self.card_actions):
             if end - offset > HEADER and top - offset < bottom:
                 frame.draw.rounded_rectangle((left, top - offset, right, end - offset), radius=12, fill=WHITE, outline=LINE, width=2)
@@ -739,6 +876,9 @@ class GpgUI:
             y -= offset
             if y + size + 8 > HEADER and y < bottom:
                 frame.text(text, x, y, size=size, fill=fill, mono=mono)
+        if footer:
+            frame.draw.rectangle((0, bottom, WIDTH, HEIGHT), fill=PAPER)
+            frame.button(HEIGHT - gap - frame.button_height(footer[0]), footer[0], footer[1], enabled=footer[2])
         if review:
             frame.draw.rectangle((0, bottom, WIDTH, HEIGHT), fill=PAPER)
             self.app._dialog_button(frame, (MARGIN, HEIGHT - 96, 234, HEIGHT - 24), "Cancel", "gpg-cancel-key", (132, 138, 148))

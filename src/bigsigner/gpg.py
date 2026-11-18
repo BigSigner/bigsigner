@@ -452,6 +452,24 @@ class GpgBackend:
             raise GpgError("The signed checksum content is larger than 4 MiB.")
         return content
 
+    def encrypt_file(self, fingerprints: list[str], relative: str, output_name: str, storage: str):
+        """Armored file encryption for the exact encryption-subkey fingerprints."""
+        path = sdcard.native_path(relative, storage=storage)
+        if path is None or not path.is_file():
+            raise GpgError("Encrypting a file requires the device filesystem.")
+        if not fingerprints:
+            raise GpgError("Select an encryption key.")
+        if not output_name or output_name in (".", "..") or "/" in output_name or "\\" in output_name or "\x00" in output_name:
+            raise GpgError("The file name is not valid.")
+        args = ["--trust-model", "always", "--yes", "--armor", "--encrypt"]
+        for fingerprint in fingerprints:
+            if not re.fullmatch(r"[0-9A-F]{32}|[0-9A-F]{40}|[0-9A-F]{64}", fingerprint):
+                raise GpgError("The key fingerprint is not valid.")
+            args += ["--recipient", fingerprint + "!"]
+        args += ["--output", output_name, "--", path.name]
+        encrypted = self.command("Encrypt File", args, cwd=path.parent)
+        return Outcome(encrypted.returncode == 0, "" if encrypted.returncode == 0 else "The file could not be encrypted.", [encrypted])
+
     def sign_file(self, fingerprint: str, relative: str, storage: str, timestamp: int):
         """Detached armored signature ``<name>.asc`` for one file, using that exact key."""
         path = sdcard.native_path(relative, storage=storage)

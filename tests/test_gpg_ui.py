@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from bigsigner import sdcard
-from bigsigner.gpg import CommandResult, Outcome, parse_keys
+from bigsigner.gpg import CommandResult, Outcome, PublicKey, parse_keys
 from bigsigner.qr import MAX_BYTE_PAYLOAD
 from bigsigner.ui.app import QR_BRIGHTNESS_DEFAULT, App
 from bigsigner.ui.canvas import HEADER, HEIGHT, INK, MUTED, RED, WARNING, WIDTH, font
@@ -82,6 +82,12 @@ class FakeBackend:
         keys[0].secret_available = True
         keys[0].contains_private = True
         return Outcome(True, keys=keys, stages=[CommandResult("Add a Subkey", 0)])
+
+    def encrypt_file(self, fingerprints, source, output_name, storage):
+        self.calls.append(("encrypt", tuple(fingerprints), source, output_name, storage))
+        if self.good:
+            return Outcome(True, stages=[CommandResult("Encrypt File", 0, "")])
+        return Outcome(False, "The file could not be encrypted.", [CommandResult("Encrypt File", 2, "", "gpg: encryption failed")])
 
     def verify(self, relative, storage, timestamp, checksums):
         self.calls.append(("verify", relative, storage, timestamp, checksums))
@@ -617,6 +623,55 @@ def test_sign_file_follows_the_selected_key_and_warns_before_replacing(monkeypat
     assert app.screen == "gpg-sign-choice"
 
 
+def test_encrypt_to_selects_encryption_subkeys_and_names_the_armored_file():
+    signing = "A" * 40
+    first = "B" * 40
+    second = "C" * 40
+    primary = PublicKey(fingerprint="D" * 40, user_ids=["Example <e@example.invalid>"], capabilities="sc", subkeys=[
+        {"fingerprint": signing, "capabilities": "s", "algorithm": "EdDSA"},
+        {"fingerprint": first, "capabilities": "e", "algorithm": "ECDH"},
+        {"fingerprint": second, "capabilities": "e", "algorithm": "ECDH"},
+    ])
+    plain = PublicKey(fingerprint="E" * 40, user_ids=["Signer"], capabilities="s", subkeys=[])
+    app = _app(files={"key.asc": "plain", "key.asc.enc.asc": "old"})
+    app.gpg.outcome = Outcome(True, keys=[primary, plain])
+    app.gpg.build_encrypt_keys()
+    actions = [item[2] for item in app.gpg.buttons]
+    assert actions == ["gpg-encrypt-toggle:" + first, "gpg-encrypt-toggle:" + second]
+    assert not any(signing in item[2] for item in app.gpg.rows)
+    app.gpg.backend.calls.clear()
+    _tap(app, "Encrypt To")
+    _settle(app)
+    app.render()
+    assert any(hit["label"] == "Select" for hit in app.hits)
+    assert not any(hit["label"] == "Continue" for hit in app.hits)
+    _tap(app, "Select")
+    app.render()
+    assert any(hit["label"] == "Selected" for hit in app.hits)
+    _tap(app, "Selected")
+    app.render()
+    assert any(hit["label"] == "Select" for hit in app.hits)
+    assert not any(hit["label"] == "Selected" for hit in app.hits)
+    _tap(app, "Select")
+    _tap(app, "Continue")
+    assert app.screen == "storage"
+    _tap(app, "SD Card")
+    _tap(app, "key.asc")
+    assert app.screen == "gpg-encrypt-name"
+    assert app.gpg.encrypt_name == "key.asc.enc (1).asc"
+    app.gpg.encrypt_name = "key.asc"
+    _tap(app, "Encrypt")
+    assert app.notice_error
+    _tap(app, "Dismiss")
+    app.gpg.encrypt_name = "key.asc.enc.asc"
+    _tap(app, "Encrypt")
+    assert app.confirm == "gpg-encrypt-replace"
+    _tap(app, "Confirm")
+    _settle(app)
+    assert app.gpg.backend.calls[-1] == ("encrypt", (SUB_FPR,), "key.asc", "key.asc.enc.asc", "sd")
+    assert app.screen == "gpg-result"
+
+
 def test_gpg_screens_save_screenshots(real_backend):
     from test_ui import ScreenRecord
 
@@ -641,6 +696,22 @@ def test_gpg_screens_save_screenshots(real_backend):
     record.click(app, "back")
     record.click(app, "Load GPG Key")
     record.shot(app, "key-source")
+    enc = _app(fixture_date=False)
+    record.click(enc, "Encrypt To")
+    record.shot(enc, "encrypt-listing")
+    _settle(enc)
+    record.shot(enc, "encrypt-keys")
+    record.click(enc, "Select")
+    record.shot(enc, "encrypt-selected")
+    record.click(enc, "Continue")
+    record.click(enc, "SD Card")
+    record.shot(enc, "encrypt-file")
+    record.click(enc, "key.asc")
+    record.shot(enc, "encrypt-name")
+    record.click(enc, "Encrypt")
+    record.shot(enc, "encrypting-file")
+    _settle(enc)
+    record.shot(enc, "encrypt-result")
     from test_domain import ABANDON
 
     bip = _app(fixture_date=False)

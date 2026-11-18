@@ -1955,7 +1955,7 @@ class App:
         self.go("sd")
 
     def _read_sd_file(self, relative: str):
-        if self.sd_expect in ("gpg-key", "gpg-verify", "gpg-sign-file"):
+        if self.sd_expect in ("gpg-key", "gpg-verify", "gpg-sign-file", "gpg-encrypt-file"):
             self.gpg.accept_file(relative)
             return
         if self.sd_expect == "psbt":
@@ -5863,6 +5863,9 @@ class App:
         if self.screen == "gpg-bip85-text":
             self.gpg.type_bip85(key)
             return
+        if self.screen == "gpg-encrypt-name":
+            self.gpg.type_encrypt_name(key)
+            return
         if key == "backspace":
             if self.passphrase_cursor > 0:
                 self.passphrase_text = (
@@ -6293,6 +6296,8 @@ class App:
             return "This folder contains subfolders. Files inside them are not included."
         if self.confirm == "gpg-sign-replace":
             return self.gpg.overwrite_message()
+        if self.confirm == "gpg-encrypt-replace":
+            return self.gpg.encrypt_overwrite_message()
         if self.confirm == "open-wallet-key" and self._wallet_key_target is not None:
             return "Go to Seed Key?" if self._wallet_key_target[2] else "Go to External Key?"
         if self.confirm == "account-warning":
@@ -6425,6 +6430,8 @@ class App:
             self.gpg.overwrite_or_time()
         elif kind == "gpg-sign-replace":
             self.gpg.open_sign_time()
+        elif kind == "gpg-encrypt-replace":
+            self.gpg.start_encrypt()
 
     def _descriptor_choice_message(self) -> str:
         if self.descriptor_choice and self.descriptor_choice.get("multisig"):
