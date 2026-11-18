@@ -8,7 +8,7 @@ import time
 
 from .. import sdcard
 from ..entropy import camera_digest
-from ..gpg import CHECKSUM_NAME, CHECKSUM_SIGNATURE, GpgBackend, GpgError, KEY_LIMIT, Outcome, signature_is_deterministic
+from ..gpg import CHECKSUM_NAME, CHECKSUM_SIGNATURE, GpgBackend, GpgError, KEY_LIMIT, Outcome
 from ..qr import MAX_BYTE_PAYLOAD
 from .canvas import BLUE, BODY_SIZE, HEADER, HEIGHT, INK, LINE, MARGIN, MUTED, PAPER, RED, TITLE_SIZE, WARNING, WHITE, WIDTH, Frame, Icons, font, wrap
 
@@ -824,9 +824,6 @@ class GpgUI:
         self.sign_fingerprint = fingerprint
         self.sign_algorithm = algorithm
         app = self.app
-        if signature_is_deterministic(algorithm):
-            app.go("gpg-sign-choice")
-            return
         app.camera_frames = []
         app.camera_final = b""
         app.camera_purpose = "gpg"

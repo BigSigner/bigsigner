@@ -563,6 +563,13 @@ def test_sign_file_follows_the_selected_key_and_warns_before_replacing(monkeypat
     app.gpg.build_details()
     _reveal(app, "Sign File")
     _tap(app, "Sign File")
+    assert app.screen == "camera" and app.camera_purpose == "gpg"
+    app.render()
+    assert "some signing algorithms" in " ".join(item["text"] for item in app.texts)
+    app.camera_frames = [b"one"]
+    app.camera_final = b"scene"
+    _tap(app, "Capture")
+    assert app.gpg.backend.calls[-1][0] == "mix"
     assert app.screen == "gpg-sign-choice"
     sdcard.mount_memory({"dirs": ["packet", "packet/extra"], "files": {
         "readme.txt": "hello\n", "readme.txt.asc": "old",
@@ -762,6 +769,10 @@ def test_gpg_screens_save_screenshots(real_backend):
     _reveal(app, "Sign File")
     record.shot(app, "sign-file")
     record.click(app, "Sign File")
+    record.shot(app, "sign-camera")
+    app.camera_final = b"scene"
+    app.camera_frames = [b"scene"]
+    record.click(app, "Capture")
     record.shot(app, "sign-choice")
     record.click(app, "Sign a Single File")
     record.click(app, "SD Card")
@@ -784,13 +795,6 @@ def test_gpg_screens_save_screenshots(real_backend):
     record.shot(app, "sign-folder-replace")
     record.click(app, "Confirm")
     record.shot(app, "sign-folder-time")
-    key.subkeys[0]["algorithm"] = "ECDSA (256 bits)"
-    app.gpg.build_details()
-    app.screen = "gpg-key-details"
-    app.back = ["gpg"]
-    _reveal(app, "Sign File")
-    record.click(app, "Sign File")
-    record.shot(app, "sign-camera")
     app = _app()
     record.click(app, "Verify Signature")
     record.shot(app, "verification-formats")

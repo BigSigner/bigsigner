@@ -2329,6 +2329,8 @@ class App:
             return None
         if self.screen == "scan":
             return (0, HEADER, WIDTH, HEIGHT - 108)
+        if self.screen == "camera" and self.camera_purpose == "gpg" and self.gpg.camera_for == "sign":
+            return (MARGIN, HEADER + 16, WIDTH - MARGIN, HEIGHT - 360)
         if self.screen == "camera" and self.camera_purpose == "gpg":
             return (MARGIN, HEADER + 16, WIDTH - MARGIN, HEIGHT - 290)
         if self.screen == "camera":
@@ -2592,11 +2594,14 @@ class App:
         if self.camera_purpose == "gpg":
             self._gpg_camera_header(frame)
             self._viewfinder(frame)
+            signing = self.gpg.camera_for == "sign"
             frame.text(
+                "This capture is mixed into the OS random number generation entropy. Good randomness is required for some signing algorithms."
+                if signing else
                 "This capture is mixed into the OS random number generation entropy",
                 MARGIN,
-                HEIGHT - 278,
-                size=TITLE_SIZE,
+                HEIGHT - 348 if signing else HEIGHT - 278,
+                size=28 if signing else TITLE_SIZE,
             )
         else:
             frame.header("Camera", "back")
