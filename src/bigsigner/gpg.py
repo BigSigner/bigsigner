@@ -97,6 +97,21 @@ class Outcome:
     keys: list[PublicKey] = field(default_factory=list)
 
 
+def _import_fingerprints(output: str) -> list[str]:
+    """Primary fingerprints named by a successful ``gpg --import`` status."""
+    found = []
+    for line in output.splitlines():
+        if not line.startswith("[GNUPG:] IMPORT_OK "):
+            continue
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        fingerprint = parts[3].upper()
+        if re.fullmatch(r"[0-9A-F]{40}|[0-9A-F]{64}", fingerprint) and fingerprint not in found:
+            found.append(fingerprint)
+    return found
+
+
 def _date(value: str) -> str:
     try:
         return datetime.fromtimestamp(int(value), timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -418,8 +433,11 @@ class GpgBackend:
         )
         if added.returncode:
             return Outcome(False, "The subkey could not be added.", [added])
+        trusted = self._trust_ultimate([fingerprint])
+        if trusted.returncode:
+            return Outcome(False, "The GPG key could not be trusted.", [added, trusted])
         listed = self.list_keys()
-        stages = [added, *listed.stages]
+        stages = [added, trusted, *listed.stages]
         if not listed.ok:
             return Outcome(False, listed.message, stages)
         return Outcome(True, stages=stages, keys=listed.keys)
@@ -442,7 +460,39 @@ class GpgBackend:
         summaries = [line.split()[2:] for line in result.stdout.splitlines() if line.startswith("[GNUPG:] IMPORT_RES ")]
         processed = any(parts and parts[0].isdigit() and int(parts[0]) > 0 for parts in summaries)
         ok = result.returncode == 0 and processed and not names.intersection({"IMPORT_PROBLEM", "FAILURE", "NODATA"})
-        return Outcome(ok, "" if ok else "The GPG key could not be imported.", [result])
+        if not ok:
+            return Outcome(False, "The GPG key could not be imported.", [result])
+        fingerprints = _import_fingerprints(result.stdout)
+        stages = [result]
+        if not fingerprints:
+            shown = self.command("Key Details", ["--with-colons", "--show-keys", "--with-fingerprint"], data=content, timestamp=timestamp)
+            stages.append(shown)
+            if shown.returncode:
+                return Outcome(False, "The GPG key could not be trusted.", stages)
+            try:
+                fingerprints = [key.fingerprint for key in parse_keys(shown.stdout, secret=True)]
+            except GpgError as exc:
+                return Outcome(False, str(exc), stages)
+        trusted = self._trust_ultimate(fingerprints)
+        stages.append(trusted)
+        if trusted.returncode:
+            return Outcome(False, "The GPG key could not be trusted.", stages)
+        return Outcome(True, stages=stages)
+
+    def _trust_ultimate(self, fingerprints: list[str]) -> CommandResult:
+        """Mark these primary keys ultimately trusted. Ownertrust 6 is ultimate."""
+        lines = []
+        for fingerprint in fingerprints:
+            text = fingerprint.strip().upper()
+            if text in lines:
+                continue
+            if not re.fullmatch(r"[0-9A-F]{40}|[0-9A-F]{64}", text):
+                return CommandResult("Trust GPG Key", 1, "", "The key fingerprint is not valid.")
+            lines.append(text)
+        if not lines:
+            return CommandResult("Trust GPG Key", 1, "", "The GPG key could not be trusted.")
+        payload = "".join(f"{fingerprint}:6:\n" for fingerprint in lines).encode("ascii")
+        return self.command("Trust GPG Key", ["--import-ownertrust"], data=payload)
 
     @staticmethod
     def _read_manifest(path):

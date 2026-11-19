@@ -40,8 +40,17 @@ writeFileSync(join(dir, "note.bin"), note);
 gpg(["--faked-system-time", String(stamp), "--local-user", `${signing}!`, "--armor", "--detach-sign", "--output", join(dir, "gpg-signature.asc"), join(dir, "note.bin")]);
 gpg(["--clearsign", "--faked-system-time", String(stamp), "--local-user", `${signing}!`, "--output", join(dir, "gpg-clear.asc"), join(dir, "note.bin")]);
 
-const imported = await handle({op: "import", armored: text(gpg(["--armor", "--export-secret-keys", primary]))});
+const secretArmor = text(gpg(["--armor", "--export-secret-keys", primary]));
+const preview = await handle({op: "inspect", armored: secretArmor});
+if (!preview.ok || preview.keys.some((key) => key.validity !== "Unknown" || key.subkeys.some((sub) => sub.validity !== "Unknown"))) {
+  throw new Error(preview.error || "A key was trusted before it was imported.");
+}
+const imported = await handle({op: "import", armored: secretArmor});
 if (!imported.ok) throw new Error(imported.error);
+const loaded = imported.keys.find((key) => key.fingerprint === primary);
+if (!loaded || loaded.validity !== "Ultimate" || loaded.subkeys.some((sub) => sub.validity !== "Ultimate")) {
+  throw new Error(`The imported key was not trusted: ${JSON.stringify(loaded)}`);
+}
 const signed = await handle({op: "sign", fingerprint: signing, data: note.toString("base64"), timestamp: stamp});
 if (!signed.ok) throw new Error(signed.error);
 writeFileSync(join(dir, "signature.asc"), signed.armor);

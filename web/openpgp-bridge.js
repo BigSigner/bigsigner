@@ -11,6 +11,7 @@ const CONFIG = {
   allowMissingKeyFlags: true,
 };
 const ring = new Map();
+const trusted = new Set();
 
 export async function handle(request) {
   try {
@@ -26,7 +27,10 @@ async function dispatch(request) {
   if (request.op === "inspect") return {keys: await Promise.all((await loadKeys(request)).map(describe))};
   if (request.op === "import") {
     const keys = await loadKeys(request);
-    for (const key of keys) await store(key);
+    for (const key of keys) {
+      const stored = await store(key);
+      trusted.add((await stored.getFingerprint()).toUpperCase());
+    }
     return {keys: await Promise.all([...ring.values()].map(describe))};
   }
   if (request.op === "export") return exportKey(request.fingerprint, request.secret, request.subkey);
@@ -110,7 +114,9 @@ async function addSubkey(request) {
   if (options.type === "rsa") options.rsaBits = algo === "rsa3072" ? 3072 : 4096;
   let updated = await found.key.addSubkey(options);
   if (usage === "auth") updated = await authenticationBinding(updated, date, expireSeconds);
-  ring.set((await updated.getFingerprint()).toUpperCase(), updated);
+  const fingerprint = (await updated.getFingerprint()).toUpperCase();
+  ring.set(fingerprint, updated);
+  trusted.add(fingerprint);
   return {keys: [await describe(updated)]};
 }
 
@@ -242,7 +248,7 @@ async function describe(key) {
       algorithm: algorithmText(sub.keyPacket.getAlgorithmInfo()),
       created: formatDate(sub.keyPacket.created),
       expires: subExpires,
-      validity: "Unknown",
+      validity: trusted.has(fingerprint) ? "Ultimate" : "Unknown",
       capabilities: flagText((sub.bindingSignatures || []).at(-1)),
       secret: status.secret,
       secretAvailable: status.secretAvailable,
@@ -257,7 +263,7 @@ async function describe(key) {
     algorithm: algorithmText(key.getAlgorithmInfo()),
     created: formatDate(await key.getCreationTime()),
     expires,
-    validity: "Unknown",
+    validity: trusted.has(fingerprint) ? "Ultimate" : "Unknown",
     userIds: await key.getUserIDs(),
     capabilities: primaryFlags(key),
     secret: status.secret,

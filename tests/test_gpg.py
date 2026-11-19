@@ -151,12 +151,23 @@ def test_inspection_requires_successful_exit_and_a_fingerprint(monkeypatch, tmp_
 def test_import_requires_import_status_not_only_zero_exit(monkeypatch, tmp_path):
     backend = GpgBackend(tmp_path)
     result = CommandResult("import", 0, "", "warning")
-    monkeypatch.setattr(backend, "command", lambda *args, **kwargs: result)
+    trusted = []
+
+    def command(name, args, **kwargs):
+        if "--import-ownertrust" in args:
+            trusted.append(kwargs.get("data"))
+            return CommandResult("trust", 0, "", "")
+        if "--show-keys" in args:
+            return CommandResult("show", 0, COLONS, "")
+        return result
+
+    monkeypatch.setattr(backend, "command", command)
     assert not backend.import_key(b"key", VERIFY_TIME).ok
     result.stdout = "[GNUPG:] IMPORT_RES 0 0 0 0 0\n"
     assert not backend.import_key(b"key", VERIFY_TIME).ok
     result.stdout = "[GNUPG:] IMPORT_RES 1 0 0 0 1\n"
     assert backend.import_key(b"key", VERIFY_TIME).ok  # An unchanged key is fine.
+    assert trusted == [f"{FPR}:6:\n".encode()]
     result.stdout += "[GNUPG:] IMPORT_PROBLEM 1\n"
     assert not backend.import_key(b"key", VERIFY_TIME).ok
 
@@ -238,8 +249,16 @@ def _prepare_verification_failure(root, filename, failure):
 def test_real_public_export_is_armored_and_private_export_is_refused(real_backend):
     backend, _root = real_backend
     fingerprint = _import(backend)
-    listed = backend.list_keys()
+    listed = backend.list_keys(VERIFY_TIME)
     assert listed.ok and listed.keys[0].fingerprint == fingerprint and not listed.keys[0].secret
+    assert listed.keys[0].validity == "Ultimate"
+    ownertrust = subprocess.run(
+        ["gpg", "--homedir", str(backend.home), "--export-ownertrust"],
+        capture_output=True, env=dict(os.environ, GNUPGHOME=str(backend.home), LC_ALL="C"),
+        stdin=subprocess.DEVNULL,
+    )
+    assert ownertrust.returncode == 0, ownertrust.stderr.decode()
+    assert f"{fingerprint}:6:" in ownertrust.stdout.decode()
     public = backend.export_key(fingerprint, secret=False)
     assert public.ok, public
     assert public.stages[0].stdout.lstrip().startswith("-----BEGIN PGP PUBLIC KEY BLOCK-----")
@@ -514,6 +533,7 @@ def test_real_quick_add_key_stamps_the_typed_time(real_backend, monkeypatch):
     added = backend.add_subkey(fingerprint, "ed25519", "auth", "20210304T050000", stamp)
     assert added.ok, added
     listed = next(key for key in added.keys if key.fingerprint == fingerprint)
+    assert listed.validity == "Ultimate"
     created = next(sub for sub in listed.subkeys if "a" in sub["capabilities"].lower())
     from datetime import datetime, timezone
     moment = datetime.fromtimestamp(stamp, timezone.utc)
