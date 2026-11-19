@@ -640,7 +640,7 @@ def test_encrypt_to_selects_encryption_subkeys_and_names_the_armored_file():
     assert actions == ["gpg-encrypt-toggle:" + first, "gpg-encrypt-toggle:" + second]
     assert not any(signing in item[2] for item in app.gpg.rows)
     app.gpg.backend.calls.clear()
-    _tap(app, "Encrypt To")
+    _tap(app, "Encrypt to Keys")
     _settle(app)
     app.render()
     assert any(hit["label"] == "Select" for hit in app.hits)
@@ -697,7 +697,7 @@ def test_gpg_screens_save_screenshots(real_backend):
     record.click(app, "Load GPG Key")
     record.shot(app, "key-source")
     enc = _app(fixture_date=False)
-    record.click(enc, "Encrypt To")
+    record.click(enc, "Encrypt to Keys")
     record.shot(enc, "encrypt-listing")
     _settle(enc)
     record.shot(enc, "encrypt-keys")

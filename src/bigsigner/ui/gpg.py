@@ -469,7 +469,7 @@ class GpgUI:
         y = frame.button(y, "List GPG Keys", "gpg-list")
         y = frame.button(y, "Load GPG Key", "gpg-load")
         y = frame.button(y, "Verify Signature", "gpg-formats")
-        y = frame.button(y, "Encrypt To", "gpg-encrypt")
+        y = frame.button(y, "Encrypt to Keys", "gpg-encrypt")
         frame.text("GPG keys stay in RAM and are cleared on reboot.", MARGIN, y + 12, size=28, fill=MUTED)
 
     def formats(self, frame):
@@ -694,7 +694,7 @@ class GpgUI:
 
     def encrypt_keys(self, frame):
         ready = bool(self._selected_fingerprints())
-        self.content(frame, "Encrypt To", footer=("Continue", "gpg-encrypt-continue", ready))
+        self.content(frame, "Encrypt to Keys", footer=("Continue", "gpg-encrypt-continue", ready))
 
     def encrypt_name_screen(self, frame):
         frame.header("Encrypted File", "back")
