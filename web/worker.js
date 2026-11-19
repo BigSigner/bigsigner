@@ -34,6 +34,11 @@ async function fetchBytes(url) {
 }
 
 async function boot() {
+  try {
+    await import("./openpgp-bridge.js");
+  } catch {
+    // The GPG screens report that the library did not load.
+  }
   progress("Loading Python…");
   const pyodide = await loadPyodide({
     indexURL: PYODIDE.href,
@@ -105,7 +110,7 @@ function bytesFromBase64(value) {
   return bytes;
 }
 
-function drain() {
+async function drain() {
   if (running) return;
   const msg = jobs.shift();
   if (!msg) return;
@@ -113,7 +118,14 @@ function drain() {
   let result = null;
   let error = null;
   try {
-    let raw = tick(JSON.stringify(msg.body));
+    // A direct tick() call is a synchronous entry. run_sync cannot wait for
+    // OpenPGP.js from there. callPromising is the entry that allows it.
+    let raw = await tick.callPromising(JSON.stringify(msg.body));
+    if (raw && typeof raw.destroy === "function") {
+      const text = raw.toString();
+      raw.destroy();
+      raw = text;
+    }
     if (raw && typeof raw !== "string") raw = String(raw);
     result = JSON.parse(raw);
   } catch (err) {

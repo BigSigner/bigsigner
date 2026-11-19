@@ -2595,7 +2595,10 @@ class App:
             self._gpg_camera_header(frame)
             self._viewfinder(frame)
             signing = self.gpg.camera_for == "sign"
+            emulator = sys.platform in ("emscripten", "wasi")
             frame.text(
+                "The emulator uses the browser's random source."
+                if emulator else
                 "This capture is mixed into the OS random number generation entropy. Good randomness is required for some signing algorithms."
                 if signing else
                 "This capture is mixed into the OS random number generation entropy",

@@ -516,6 +516,19 @@ def test_work_starts_after_the_first_frame_and_completion_starts_a_fresh_input_g
     assert app.frame_presented()
 
 
+def test_unthreaded_gpg_job_runs_after_the_working_screen_is_shown():
+    app = _app()
+    app.gpg.backend.threaded = False
+    _tap(app, "List GPG Keys")
+    assert app.screen == "gpg-working" and not app.gpg.backend.calls
+    app.render()
+    assert not app.gpg.backend.calls
+    app.render()
+    assert app.gpg.backend.calls == [("list", None)] and app.screen == "gpg-working"
+    app.render()
+    assert app.screen == "gpg-keys"
+
+
 def test_web_emulator_reports_unavailable_commands_without_fabricating_results():
     app = _app()
     app.gpg.backend.supported = False

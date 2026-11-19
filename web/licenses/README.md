@@ -14,6 +14,7 @@ running emulator session.
 | embit | 0.8.0 | `embit-0.8.0/LICENSE` in the pinned source archive |
 | qrcode | 8.0 | `qrcode-8.0.dist-info/LICENSE` in the pinned wheel |
 | jsQR | 1.4.0 | `package/LICENSE` in the [npm archive](https://registry.npmjs.org/jsqr/-/jsqr-1.4.0.tgz) |
+| OpenPGP.js | 6.3.0 | [Upstream LICENSE](https://github.com/openpgpjs/openpgpjs/blob/v6.3.0/LICENSE) |
 | unique-names-generator word lists | Bundled data | Device notice in `src/bigsigner/licenses.py` |
 | Bytewords | Bundled data | Device notice in `src/bigsigner/licenses.py` |
 | DejaVu fonts | Bundled assets | Device notice in `src/bigsigner/licenses.py` |

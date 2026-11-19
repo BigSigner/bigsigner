@@ -246,7 +246,19 @@ def secret_packets(key: RSAKey, name: str, email: str, *, signing: bool, expires
 def armor(packets: bytes) -> str:
     text = base64.b64encode(packets).decode()
     lines = [text[i:i + 64] for i in range(0, len(text), 64)]
-    return "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\n" + "\n".join(lines) + "\n-----END PGP PRIVATE KEY BLOCK-----\n"
+    checksum = base64.b64encode(_crc24(packets).to_bytes(3, "big")).decode("ascii")
+    return "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\n" + "\n".join(lines) + "\n=" + checksum + "\n-----END PGP PRIVATE KEY BLOCK-----\n"
+
+
+def _crc24(data: bytes) -> int:
+    crc = 0xB704CE
+    for byte in data:
+        crc ^= byte << 16
+        for _bit in range(8):
+            crc <<= 1
+            if crc & 0x1000000:
+                crc ^= 0x1864CFB
+    return crc & 0xFFFFFF
 
 
 def secret_armor(root, bits: int, index: int, name: str, email: str, *, signing: bool, expires_on=None) -> str:

@@ -350,6 +350,8 @@ def test_the_static_page_reads_the_bundle_and_checks_downloads():
     assert 'new URL("../"' not in page
     assert "crypto.subtle.digest" not in worker
     assert 'from "./external-assets/pyodide/pyodide.mjs"' in worker
+    assert 'import("./openpgp-bridge.js")' in worker
+    assert "tick.callPromising(" in worker
     assert "external-assets/pillow/" in worker
     assert "external-assets/embit/embit-0.8.0.tar.gz" in worker
     assert "external-assets/qrcode/qrcode-8.0-py3-none-any.whl" in worker
@@ -377,6 +379,7 @@ def test_the_static_page_reads_the_bundle_and_checks_downloads():
         "embit/embit-0.8.0.tar.gz",
         "qrcode/qrcode-8.0-py3-none-any.whl",
         "jsqr/jsQR.js",
+        "openpgp/openpgp.min.mjs",
     ]
 
 

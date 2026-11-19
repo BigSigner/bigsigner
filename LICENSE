@@ -71,6 +71,10 @@ jsQR (browser emulator)
 https://github.com/cozmo/jsQR
 Apache License 2.0. See web/licenses/jsQR-LICENSE.txt.
 
+OpenPGP.js (browser emulator)
+https://github.com/openpgpjs/openpgpjs/tree/v6.3.0
+OpenPGP.js 6.3.0 is under LGPL-3.0. See web/licenses/openpgp-LICENSE.txt.
+
 Pyodide, CPython, and Emscripten (browser emulator runtime)
 Pyodide 314.0.7 is under MPL 2.0. CPython 3.14.2 includes PSF and historical
 licenses. Emscripten 5.0.3 includes MIT/NCSA licenses and additional notices.

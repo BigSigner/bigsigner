@@ -29,7 +29,7 @@ It reviews a proposed transaction before signing and can show receive addresses 
 
 The Bitcoin library is [embit](https://github.com/diybitcoinhardware/embit) 0.8.0, the same release [SeedSigner pins](https://github.com/SeedSigner/seedsigner/blob/dev/requirements.txt).
 
-GPG in the side menu loads public keys into a private RAM-only keyring and verifies detached signatures or signed checksum manifests, including clear-signed manifests. Signature verification asks for the UTC date because the air-gapped device has no reliable clock. The time of day is fixed at 00:00:00 UTC. Listing and loading keys do not ask for a date. GnuPG and `sha256sum` come from bigsigner-os. The static web emulator displays the GPG interface but cannot execute these native commands.
+GPG in the side menu loads public keys into a private RAM-only keyring and verifies detached signatures or signed checksum manifests, including clear-signed manifests. Signature verification asks for the UTC date because the air-gapped device has no reliable clock. The time of day is fixed at 00:00:00 UTC. Listing and loading keys do not ask for a date. GnuPG and `sha256sum` come from bigsigner-os. The device runs GnuPG. The web emulator runs the same screens through OpenPGP.js 6.3.0 and says so when the library did not load.
 
 ## Documentation
 
@@ -55,7 +55,7 @@ PYTHONPATH=src .venv/bin/python -m bigsigner.bundle
 python3 -m http.server 8780 --directory web
 ```
 
-Open http://127.0.0.1:8780/ . The page shows the 480×800 frame at the Waveshare picture size, 51.84 mm by 86.40 mm. A browser's millimeter is not always a ruler millimeter, so the buttons under the picture adjust that size and remember it. This mode is for development. Do not type a real seed into it. The bundle command also downloads the pinned Pyodide runtime, Pillow, embit, qrcode, and jsQR into folders under `web/external-assets`, and the page loads them from there. After you change Python, run the bundle command again and reload the page. `web/bundle.json` and `web/external-assets/` are not committed.
+Open http://127.0.0.1:8780/ . The page shows the 480×800 frame at the Waveshare picture size, 51.84 mm by 86.40 mm. A browser's millimeter is not always a ruler millimeter, so the buttons under the picture adjust that size and remember it. This mode is for development. Do not type a real seed into it. The bundle command also downloads the pinned Pyodide runtime, Pillow, embit, qrcode, jsQR, and OpenPGP.js into folders under `web/external-assets`, and the page loads them from there. After you change Python, run the bundle command again and reload the page. `web/bundle.json` and `web/external-assets/` are not committed.
 
 The hash is a query string, so a seed in it is not sent to the server. A reload applies it again. `seed` is the mnemonic, and commas are spaces. `descriptor` is a wallet descriptor or a BSMS file, percent-encoded. `network` is `mainnet`, `testnet`, or `regtest`. It is applied when the boot screen ends, before the seed and the descriptor. Without it, the network is mainnet.
 

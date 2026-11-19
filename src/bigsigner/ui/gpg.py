@@ -3,6 +3,7 @@
 import calendar
 import os
 from pathlib import Path
+import sys
 import re
 import time
 
@@ -30,10 +31,33 @@ _BIP85_BITS = (("3072", "3072 bits"), ("4096", "4096 bits"))
 _BIP85_ROLES = (("cert", "Certificate Only"), ("cert-sign", "Certificate and Signing"))
 
 
+def _default_gpg_backend():
+    if sys.platform in ("emscripten", "wasi"):
+        from ..openpgpjs import OpenPgpJsBackend
+        return OpenPgpJsBackend()
+    return GpgBackend()
+
+
+class _Ready:
+    """A finished job, used when OpenPGP.js has to run on the worker thread."""
+
+    def __init__(self, result=None, error=None):
+        self._result = result
+        self._error = error
+
+    def done(self):
+        return True
+
+    def result(self):
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
 class GpgUI:
     def __init__(self, app, backend=None):
         self.app = app
-        self.backend = backend or GpgBackend()
+        self.backend = backend or _default_gpg_backend()
         self.date = dict(year=2026, month=6, day=15)
         self.subkey_clock = dict(year=2026, month=6, day=15, hour=0, minute=0)
         self.clock = "date"
@@ -407,6 +431,12 @@ class GpgUI:
         try:
             if not self.backend.supported:
                 raise GpgError("GPG commands are not available in the web emulator. Use the BigSigner device.")
+            if self.future is None and not getattr(self.backend, "threaded", True):
+                try:
+                    self.future = _Ready(self.job())
+                except Exception as exc:
+                    self.future = _Ready(error=exc)
+                return
             if self.future is None:
                 from concurrent.futures import ThreadPoolExecutor
 
