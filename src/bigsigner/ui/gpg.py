@@ -10,7 +10,10 @@ import time
 from .. import sdcard
 from ..bip85gpg import creation_text, expiration_seconds, identity, path_text, secret_armor
 from ..entropy import camera_digest
-from ..gpg import CHECKSUM_NAME, CHECKSUM_SIGNATURE, GpgBackend, GpgError, KEY_LIMIT, Outcome
+from ..gpg import (
+    CHECKSUM_LIMIT, CHECKSUM_NAME, CHECKSUM_SIGNATURE, GpgBackend, GpgError, KEY_LIMIT, Outcome,
+    looks_like_sha256sums,
+)
 from .. import file_qr
 from .canvas import BLUE, BODY_SIZE, HEADER, HEIGHT, INK, LINE, MARGIN, MUTED, PAPER, RED, TITLE_SIZE, WARNING, WHITE, WIDTH, Frame, Icons, font, wrap
 
@@ -29,6 +32,23 @@ _SUBKEY_ALGOS = (("ed25519", "Ed25519"), ("cv25519", "Curve25519"), ("rsa3072", 
 _SUBKEY_USAGES = (("sign", "Signing"), ("encr", "Encryption"), ("auth", "Authentication"))
 _BIP85_BITS = (("3072", "3072 bits"), ("4096", "4096 bits"))
 _BIP85_ROLES = (("cert", "Certificate Only"), ("cert-sign", "Certificate and Signing"))
+
+
+def _companion_looks_like_checksums(relative: str, storage: str) -> bool:
+    name = Path(relative).name
+    if not name.lower().endswith(".asc") or len(name) <= 4:
+        return False
+    parent = relative[: -len(name)].rstrip("/")
+    companion = sdcard.child_path(parent, name[:-4])
+    try:
+        if not sdcard.file_exists(companion, storage=storage):
+            return False
+        if sdcard.file_size(companion, storage=storage) > CHECKSUM_LIMIT:
+            return False
+        data = sdcard.read_bytes(companion, storage=storage, max_bytes=CHECKSUM_LIMIT)
+    except sdcard.SdError:
+        return False
+    return looks_like_sha256sums(data)
 
 
 def _default_gpg_backend():
@@ -85,6 +105,8 @@ class GpgUI:
         self.bip85_draft = ""
         self.details_back = []
         self.operation = "detached"
+        self.verify_relative = ""
+        self.verify_storage = "sd"
         self.edit_field = "year"
         self.draft = ""
         self.replace_digit = False
@@ -127,7 +149,8 @@ class GpgUI:
                          "gpg-bip85-seed": self.bip85_seeds, "gpg-bip85": self.bip85_options,
                          "gpg-bip85-details": self.bip85_details, "gpg-bip85-text": self.bip85_text,
                          "gpg-bip85-expire": self.date_screen,
-                         "gpg-encrypt-keys": self.encrypt_keys, "gpg-encrypt-name": self.encrypt_name_screen}
+                         "gpg-encrypt-keys": self.encrypt_keys, "gpg-encrypt-name": self.encrypt_name_screen,
+                         "gpg-checksum-warning": self.checksum_warning}
 
     def open(self):
         app = self.app
@@ -237,6 +260,8 @@ class GpgUI:
         elif action == "gpg-number-save":
             if self.draft and self.set_date(self.edit_field, int(self.draft)):
                 app.back_one()
+        elif action == "gpg-checksum-continue":
+            self._start_detached_verify()
         elif action == "gpg-date-continue":
             if self.clock == "subkey":
                 self._start_add_subkey()
@@ -417,10 +442,18 @@ class GpgUI:
                 return
             if not relative.lower().endswith(".asc"):
                 raise GpgError("Choose an .asc signature file.")
-            storage, timestamp = app.sd_storage, self.timestamp()
+            storage = app.sd_storage
             checksums = self.operation == "checksums"
+            if not checksums and _companion_looks_like_checksums(relative, storage):
+                self.verify_relative = relative
+                self.verify_storage = storage
+                self.close_picker()
+                if app.screen == "gpg-date":
+                    app.back_one()
+                app.go("gpg-checksum-warning")
+                return
             self.close_picker()
-            self.start("verify", lambda: self.backend.verify(relative, storage, timestamp, checksums))
+            self.start("verify", lambda: self.backend.verify(relative, storage, self.timestamp(), checksums))
         except (sdcard.SdError, GpgError) as exc:
             self.show_error(str(exc))
 
@@ -535,6 +568,26 @@ class GpgUI:
         y = frame.text("Example: release.zip + release.zip.asc", MARGIN, y, size=28, fill=MUTED)
         y = frame.button(y + 24, "Signed Checksum File", "gpg-date:checksums")
         frame.text("Example: release.tar.gz + SHASUMS.asc, with or without SHASUMS.", MARGIN, y, size=28, fill=MUTED)
+
+    def checksum_warning(self, frame):
+        frame.header("Verify Signature", "back")
+        label = "Warning"
+        face = font(34)
+        frame.text(label, (WIDTH - frame.draw.textlength(label, font=face)) / 2, HEADER + 28, size=34, fill=RED)
+        y = frame.text(
+            "This file looks like a checksum file. Detached Signature verifies only this file's signature.",
+            MARGIN, HEADER + 88, size=BODY_SIZE, fill=RED,
+        )
+        frame.text(
+            "Go back and choose Signed Checksum File to verify the signature and check the checksums of the other files.",
+            MARGIN, y + 16, size=BODY_SIZE, fill=RED,
+        )
+        gap = 110 - frame.button_height("Continue")
+        frame.button(HEIGHT - frame.button_height("Continue") - gap, "Continue", "gpg-checksum-continue")
+
+    def _start_detached_verify(self):
+        relative, storage = self.verify_relative, self.verify_storage
+        self.start("verify", lambda: self.backend.verify(relative, storage, self.timestamp(), False), replace=True)
 
     def date_screen(self, frame):
         app = self.app
@@ -916,6 +969,12 @@ class GpgUI:
                 self.add_text("stderr:", fill=MUTED, size=28)
                 self.add_output(stage.stderr, fill=RED)
             self.content_end += 20
+        if self.outcome.unverified:
+            self.add_text("Other files in the folder were not verified.", fill=WARNING)
+            for filename in self.outcome.unverified[:3]:
+                self.add_text(filename, fill=WARNING)
+            if len(self.outcome.unverified) > 3:
+                self.add_text("and more...", fill=WARNING)
 
     def content(self, frame, title, review=False, footer=None):
         gap = 20

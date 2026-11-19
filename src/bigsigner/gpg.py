@@ -95,6 +95,7 @@ class Outcome:
     message: str = ""
     stages: list[CommandResult] = field(default_factory=list)
     keys: list[PublicKey] = field(default_factory=list)
+    unverified: list[str] = field(default_factory=list)
 
 
 def _date(value: str) -> str:
@@ -240,26 +241,70 @@ def _manifest_line(name: str, digest: str) -> bytes:
     return f"{digest} *{name}\n".encode("utf-8")
 
 
-def check_manifest_paths(content: bytes, directory: Path) -> None:
-    """Confine GNU/BSD manifest paths before allowing the checker to open them."""
-    root = directory.resolve()
+def looks_like_sha256sums(content: bytes) -> bool:
+    """True when every line is blank, spaces, or a SHA256 checksum, and one checksum exists.
+
+    A checksum line is 64 hex characters, one or more spaces, and a filename.
+    """
+    if not sdcard.ascii_text(content):
+        return False
+    found = False
+    for line in content.splitlines():
+        if line == b"" or _only_spaces(line):
+            continue
+        if _SHA256_LINE.fullmatch(line):
+            found = True
+            continue
+        return False
+    return found
+
+
+def _only_spaces(line: bytes) -> bool:
+    return bool(line) and all(byte == 0x20 for byte in line)
+
+
+_SHA256_LINE = re.compile(rb"[0-9a-fA-F]{64} +.+")
+
+
+def manifest_filenames(content: bytes) -> list[str]:
+    """Filenames named by a GNU or BSD SHA256 manifest, in file order."""
+    names = []
     for line in content.split(b"\n"):
         line = line.rstrip(b"\r")
         if not line.strip() or line.startswith(b"#"):
             continue
         escaped = line.startswith(b"\\")
-        match = re.fullmatch(rb"[0-9a-fA-F]{64}[ \t][ *](.+)", line[1:] if escaped else line)
+        body = line[1:] if escaped else line
+        match = re.fullmatch(rb"[0-9a-fA-F]{64}[ \t][ *](.+)", body)
         if not match:
             match = re.fullmatch(rb"SHA256 \((.+)\) = [0-9a-fA-F]{64}", line)
         if not match:
             # GNU also accepts the legacy one-whitespace form.
-            match = re.fullmatch(rb"[0-9a-fA-F]{64}[ \t](.+)", line[1:] if escaped else line)
+            match = re.fullmatch(rb"[0-9a-fA-F]{64}[ \t](.+)", body)
         if not match:
             raise GpgError("The checksum file contains an unsupported checksum line.")
         name = match[1]
         if escaped:
             name = re.sub(rb"\\([\\nr])", lambda item: {b"\\": b"\\", b"n": b"\n", b"r": b"\r"}[item[1]], name)
-        name = os.fsdecode(name)
+        names.append(os.fsdecode(name))
+    return names
+
+
+def files_left_unchecked(present: list[str], mentioned: list[str], *reserved: str) -> list[str]:
+    """Files in the folder that the checksum list does not name.
+
+    ``reserved`` holds the checksum file and the signature file. The result
+    keeps the order of ``present``.
+    """
+    skip = set(mentioned)
+    skip.update(name for name in reserved if name)
+    return [name for name in present if name not in skip]
+
+
+def check_manifest_paths(content: bytes, directory: Path) -> None:
+    """Confine GNU/BSD manifest paths before allowing the checker to open them."""
+    root = directory.resolve()
+    for name in manifest_filenames(content):
         try:
             if name == "-" or "\x00" in name or Path(name).is_absolute():
                 raise ValueError
@@ -565,4 +610,8 @@ class GpgBackend:
             return Outcome(False, str(exc), stages)
         checked = self.command("SHA256 Check", ["--check"], data=manifest, cwd=directory, checksums=True)
         stages.append(checked)
-        return Outcome(checked.returncode == 0, "" if checked.returncode == 0 else "The SHA256 check failed.", stages)
+        present = sorted((child.name for child in directory.iterdir() if child.is_file()), key=lambda name: (name.casefold(), name))
+        checksum_name = companion.name if companion.is_file() else ""
+        unchecked = files_left_unchecked(present, manifest_filenames(manifest), checksum_name, path.name)
+        failed = checked.returncode != 0
+        return Outcome(not failed, "The SHA256 check failed." if failed else "", stages, unverified=unchecked)

@@ -12,8 +12,9 @@ import pytest
 
 from bigsigner import sdcard
 from bigsigner.gpg import (
-    CHECKSUM_NAME, CommandResult, GpgBackend, GpgError, check_manifest_paths, mix_kernel_entropy, parse_keys,
-    passphrase_required, quick_add_arguments, sha256_manifest, signature_is_deterministic, signature_ok,
+    CHECKSUM_NAME, CommandResult, GpgBackend, GpgError, check_manifest_paths, files_left_unchecked,
+    looks_like_sha256sums, manifest_filenames, mix_kernel_entropy, parse_keys, passphrase_required,
+    quick_add_arguments, sha256_manifest, signature_is_deterministic, signature_ok,
 )
 
 VECTORS = Path(__file__).parent / "vectors" / "gpg"
@@ -29,6 +30,36 @@ VERIFICATION_FAILURES = (
     ("release.txt.asc", "invalid-signature"),
     ("SHASUMS.asc", "invalid-signature"),
 )
+
+
+def test_a_sha256sums_file_is_ascii_lines_of_digests_blanks_or_spaces():
+    body = (
+        b"f16b96ae65f74e75279c558d35fb4e325df51195cc3f6e19fa00bc2bc3a2af8c *binary2950.bin\n"
+        b"\n"
+        b"   \n"
+        b"E3630883BF967F2689FBAF4ADE9DC4D2A23E32D718C34B69815F13513FD0C628  release.txt\n"
+    )
+    assert looks_like_sha256sums(body)
+    assert looks_like_sha256sums(b"a" * 64 + b" name")
+    assert not looks_like_sha256sums(b"\n   \n")
+    assert not looks_like_sha256sums(body + b"not a checksum\n")
+    assert not looks_like_sha256sums(b"a" * 63 + b" name\n")
+    assert not looks_like_sha256sums(b"a" * 64 + b"\n")
+    assert not looks_like_sha256sums(b"a" * 64 + b"\tname\n")
+    assert not looks_like_sha256sums(body + "café\n".encode())
+    assert not looks_like_sha256sums(b"psbt\xff")
+
+
+def test_checksum_names_omit_the_binary_mode_marker_and_other_folder_files_remain():
+    manifest = (
+        b"f16b96ae65f74e75279c558d35fb4e325df51195cc3f6e19fa00bc2bc3a2af8c *binary2950.bin\n"
+        b"e3630883bf967f2689fbaf4ade9dc4d2a23e32d718c34b69815f13513fd0c628  binary50k.bin\n"
+    )
+    assert manifest_filenames(manifest) == ["binary2950.bin", "binary50k.bin"]
+    present = ["SHA256SUMS", "SHA256SUMS.asc", "binary2950.bin", "binary50k.bin", "notes.txt", "extra.bin"]
+    assert files_left_unchecked(present, manifest_filenames(manifest), "SHA256SUMS", "SHA256SUMS.asc") == [
+        "notes.txt", "extra.bin",
+    ]
 
 
 def test_colon_keys_preserve_primary_fingerprint_escape_uid_and_parse_subkeys():
@@ -406,6 +437,12 @@ def test_real_detached_checksum_and_clear_signed_verification(real_backend, file
     assert result.stages[0].stderr  # Diagnostics survive successful verification.
     if checksums:
         assert "release.txt: OK" in result.stages[-1].stdout
+        if filename == "SHASUMS.asc":
+            assert result.unverified == ["CLEAR.asc", "public-key.asc", "README.md", "release.txt.asc"]
+        else:
+            assert result.unverified == ["public-key.asc", "README.md", "release.txt.asc", "SHASUMS", "SHASUMS.asc"]
+    else:
+        assert result.unverified == []
     assert before == {path.name for path in root.iterdir()}  # No extracted manifest is written.
 
 

@@ -10,7 +10,7 @@ from bigsigner import sdcard
 from bigsigner.gpg import CommandResult, Outcome, PublicKey, parse_keys
 from bigsigner.file_qr import QR_SPLIT_LIMIT, gzip_base64, recovery_command, spaced_parts
 from bigsigner.ui.app import QR_BRIGHTNESS_DEFAULT, App
-from bigsigner.ui.canvas import HEADER, HEIGHT, INK, MUTED, RED, WARNING, WIDTH, font
+from bigsigner.ui.canvas import HEADER, HEIGHT, INK, MARGIN, MUTED, RED, WARNING, WIDTH, font
 from test_gpg import COLONS, FPR, SUB_FPR, VERIFY_TIME, VERIFICATION_FAILURES, _import, _prepare_verification_failure, real_backend
 from test_sdcard import _tap
 
@@ -578,6 +578,105 @@ def test_verification_has_date_selection_and_shows_stdout_stderr_and_checksum_fa
         failure = next(row for row in app.gpg.rows if row[2] == "failure (1)")
         assert failure[4] == RED
         assert any(row[2] == "Exit Status:" and row[1] == failure[1] and row[0] < failure[0] for row in app.gpg.rows)
+
+
+def test_detached_signature_warns_when_the_matching_file_is_a_checksum_list():
+    manifest = (
+        "f16b96ae65f74e75279c558d35fb4e325df51195cc3f6e19fa00bc2bc3a2af8c *binary2950.bin\n"
+        "\n"
+        "   \n"
+        "e3630883bf967f2689fbaf4ade9dc4d2a23e32d718c34b69815f13513fd0c628 *binary50k.bin\n"
+    )
+    files = {
+        "SHA256SUMS.asc": "signature",
+        "SHA256SUMS": manifest,
+        "release.zip.asc": "signature",
+        "notes.txt.asc": "signature",
+        "notes.txt": "hello\n",
+    }
+    app = _app(files=files)
+    _tap(app, "Verify Signature")
+    _tap(app, "Detached Signature")
+    _tap(app, "Continue")
+    _tap(app, "SD Card")
+    _tap(app, "SHA256SUMS.asc")
+    app.render()
+    assert app.screen == "gpg-checksum-warning"
+    assert app.back[-1] == "gpg-formats"
+    assert app.gpg.backend.calls == []
+    words = " ".join(item["text"] for item in app.texts)
+    assert "This file looks like a checksum file." in words
+    assert "Signed Checksum File" in words
+    button = next(hit for hit in app.hits if hit["label"] == "Continue")
+    for item in app.texts:
+        left, top, right, bottom = item["box"]
+        assert 0 <= left and right <= WIDTH
+        if top >= HEADER:
+            assert left >= MARGIN - 1
+            assert right <= WIDTH - MARGIN + 1
+            assert bottom <= button["box"][1]
+    _tap(app, "back")
+    assert app.screen == "gpg-formats"
+
+    app = _app(files=files)
+    _tap(app, "Verify Signature")
+    _tap(app, "Detached Signature")
+    _tap(app, "Continue")
+    _tap(app, "SD Card")
+    _tap(app, "SHA256SUMS.asc")
+    _tap(app, "Continue")
+    _settle(app)
+    assert app.gpg.backend.calls[-1] == ("verify", "SHA256SUMS.asc", "sd", VERIFY_TIME, False)
+
+    app = _app(files=files)
+    _tap(app, "Verify Signature")
+    _tap(app, "Detached Signature")
+    _tap(app, "Continue")
+    _tap(app, "SD Card")
+    _tap(app, "notes.txt.asc")
+    _settle(app)
+    assert app.gpg.backend.calls[-1] == ("verify", "notes.txt.asc", "sd", VERIFY_TIME, False)
+
+    app = _app(files=files)
+    _tap(app, "Verify Signature")
+    _tap(app, "Signed Checksum File")
+    _tap(app, "Continue")
+    _tap(app, "SD Card")
+    _tap(app, "SHA256SUMS.asc")
+    _settle(app)
+    assert app.gpg.backend.calls[-1] == ("verify", "SHA256SUMS.asc", "sd", VERIFY_TIME, True)
+
+
+def test_checksum_result_lists_up_to_three_unverified_files_in_yellow():
+    app = _app()
+    app.screen = "gpg-result"
+    app.gpg.outcome = Outcome(
+        True,
+        stages=[
+            CommandResult("Signature Verification", 0, "Good signature.\n"),
+            CommandResult("SHA256 Check", 0, "binary2950.bin: OK\nbinary50k.bin: OK\n", checksums=True),
+        ],
+        unverified=["notes.txt", "other.bin", "spare.dat", "extra.log"],
+    )
+    app.gpg.build_result()
+    app.render()
+    warning = [row[2] for row in app.gpg.rows if row[4] == WARNING]
+    assert all(row[4] == WARNING for row in app.gpg.rows if row[2] in warning)
+    assert " ".join(warning).startswith("Other files in the folder were not verified.")
+    assert warning[-4:] == ["notes.txt", "other.bin", "spare.dat", "and more..."]
+    assert "extra.log" not in warning
+    for item in app.texts:
+        assert item["box"][0] >= 0 and item["box"][2] <= WIDTH
+
+    app.gpg.outcome.unverified = ["notes.txt", "other.bin", "spare.dat"]
+    app.gpg.build_result()
+    warning = [row[2] for row in app.gpg.rows if row[4] == WARNING]
+    assert warning[-3:] == ["notes.txt", "other.bin", "spare.dat"]
+    assert "and more..." not in warning
+
+    app.gpg.outcome.unverified = []
+    app.gpg.build_result()
+    assert not any(row[4] == WARNING for row in app.gpg.rows)
 
 
 def test_work_starts_after_the_first_frame_and_completion_starts_a_fresh_input_guard(monkeypatch):

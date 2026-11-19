@@ -12,7 +12,10 @@ import os
 import re
 
 from . import sdcard
-from .gpg import CHECKSUM_LIMIT, CHECKSUM_NAME, CHECKSUM_SIGNATURE, CommandResult, GpgError, Outcome, PublicKey, _manifest_line
+from .gpg import (
+    CHECKSUM_LIMIT, CHECKSUM_NAME, CHECKSUM_SIGNATURE, CommandResult, GpgError, Outcome, PublicKey,
+    _manifest_line, files_left_unchecked,
+)
 from .openpgp_subkey import secret_subkey_armor
 
 
@@ -166,7 +169,9 @@ class OpenPgpJsBackend:
                 return Outcome(True, stages=stages)
             checked = _check_manifest(data, parent, storage)
             stages.append(checked)
-            return Outcome(checked.returncode == 0, "" if checked.returncode == 0 else "The SHA256 check failed.", stages)
+            unchecked = _unchecked_files(data, parent, storage, companion_name, name)
+            failed = checked.returncode != 0
+            return Outcome(not failed, "The SHA256 check failed." if failed else "", stages, unverified=unchecked)
         if not checksums:
             raise GpgError(f'The matching file "{companion_name}" is missing from this folder.')
         verified, body = self._cleartext(signature, timestamp)
@@ -175,7 +180,9 @@ class OpenPgpJsBackend:
             return Outcome(False, "Signature verification failed.", stages)
         checked = _check_manifest(body, parent, storage)
         stages.append(checked)
-        return Outcome(checked.returncode == 0, "" if checked.returncode == 0 else "The SHA256 check failed.", stages)
+        unchecked = _unchecked_files(body, parent, storage, "", name)
+        failed = checked.returncode != 0
+        return Outcome(not failed, "The SHA256 check failed." if failed else "", stages, unverified=unchecked)
 
     def _detached(self, signature: bytes, data: bytes, timestamp: int) -> CommandResult:
         try:
@@ -288,6 +295,15 @@ def _folder_manifest(relative: str, storage: str) -> bytes:
     if not lines:
         raise GpgError("This folder has no files to sign.")
     return b"".join(lines)
+
+
+def _unchecked_files(content: bytes, directory: str, storage: str, checksum_name: str, signature_name: str) -> list[str]:
+    mentioned = [entry for entry, _digest in _manifest_entries(content)]
+    try:
+        present = [item["name"] for item in sdcard.list_folder(directory, storage=storage) if item["kind"] == "file"]
+    except sdcard.SdError:
+        return []
+    return files_left_unchecked(present, mentioned, checksum_name, signature_name)
 
 
 def _check_manifest(content: bytes, directory: str, storage: str) -> CommandResult:
