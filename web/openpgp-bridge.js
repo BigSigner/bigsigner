@@ -93,7 +93,7 @@ async function exportKey(fingerprint, secret, subkey) {
 async function addSubkey(request) {
   const found = await locate(request.fingerprint);
   const packet = found.key.keyPacket;
-  if (!found.key.isPrivate() || packet.isDummy() || !packet.isDecrypted()) {
+  if (!found.key.isPrivate() || (typeof packet.isDummy === "function" && packet.isDummy()) || !packet.isDecrypted()) {
     throw new Error("Adding a subkey requires the certificate's private key.");
   }
   const algo = request.algo;
@@ -293,10 +293,13 @@ function flagText(signature) {
 }
 
 function secretStatus(packet) {
-  if (!packet || typeof packet.isDecrypted !== "function") {
+  // A public packet implements isDecrypted and returns null. isDummy exists only on secret packets.
+  if (!packet || typeof packet.isDecrypted !== "function" || packet.isDecrypted() === null) {
     return {secret: false, secretAvailable: false, containsPrivate: false, needsPassphrase: false};
   }
-  if (packet.isDummy()) return {secret: true, secretAvailable: false, containsPrivate: false, needsPassphrase: false};
+  if (typeof packet.isDummy === "function" && packet.isDummy()) {
+    return {secret: true, secretAvailable: false, containsPrivate: false, needsPassphrase: false};
+  }
   const decrypted = packet.isDecrypted();
   return {secret: true, secretAvailable: true, containsPrivate: true, needsPassphrase: !decrypted};
 }

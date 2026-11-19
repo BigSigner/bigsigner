@@ -40,6 +40,12 @@ writeFileSync(join(dir, "note.bin"), note);
 gpg(["--faked-system-time", String(stamp), "--local-user", `${signing}!`, "--armor", "--detach-sign", "--output", join(dir, "gpg-signature.asc"), join(dir, "note.bin")]);
 gpg(["--clearsign", "--faked-system-time", String(stamp), "--local-user", `${signing}!`, "--output", join(dir, "gpg-clear.asc"), join(dir, "note.bin")]);
 
+const publicPreview = await handle({op: "inspect", armored: text(gpg(["--armor", "--export", primary]))});
+if (!publicPreview.ok) throw new Error(publicPreview.error);
+const shown = publicPreview.keys.find((key) => key.fingerprint === primary);
+if (!shown || shown.secret || shown.containsPrivate || shown.subkeys.some((sub) => sub.secret || sub.containsPrivate)) {
+  throw new Error(publicPreview.error || `A public key looked secret: ${JSON.stringify(shown)}`);
+}
 const secretArmor = text(gpg(["--armor", "--export-secret-keys", primary]));
 const preview = await handle({op: "inspect", armored: secretArmor});
 if (!preview.ok || preview.keys.some((key) => key.validity !== "Unknown" || key.subkeys.some((sub) => sub.validity !== "Unknown"))) {
