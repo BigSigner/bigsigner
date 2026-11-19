@@ -342,7 +342,7 @@ def test_long_binary_base64_splits_and_pages_with_brightness():
     app.scroll["fs-qr-guide"] = 10**9
     app.render()
     shown = " ".join(item["text"] for item in app.texts)
-    assert "set -o pipefail" in app.fs.qr_command and "'file.txt'" in shown
+    assert "gzip -t 'file.txt.gz'" in app.fs.qr_command and "'file.txt'" in shown
     assert app.scroll_max["fs-qr-guide"] > 0
     app.scroll["fs-qr-guide"] = 0
     app.pointer_down(200, 400)

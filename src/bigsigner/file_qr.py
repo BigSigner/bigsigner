@@ -47,11 +47,15 @@ def shell_words(text: str) -> list[str]:
 
 
 def recovery_command(name: str) -> str:
-    """The Mac or Linux command that joins the saved QR contents back into this file."""
+    """The Mac or Linux command that joins the saved QR contents back into this file.
+
+    The base64 decode is written once. gzip -t checks that copy, and gzip -dc
+    writes the original file only when the check passes.
+    """
+    archive = shell_quote(name + ".gz")
     return (
-        "set -o pipefail\n"
-        "cat file-part-* | tr -d ' ' | base64 -d | gzip -t && "
-        "cat file-part-* | tr -d ' ' | base64 -d | gzip -dc > " + shell_quote(name)
+        "cat file-part-* | tr -d ' ' | base64 -d > " + archive + "\n"
+        "gzip -t " + archive + " && gzip -dc " + archive + " > " + shell_quote(name)
     )
 
 
