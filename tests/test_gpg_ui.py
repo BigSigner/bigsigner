@@ -198,6 +198,8 @@ def test_key_is_only_imported_after_confirmation_and_cancel_discards_content(sou
     assert app.screen == "gpg-result" and app.gpg.outcome.ok
     assert not app.gpg.key_data
     assert "Success" in [item["text"] for item in app.texts]
+    _tap(app, "Back to GPG")
+    assert app.screen == "gpg" and app.back == []
     assert any("IMPORT_OK" in row[2] and row[4] == INK for row in app.gpg.rows)
     assert any("public key imported" in row[2] and row[4] == RED for row in app.gpg.rows)
     label = next(row for row in app.gpg.rows if row[2] == "Exit Status:")
@@ -775,6 +777,8 @@ def test_gpg_screens_save_screenshots(real_backend):
     record.shot(app, "import-success")
     app.scroll["gpg-result"] = 10**9
     record.shot(app, "import-success-bottom")
+    record.click(app, "Back to GPG")
+    record.shot(app, "gpg-home")
     app = _app()
     record.click(app, "List GPG Keys")
     _settle(app)

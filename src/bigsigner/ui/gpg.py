@@ -199,6 +199,8 @@ class GpgUI:
                 app._open_sd("gpg-encrypt-file")
         elif action == "gpg-encrypt-commit":
             self._commit_encrypt()
+        elif action == "gpg-home":
+            self.open()
         elif action == "gpg-load":
             app.go("gpg-key-source")
         elif action == "gpg-formats":
@@ -1337,4 +1339,4 @@ class GpgUI:
         self.content(frame, "Load GPG Key", review=True)
 
     def result(self, frame):
-        self.content(frame, "Success" if self.outcome.ok else "Error")
+        self.content(frame, "Success" if self.outcome.ok else "Error", footer=("Back to GPG", "gpg-home", True))
