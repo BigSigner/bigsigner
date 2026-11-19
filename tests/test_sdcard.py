@@ -12,6 +12,7 @@ from bigsigner.sdcard import (
     mount_memory,
     read_text,
     unmount_memory,
+    write_bytes,
     write_text,
 )
 from test_domain import LEGAL, expression
@@ -442,6 +443,20 @@ def test_write_text_on_a_memory_card_is_reported_once():
     with pytest.raises(SdError):
         write_text("../note.txt", "nope")
     assert consume_memory_change() is None
+
+
+def test_ascii_bytes_written_to_a_memory_card_are_exported_as_text():
+    mount_memory({"files": {}})
+    body = (
+        b"f16b96ae65f74e75279c558d35fb4e325df51195cc3f6e19fa00bc2bc3a2af8c *binary2950.bin\n"
+        b"e3630883bf967f2689fbaf4ade9dc4d2a23e32d718c34b69815f13513fd0c628 *binary50k.bin\n"
+    )
+    write_bytes("SHA256SUMS", body)
+    changed = consume_memory_change()
+    assert changed["files"]["SHA256SUMS"] == body.decode("ascii")
+    write_bytes("note.bin", b"\x00\xff")
+    changed = consume_memory_change()
+    assert set(changed["files"]["note.bin"]) == {"base64"}
 
 
 def test_a_non_text_file_stays_on_the_card_and_is_not_read_as_text():

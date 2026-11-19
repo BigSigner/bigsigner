@@ -415,7 +415,10 @@ def _stored_file(value):
 
 
 def _export_file(value):
+    """Text stays a string. Other bytes stay base64 so the browser can tell them apart."""
     if isinstance(value, bytes):
+        if ascii_text(value):
+            return value.decode("ascii")
         return {"base64": base64.b64encode(value).decode("ascii")}
     return value
 

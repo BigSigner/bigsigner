@@ -494,6 +494,29 @@ function isAscii(text) {
   }
   return true;
 }
+function isTextByte(byte) {
+  return byte === 9 || byte === 10 || byte === 13 || (byte >= 32 && byte < 127);
+}
+function bytesFromBase64(value) {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+function storedText(value) {
+  if (typeof value === "string") return isAscii(value) ? value : null;
+  if (!isBinaryFile(value)) return null;
+  let bytes;
+  try {
+    bytes = bytesFromBase64(value.base64);
+  } catch (err) {
+    return null;
+  }
+  for (let i = 0; i < bytes.length; i++) {
+    if (!isTextByte(bytes[i])) return null;
+  }
+  return new TextDecoder("utf-8").decode(bytes);
+}
 function bytesToBase64(bytes) {
   let binary = "";
   const chunk = 0x8000;
@@ -533,13 +556,19 @@ function openFile(path) {
     renderSd();
     return;
   }
-  const text = card.files[path];
-  if (isBinaryFile(text) || (typeof text === "string" && !isAscii(text))) {
-    downloadFile(path);
-    setSdNotice("Downloading a binary file.");
+  const stored = card.files[path];
+  const text = storedText(stored);
+  if (text === null) {
+    if (isBinaryFile(stored) || typeof stored === "string") {
+      downloadFile(path);
+      setSdNotice("Downloading a binary file.");
+    }
     return;
   }
-  if (typeof text !== "string") return;
+  if (typeof stored !== "string") {
+    card.files[path] = text;
+    noteCard();
+  }
   setSdError("");
   editingPath = path;
   editor.hidden = false;

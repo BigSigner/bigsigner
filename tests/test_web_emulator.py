@@ -290,6 +290,54 @@ def test_worker_polls_search_once_per_request_and_accepts_stop(monkeypatch):
     assert not frame["interactive"]
 
 
+def test_textual_base64_files_open_in_the_editor():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to exercise the SD card sidebar")
+    page = Path("web/index.html").read_text(encoding="utf-8")
+    helpers = "function isBinaryFile(" + page.split("function isBinaryFile(", 1)[1].split("function bytesToBase64(", 1)[0]
+    opener = page.split("function openFile(", 1)[1].split("function saveEditorSoon(", 1)[0]
+    script = r'''
+const assert = require("node:assert/strict");
+''' + helpers + "function openFile(" + opener + r'''
+const manifest = [
+  "f16b96ae65f74e75279c558d35fb4e325df51195cc3f6e19fa00bc2bc3a2af8c *binary2950.bin",
+  "e3630883bf967f2689fbaf4ade9dc4d2a23e32d718c34b69815f13513fd0c628 *binary50k.bin",
+  "",
+].join("\n");
+const encoded = Buffer.from(manifest, "ascii").toString("base64");
+assert.equal(storedText({base64: encoded}), manifest);
+assert.equal(storedText({base64: Buffer.from([0, 255]).toString("base64")}), null);
+let notices = [];
+let downloads = [];
+let noted = 0;
+const setSdError = () => {};
+const setSdNotice = text => { notices.push(text); };
+const downloadFile = path => { downloads.push(path); };
+const renderSd = () => {};
+const noteCard = () => { noted += 1; };
+let editingPath = "";
+const editor = {hidden: true};
+const editorName = {textContent: ""};
+const editorText = {value: "", focus() {}};
+const card = {files: {
+  SHA256SUMS: {base64: encoded},
+  "wallet.psbt": {base64: Buffer.from([0xff]).toString("base64")},
+}};
+openFile("SHA256SUMS");
+assert.equal(card.files.SHA256SUMS, manifest);
+assert.equal(noted, 1);
+assert.deepEqual(downloads, []);
+assert.equal(editor.hidden, false);
+assert.equal(editorText.value, manifest);
+openFile("wallet.psbt");
+assert.deepEqual(downloads, ["wallet.psbt"]);
+assert.deepEqual(notices, ["Downloading a binary file."]);
+'''
+    result = subprocess.run([node], input=script, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_the_static_page_reads_the_bundle_and_checks_downloads():
     page = Path("web/index.html").read_text(encoding="utf-8")
     worker = Path("web/worker.js").read_text(encoding="utf-8")
