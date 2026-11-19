@@ -151,14 +151,10 @@ def test_inspection_requires_successful_exit_and_a_fingerprint(monkeypatch, tmp_
 def test_import_requires_import_status_not_only_zero_exit(monkeypatch, tmp_path):
     backend = GpgBackend(tmp_path)
     result = CommandResult("import", 0, "", "warning")
-    trusted = []
+    calls = []
 
     def command(name, args, **kwargs):
-        if "--import-ownertrust" in args:
-            trusted.append(kwargs.get("data"))
-            return CommandResult("trust", 0, "", "")
-        if "--show-keys" in args:
-            return CommandResult("show", 0, COLONS, "")
+        calls.append(args)
         return result
 
     monkeypatch.setattr(backend, "command", command)
@@ -167,9 +163,9 @@ def test_import_requires_import_status_not_only_zero_exit(monkeypatch, tmp_path)
     assert not backend.import_key(b"key", VERIFY_TIME).ok
     result.stdout = "[GNUPG:] IMPORT_RES 1 0 0 0 1\n"
     assert backend.import_key(b"key", VERIFY_TIME).ok  # An unchanged key is fine.
-    assert trusted == [f"{FPR}:6:\n".encode()]
     result.stdout += "[GNUPG:] IMPORT_PROBLEM 1\n"
     assert not backend.import_key(b"key", VERIFY_TIME).ok
+    assert calls == [["--status-fd", "1", "--import"]] * 4
 
 
 def test_default_keyring_uses_a_private_ram_directory_separate_from_temporary_files(monkeypatch, tmp_path):
@@ -251,14 +247,14 @@ def test_real_public_export_is_armored_and_private_export_is_refused(real_backen
     fingerprint = _import(backend)
     listed = backend.list_keys(VERIFY_TIME)
     assert listed.ok and listed.keys[0].fingerprint == fingerprint and not listed.keys[0].secret
-    assert listed.keys[0].validity == "Ultimate"
+    assert listed.keys[0].validity == "Unknown"
     ownertrust = subprocess.run(
         ["gpg", "--homedir", str(backend.home), "--export-ownertrust"],
         capture_output=True, env=dict(os.environ, GNUPGHOME=str(backend.home), LC_ALL="C"),
         stdin=subprocess.DEVNULL,
     )
     assert ownertrust.returncode == 0, ownertrust.stderr.decode()
-    assert f"{fingerprint}:6:" in ownertrust.stdout.decode()
+    assert fingerprint not in ownertrust.stdout.decode()
     public = backend.export_key(fingerprint, secret=False)
     assert public.ok, public
     assert public.stages[0].stdout.lstrip().startswith("-----BEGIN PGP PUBLIC KEY BLOCK-----")
@@ -346,7 +342,8 @@ def test_real_detached_checksum_and_clear_signed_verification(real_backend, file
     assert result.ok, result
     assert len(result.stages) == stages
     assert "[GNUPG:] VALIDSIG" in result.stages[0].stdout
-    assert result.stages[0].stderr  # Warnings/diagnostics survive successful verification.
+    assert "not certified with a trusted signature" not in result.stages[0].stderr
+    assert result.stages[0].stderr  # Diagnostics survive successful verification.
     if checksums:
         assert "release.txt: OK" in result.stages[-1].stdout
     assert before == {path.name for path in root.iterdir()}  # No extracted manifest is written.

@@ -54,8 +54,8 @@ if (!preview.ok || preview.keys.some((key) => key.validity !== "Unknown" || key.
 const imported = await handle({op: "import", armored: secretArmor});
 if (!imported.ok) throw new Error(imported.error);
 const loaded = imported.keys.find((key) => key.fingerprint === primary);
-if (!loaded || loaded.validity !== "Ultimate" || loaded.subkeys.some((sub) => sub.validity !== "Ultimate")) {
-  throw new Error(`The imported key was not trusted: ${JSON.stringify(loaded)}`);
+if (!loaded || loaded.validity !== "Unknown" || loaded.subkeys.some((sub) => sub.validity !== "Unknown")) {
+  throw new Error(`Import changed the key validity: ${JSON.stringify(loaded)}`);
 }
 const signed = await handle({op: "sign", fingerprint: signing, data: note.toString("base64"), timestamp: stamp});
 if (!signed.ok) throw new Error(signed.error);
