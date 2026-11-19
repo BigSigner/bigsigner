@@ -8,7 +8,7 @@ import pytest
 
 from bigsigner import sdcard
 from bigsigner.gpg import CommandResult, Outcome, PublicKey, parse_keys
-from bigsigner.qr import MAX_BYTE_PAYLOAD
+from bigsigner.file_qr import QR_SPLIT_LIMIT, gzip_base64, recovery_command, spaced_parts
 from bigsigner.ui.app import QR_BRIGHTNESS_DEFAULT, App
 from bigsigner.ui.canvas import HEADER, HEIGHT, INK, MUTED, RED, WARNING, WIDTH, font
 from test_gpg import COLONS, FPR, SUB_FPR, VERIFY_TIME, VERIFICATION_FAILURES, _import, _prepare_verification_failure, real_backend
@@ -38,7 +38,7 @@ class FakeBackend:
         kind = "PRIVATE" if secret else "PUBLIC"
         body = f"-----BEGIN PGP {kind} KEY BLOCK-----\n"
         if self.huge:
-            body += "A" * (MAX_BYTE_PAYLOAD + 1) + "\n"
+            body += "A" * (QR_SPLIT_LIMIT + 1) + "\n"
         body += f"-----END PGP {kind} KEY BLOCK-----\n"
         return Outcome(True, stages=[CommandResult(name, 0, body)])
 
@@ -323,7 +323,55 @@ def test_secret_key_can_be_exported_as_a_private_key_and_a_large_key_has_no_qr()
     _settle(app)
     app.render()
     assert "gpg-export-qr" not in {hit["action"] for hit in app.hits}
-    assert "too large" in " ".join(item["text"] for item in app.texts)
+    assert "too long" in " ".join(item["text"] for item in app.texts)
+
+
+def test_a_key_longer_than_one_qr_is_split_until_8000_bytes():
+    import base64
+    import gzip
+    import hashlib
+
+    app = _listed()
+    _tap(app, "gpg-open:0")
+    _reveal(app, "Export Public Key")
+    _tap(app, "Export Public Key")
+    _settle(app)
+    app.gpg.armor = "A" * 500
+    app.render()
+    assert "gpg-export-qr" in {hit["action"] for hit in app.hits}
+    _tap(app, "Show QR Code")
+    assert app.screen == "gpg-qr-guide"
+    assert app.gpg.qr_parts == spaced_parts(gzip_base64(b"A" * 500))
+    assert app.gpg.qr_parts != ["A" * 500]
+    assert app.gpg.qr_command == recovery_command(f"{FPR}-public.asc")
+    joined = "".join(app.gpg.qr_parts).replace(" ", "")
+    assert gzip.decompress(base64.b64decode(joined)) == b"A" * 500
+    seed = b"key"
+    pieces = []
+    while sum(map(len, pieces)) < 2000:
+        seed = hashlib.sha256(seed).digest()
+        pieces.append(seed.hex())
+    app.gpg.armor = "".join(pieces)[:2000]
+    app.screen = "gpg-export"
+    _tap(app, "Show QR Code")
+    assert len(app.gpg.qr_parts) > 1
+    joined = "".join(app.gpg.qr_parts).replace(" ", "")
+    assert gzip.decompress(base64.b64decode(joined)) == app.gpg.armor.encode()
+    app.render()
+    assert any("split over" in item["text"] for item in app.texts)
+    _tap(app, "Show QR Codes")
+    assert app.screen == "gpg-key-qr"
+    app.render()
+    assert any(item["text"] == f"1 of {len(app.gpg.qr_parts)}" for item in app.texts)
+    assert app.qr_text == app.gpg.qr_parts[0]
+    _tap(app, "gpg-qr-next")
+    assert app.gpg.qr_index == 1 and app.qr_text == app.gpg.qr_parts[1]
+    _tap(app, "back")
+    assert app.screen == "gpg-qr-guide"
+    app.gpg.armor = "B" * (QR_SPLIT_LIMIT + 1)
+    app.screen = "gpg-export"
+    app.render()
+    assert "gpg-export-qr" not in {hit["action"] for hit in app.hits}
 
 
 def test_secret_subkey_exports_only_that_subkey_secret():

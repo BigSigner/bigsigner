@@ -11,7 +11,7 @@ from .. import sdcard
 from ..bip85gpg import creation_text, expiration_seconds, identity, path_text, secret_armor
 from ..entropy import camera_digest
 from ..gpg import CHECKSUM_NAME, CHECKSUM_SIGNATURE, GpgBackend, GpgError, KEY_LIMIT, Outcome
-from ..qr import MAX_BYTE_PAYLOAD
+from .. import file_qr
 from .canvas import BLUE, BODY_SIZE, HEADER, HEIGHT, INK, LINE, MARGIN, MUTED, PAPER, RED, TITLE_SIZE, WARNING, WHITE, WIDTH, Frame, Icons, font, wrap
 
 
@@ -103,6 +103,9 @@ class GpgUI:
         self.export_subkey = False
         self.export_fingerprint = ""
         self.export_title = ""
+        self.qr_parts = []
+        self.qr_index = 0
+        self.qr_command = ""
         self.encrypt_selected = set()
         self.encrypt_source = ""
         self.encrypt_storage = "sd"
@@ -117,7 +120,8 @@ class GpgUI:
                          "gpg-number": self.number,
                          "gpg-key-source": self.key_source, "gpg-working": self.working, "gpg-keys": self.keys,
                          "gpg-key-details": self.details, "gpg-export": self.export_choice,
-                         "gpg-key-qr": self.key_qr, "gpg-review": self.review, "gpg-result": self.result,
+                         "gpg-key-qr": self.key_qr, "gpg-qr-guide": self.qr_guide,
+                         "gpg-review": self.review, "gpg-result": self.result,
                          "gpg-subkey-options": self.subkey_options,
                          "gpg-sign-choice": self.sign_choice, "gpg-sign-time": self.date_screen,
                          "gpg-bip85-seed": self.bip85_seeds, "gpg-bip85": self.bip85_options,
@@ -370,13 +374,13 @@ class GpgUI:
         elif action == "gpg-export-file":
             self._export_file()
         elif action == "gpg-export-qr":
-            if len(self.armor.encode("utf-8")) > MAX_BYTE_PAYLOAD:
-                return
-            from .app import QR_BRIGHTNESS_DEFAULT
-
-            app.qr_text = self.armor
-            app.qr_brightness = QR_BRIGHTNESS_DEFAULT
-            app.go("gpg-key-qr")
+            self._open_key_qr()
+        elif action == "gpg-qr-open":
+            self._open_key_parts()
+        elif action == "gpg-qr-prev":
+            self._step_key_qr(-1)
+        elif action == "gpg-qr-next":
+            self._step_key_qr(1)
 
     def before_back(self):
         if self.app.screen == "gpg-review":
@@ -950,24 +954,111 @@ class GpgUI:
     def details(self, frame):
         self.content(frame, "GPG Key")
 
+    def _export_filename(self) -> str:
+        kind = "public" if not self.export_secret else "private"
+        fingerprint = self.export_fingerprint or (self.selected.fingerprint if self.selected else "key")
+        return f"{fingerprint}-{kind}.asc"
+
+    def _open_key_qr(self):
+        """One QR of a short armor. A longer armor uses the file QR sequence."""
+        data = self.armor.encode("utf-8")
+        if len(data) > file_qr.QR_SPLIT_LIMIT:
+            return
+        from .app import QR_BRIGHTNESS_DEFAULT
+
+        app = self.app
+        app.qr_brightness = QR_BRIGHTNESS_DEFAULT
+        if len(data) <= file_qr.TEXT_DIRECT:
+            self.qr_parts = [self.armor]
+            self.qr_index = 0
+            self.qr_command = ""
+            app.qr_text = self.armor
+            app.go("gpg-key-qr")
+            return
+        self.qr_parts = file_qr.spaced_parts(file_qr.gzip_base64(data))
+        self.qr_index = 0
+        self.qr_command = file_qr.recovery_command(self._export_filename())
+        app.scroll["gpg-qr-guide"] = 0
+        app.go("gpg-qr-guide")
+
+    def _open_key_parts(self):
+        if not self.qr_parts:
+            return
+        from .app import QR_BRIGHTNESS_DEFAULT
+
+        self.qr_index = 0
+        self.app.qr_text = self.qr_parts[0]
+        self.app.qr_brightness = QR_BRIGHTNESS_DEFAULT
+        self.app.go("gpg-key-qr")
+
+    def _step_key_qr(self, delta: int):
+        if len(self.qr_parts) < 2 or self.app.screen != "gpg-key-qr":
+            return
+        self.qr_index = (self.qr_index + delta) % len(self.qr_parts)
+        self.app.qr_text = self.qr_parts[self.qr_index]
+
     def export_choice(self, frame):
         title = self._export_title()
         frame.header(title, "back")
         y = frame.button(HEADER + 24, "Export to File", "gpg-export-file")
-        too_big = len(self.armor.encode("utf-8")) > MAX_BYTE_PAYLOAD
-        y = frame.button(y, "Show QR Code", "gpg-export-qr", enabled=not too_big)
-        if too_big:
-            frame.text("The key is too large for a single QR code.", MARGIN, y, size=28, fill=MUTED)
+        too_long = len(self.armor.encode("utf-8")) > file_qr.QR_SPLIT_LIMIT
+        y = frame.button(y, "Show QR Code", "gpg-export-qr", enabled=not too_long)
+        if too_long:
+            frame.text("This key is too long to show as a QR code.", MARGIN, y, size=28, fill=MUTED)
+
+    def qr_guide(self, frame):
+        app = self.app
+        label = "Show QR Code" if len(self.qr_parts) == 1 else "Show QR Codes"
+        button_h = frame.button_height(label)
+        footer = HEIGHT - 16 - button_h
+        frame.clip_bottom = footer - 20
+        end = self._guide_body(frame, False, 0)
+        offset = app._scroll_offset("gpg-qr-guide", end, clearance=HEIGHT - footer + 16)
+        self._guide_body(frame, True, offset)
+        frame.clip_bottom = HEIGHT
+        frame.button(footer, label, "gpg-qr-open")
+        frame.header("Key QR", "back")
+
+    def _guide_body(self, frame, paint, offset):
+        app = self.app
+        count = len(self.qr_parts)
+        codes = "1 QR code" if count == 1 else f"{count} QR codes"
+        intro = (
+            f"This key is large and has been split over {codes}. "
+            "Save the content of each QR code in a file. "
+            "Name them file-part-00, file-part-01, and so on, starting with the first QR code. "
+            "On a Mac or Linux, run:"
+        )
+        y = HEADER + 20
+        y = app._flow_text(frame, y, intro, paint, offset, BODY_SIZE)
+        y += 8
+        app.fs.qr_command = self.qr_command
+        return app.fs._command_block(frame, y, paint, offset)
 
     def key_qr(self, frame):
         from .app import QR_BRIGHTNESS_DEFAULT, _qr_image, _qr_light
 
+        app = self.app
+        many = len(self.qr_parts) > 1
         light = _qr_light(QR_BRIGHTNESS_DEFAULT)
         frame.draw.rectangle((0, 0, WIDTH, HEIGHT), fill=light)
+        payload = self.qr_parts[self.qr_index] if self.qr_parts else self.armor
+        if many:
+            top = HEADER + 16
+            bright_y = HEIGHT - 88 - 12 - 52
+            box = min(WIDTH - 2 * MARGIN, bright_y - 12 - top)
+            image = _qr_image(payload, max(160, box), light)
+            frame.image.paste(image, ((WIDTH - image.width) // 2, top))
+            app._brightness_control(frame, HEIGHT - 88 - 12 - 52)
+            app._format_switcher(
+                frame, f"{self.qr_index + 1} of {len(self.qr_parts)}", "gpg-qr-prev", "gpg-qr-next",
+            )
+            frame.header("Key QR", "back")
+            return
         top = HEADER + 24
-        image = _qr_image(self.armor, WIDTH - 2 * MARGIN, light)
+        image = _qr_image(payload, WIDTH - 2 * MARGIN, light)
         frame.image.paste(image, (MARGIN, top))
-        self.app._brightness_control(frame, top + image.height + 24)
+        app._brightness_control(frame, top + image.height + 24)
         frame.header(self._export_title().removeprefix("Export "), "back")
 
     def subkey_options(self, frame):
