@@ -97,6 +97,7 @@ class GpgUI:
         self.buttons = []
         self.content_end = HEADER
         self.selected = None
+        self._restore_keys = None
         self.armor = ""
         self.export_secret = False
         self.export_subkey = False
@@ -362,6 +363,10 @@ class GpgUI:
             else:
                 self.export_title = "Export Private Subkey"
             self.start("export", lambda: self.backend.export_key(fingerprint, secret=self.export_secret, subkey=self.export_subkey))
+        elif action == "gpg-delete":
+            if self.selected is None or not self.selected.fingerprint:
+                return
+            app.confirm = "gpg-delete"
         elif action == "gpg-export-file":
             self._export_file()
         elif action == "gpg-export-qr":
@@ -415,7 +420,15 @@ class GpgUI:
         except (sdcard.SdError, GpgError) as exc:
             self.show_error(str(exc))
 
+    def delete_selected(self):
+        key = self.selected
+        if key is None or not key.fingerprint:
+            return
+        fingerprint = key.fingerprint
+        self.start("delete", lambda: self.backend.delete_key(fingerprint), replace=True)
+
     def start(self, kind, job, *, replace=False):
+        self._restore_keys = None
         self.job_kind, self.job = kind, job
         self.future = None
         self.work_shown = False
@@ -454,11 +467,19 @@ class GpgUI:
         self.finish(outcome)
 
     def finish(self, outcome):
+        previous_keys = list(self.outcome.keys)
         self.job = self.future = None
         if self.executor is not None:
             self.executor.shutdown(wait=False)
             self.executor = None
         self.outcome = outcome
+        if self.job_kind == "delete":
+            fingerprint = self.selected.fingerprint if self.selected is not None else ""
+            kept = previous_keys
+            if outcome.ok:
+                self.selected = None
+                kept = [key for key in previous_keys if key.fingerprint != fingerprint]
+            self._restore_keys = kept
         if outcome.ok and self.job_kind == "export":
             self.armor = outcome.stages[-1].stdout if outcome.stages else ""
             self.app.screen = "gpg-export"
@@ -577,7 +598,7 @@ class GpgUI:
         frame.header("GPG")
         labels = {"list": "Listing GPG Keys…", "preview": "Reading GPG Key…", "import": "Importing GPG Key…",
                   "verify": "Verifying Signature…", "export": self._export_progress(),
-                  "add-subkey": "Adding a Subkey…", "sign": "Signing File…",
+                  "add-subkey": "Adding a Subkey…", "sign": "Signing File…", "delete": "Deleting GPG Key…",
                   "bip85": "Creating a GPG Key…", "encrypt-list": "Listing GPG Keys…",
                   "encrypt": "Encrypting File…"}
         frame.text(labels.get(self.job_kind, "Working…"), MARGIN, HEADER + 40, size=BODY_SIZE)
@@ -588,9 +609,9 @@ class GpgUI:
         self.content_end = HEADER + 20
         self.scratch = Frame()
 
-    def add_button(self, text, action, *, inset=0, enabled=True):
+    def add_button(self, text, action, *, inset=0, enabled=True, color=BLUE):
         height = self.scratch.button_height(text, inset=inset)
-        self.buttons.append((self.content_end, text, action, height, inset, enabled))
+        self.buttons.append((self.content_end, text, action, height, inset, enabled, color))
         self.content_end += height + 12
 
     def add_text(self, text, *, fill=INK, size=TITLE_SIZE, mono=False, center=False, inset=0):
@@ -686,7 +707,8 @@ class GpgUI:
             for item in buttons:
                 text, action = item[0], item[1]
                 enabled = item[2] if len(item) > 2 else True
-                self.add_button(text, action, inset=16, enabled=enabled)
+                color = item[4] if len(item) > 4 else BLUE
+                self.add_button(text, action, inset=16, enabled=enabled, color=color)
                 if len(item) > 3 and item[3]:
                     self.add_text(item[3], fill=MUTED, size=28, inset=16)
             if note:
@@ -827,6 +849,7 @@ class GpgUI:
                                  "" if key.secret_available else SUBKEY_NOTE))
                 if "s" in key.capabilities.lower():
                     buttons.append(self._sign_button("gpg-sign", bool(key.secret_available), key.needs_passphrase))
+                buttons.append(("Delete", "gpg-delete", True, "", RED))
             self._card(values, fields, open_action=f"gpg-open:{index}" if open_cards else "",
                        private=not summary and key.contains_private, buttons=buttons)
             if not summary:
@@ -900,10 +923,10 @@ class GpgUI:
                 frame.draw.rounded_rectangle((left, top - offset, right, end - offset), radius=12, fill=WHITE, outline=LINE, width=2)
                 if action:
                     frame.hit((left, max(top - offset, HEADER), right, min(end - offset, bottom)), action, "GPG Key")
-        for y, text, action, _height, inset, enabled in self.buttons:
+        for y, text, action, _height, inset, enabled, color in self.buttons:
             top = y - offset
             if top >= HEADER and top < bottom:
-                frame.button(top, text, action, inset=inset, enabled=enabled)
+                frame.button(top, text, action, color=color, inset=inset, enabled=enabled)
         for x, y, text, size, fill, mono in self.rows:
             y -= offset
             if y + size + 8 > HEADER and y < bottom:
@@ -918,6 +941,10 @@ class GpgUI:
         frame.header(title, "back")
 
     def keys(self, frame):
+        if self._restore_keys is not None:
+            self.outcome = Outcome(True, keys=self._restore_keys)
+            self._restore_keys = None
+            self.build_keys(summary=True)
         self.content(frame, "List GPG Keys")
 
     def details(self, frame):
@@ -1339,4 +1366,4 @@ class GpgUI:
         self.content(frame, "Load GPG Key", review=True)
 
     def result(self, frame):
-        self.content(frame, "Success" if self.outcome.ok else "Error", footer=("Back to GPG", "gpg-home", True))
+        self.content(frame, "Success" if self.outcome.ok else "Error", footer=("Done", "gpg-home", True))

@@ -72,6 +72,13 @@ class OpenPgpJsBackend:
             return Outcome(False, str(exc))
         return Outcome(True, stages=[CommandResult("Import GPG Key", 0, "The key was imported.\n")])
 
+    def delete_key(self, fingerprint: str):
+        try:
+            self._call({"op": "delete", "fingerprint": fingerprint})
+        except GpgError as exc:
+            return Outcome(False, str(exc), [CommandResult("Delete Keys", 1, "", str(exc))])
+        return Outcome(True, stages=[CommandResult("Delete Keys", 0, "The key was deleted.\n")])
+
     def export_key(self, fingerprint: str, *, secret: bool = False, subkey: bool = False):
         name = "Export Private Subkey" if subkey else ("Export Private Key" if secret else "Export Public Key")
         try:

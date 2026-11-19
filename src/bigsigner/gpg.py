@@ -444,6 +444,28 @@ class GpgBackend:
         ok = result.returncode == 0 and processed and not names.intersection({"IMPORT_PROBLEM", "FAILURE", "NODATA"})
         return Outcome(ok, "" if ok else "The GPG key could not be imported.", [result])
 
+    def delete_key(self, fingerprint: str):
+        """Remove this primary key and its subkeys from both keyrings.
+
+        ``gpg --delete-secret-keys`` runs first. A public key has no secret, so
+        that command's "not found" status still continues to ``gpg --delete-keys``.
+        """
+        if not re.fullmatch(r"[0-9A-F]{32}|[0-9A-F]{40}|[0-9A-F]{64}", fingerprint):
+            return Outcome(False, "The key fingerprint is not valid.")
+        secret = self.command(
+            "Delete Secret Keys",
+            ["--yes", "--status-fd", "1", "--delete-secret-keys", "--", fingerprint],
+            agent=True,
+        )
+        public = self.command(
+            "Delete Keys",
+            ["--yes", "--status-fd", "1", "--delete-keys", "--", fingerprint],
+        )
+        stages = [secret, public]
+        secret_gone = secret.returncode == 0 or "DELETE_PROBLEM 1" in secret.stdout
+        ok = secret_gone and public.returncode == 0
+        return Outcome(ok, "" if ok else "The GPG key could not be deleted.", stages)
+
     @staticmethod
     def _read_manifest(path):
         with path.open("rb") as handle:

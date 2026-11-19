@@ -29,6 +29,7 @@ async function dispatch(request) {
     for (const key of keys) await store(key);
     return {keys: await Promise.all([...ring.values()].map(describe))};
   }
+  if (request.op === "delete") return deleteKey(request.fingerprint);
   if (request.op === "export") return exportKey(request.fingerprint, request.secret, request.subkey);
   if (request.op === "add-subkey") return addSubkey(request);
   if (request.op === "sign") return sign(request);
@@ -43,6 +44,20 @@ async function loadKeys(request) {
   if (request.armored) return openpgp.readKeys({armoredKeys: request.armored, config});
   if (request.binary) return openpgp.readKeys({binaryKeys: bytes(request.binary), config});
   throw new Error("The GPG key could not be read.");
+}
+
+async function deleteKey(fingerprint) {
+  const want = String(fingerprint || "").toUpperCase();
+  if (!/^[0-9A-F]{32}$|^[0-9A-F]{40}$|^[0-9A-F]{64}$/.test(want)) {
+    throw new Error("The key fingerprint is not valid.");
+  }
+  for (const key of ring.values()) {
+    if ((await key.getFingerprint()).toUpperCase() === want) {
+      ring.delete(want);
+      return {};
+    }
+  }
+  throw new Error("The GPG key could not be deleted.");
 }
 
 async function store(key) {

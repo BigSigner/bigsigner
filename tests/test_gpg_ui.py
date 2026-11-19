@@ -64,6 +64,13 @@ class FakeBackend:
         self.calls.append(("import", data, timestamp))
         return Outcome(True, stages=[CommandResult("Import GPG Key", 0, f"[GNUPG:] IMPORT_OK 1 {FPR}\n[GNUPG:] IMPORT_RES 1 0 1", "gpg: public key imported")])
 
+    def delete_key(self, fingerprint):
+        self.calls.append(("delete", fingerprint))
+        return Outcome(True, stages=[
+            CommandResult("Delete Secret Keys", 0, ""),
+            CommandResult("Delete Keys", 0, ""),
+        ])
+
     def mix_entropy(self, digest):
         self.calls.append(("mix", digest))
 
@@ -198,7 +205,7 @@ def test_key_is_only_imported_after_confirmation_and_cancel_discards_content(sou
     assert app.screen == "gpg-result" and app.gpg.outcome.ok
     assert not app.gpg.key_data
     assert "Success" in [item["text"] for item in app.texts]
-    _tap(app, "Back to GPG")
+    _tap(app, "Done")
     assert app.screen == "gpg" and app.back == []
     assert any("IMPORT_OK" in row[2] and row[4] == INK for row in app.gpg.rows)
     assert any("public key imported" in row[2] and row[4] == RED for row in app.gpg.rows)
@@ -265,6 +272,40 @@ def test_key_list_shows_three_fields_and_opens_details_with_armored_export():
     assert app.screen == "gpg-key-details"
     _tap(app, "back")
     assert app.screen == "gpg-keys"
+
+
+def test_delete_confirms_then_removes_the_primary_key_and_its_subkeys():
+    app = _listed()
+    _tap(app, "gpg-open:0")
+    delete = next(item for item in app.gpg.buttons if item[1] == "Delete")
+    assert delete[2] == "gpg-delete" and delete[5] is True and delete[6] == RED
+    primary = app.gpg.cards[0]
+    assert primary[1] < delete[0] and delete[0] + delete[3] < primary[3]
+    subkey = next(row[1] for row in app.gpg.rows if row[2] == "Subkey")
+    assert delete[0] < subkey
+    assert [item[1] for item in app.gpg.buttons].count("Delete") == 1
+    _reveal(app, "Delete")
+    image = app.render()
+    hit = next(item for item in app.hits if item["label"] == "Delete")
+    assert image.getpixel((hit["box"][0] + 18, (hit["box"][1] + hit["box"][3]) // 2)) == RED
+    _tap(app, "Delete")
+    assert app.confirm == "gpg-delete" and app.screen == "gpg-key-details"
+    assert app._confirm_message() == "Delete this GPG key and its subkeys?"
+    image = app.render()
+    confirm = next(item for item in app.hits if item["label"] == "Confirm")
+    assert image.getpixel((confirm["box"][0] + 18, (confirm["box"][1] + confirm["box"][3]) // 2)) == RED
+    _tap(app, "Cancel")
+    assert app.confirm is None and app.gpg.backend.calls == [("list", None)]
+    _tap(app, "Delete")
+    _tap(app, "Confirm")
+    _settle(app)
+    assert app.gpg.backend.calls[-1] == ("delete", FPR)
+    assert app.screen == "gpg-result" and app.gpg.outcome.ok
+    assert [stage.name for stage in app.gpg.outcome.stages] == ["Delete Secret Keys", "Delete Keys"]
+    _tap(app, "back")
+    assert app.screen == "gpg-keys"
+    app.render()
+    assert any(row[2] == "No GPG keys are loaded." for row in app.gpg.rows)
 
 
 def test_secret_key_can_be_exported_as_a_private_key_and_a_large_key_has_no_qr():
@@ -777,7 +818,7 @@ def test_gpg_screens_save_screenshots(real_backend):
     record.shot(app, "import-success")
     app.scroll["gpg-result"] = 10**9
     record.shot(app, "import-success-bottom")
-    record.click(app, "Back to GPG")
+    record.click(app, "Done")
     record.shot(app, "gpg-home")
     app = _app()
     record.click(app, "List GPG Keys")
@@ -791,6 +832,11 @@ def test_gpg_screens_save_screenshots(real_backend):
     record.shot(app, "sign-file-disabled")
     _reveal(app, "Export Public Key")
     record.shot(app, "gpg-key-bottom")
+    _reveal(app, "Delete")
+    record.shot(app, "gpg-key-delete")
+    record.click(app, "Delete")
+    record.shot(app, "gpg-key-delete-confirm")
+    record.click(app, "Cancel")
     record.click(app, "Export Public Key")
     _settle(app)
     record.shot(app, "export-public")

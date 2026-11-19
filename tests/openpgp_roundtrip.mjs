@@ -103,6 +103,12 @@ try {
 } catch (error) {
   if (error.code !== "ENOENT") throw error;
 }
+const removed = await handle({op: "delete", fingerprint: primary});
+if (!removed.ok) throw new Error(removed.error);
+const remaining = await handle({op: "list"});
+if (!remaining.ok || remaining.keys.some((key) => key.fingerprint === primary)) {
+  throw new Error(remaining.error || "The deleted key is still loaded.");
+}
 writeFileSync(join(dir, "meta.json"), JSON.stringify({
   primary, signing, encryption, timestamp: stamp,
   bip85: bip85 && {fingerprint: bip85.fingerprint, capabilities: bip85.capabilities},

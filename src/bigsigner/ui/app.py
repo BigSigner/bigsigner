@@ -6301,6 +6301,8 @@ class App:
             return self.gpg.overwrite_message()
         if self.confirm == "gpg-encrypt-replace":
             return self.gpg.encrypt_overwrite_message()
+        if self.confirm == "gpg-delete":
+            return "Delete this GPG key and its subkeys?"
         if self.confirm == "open-wallet-key" and self._wallet_key_target is not None:
             return "Go to Seed Key?" if self._wallet_key_target[2] else "Go to External Key?"
         if self.confirm == "account-warning":
@@ -6381,7 +6383,7 @@ class App:
         if self.confirm == "seed-warning":
             yes = "OK"
         self._dialog_button(frame, cancel, no, "confirm-no", (132, 138, 148))
-        color = RED if self.confirm in ("delete-key", "delete-wallet", "replace-file", "fs-delete") else BLUE
+        color = RED if self.confirm in ("delete-key", "delete-wallet", "replace-file", "fs-delete", "gpg-delete") else BLUE
         self._dialog_button(frame, confirm, yes, "confirm-yes", color)
 
     def _dialog_button(self, frame: Frame, box, text: str, action: str, color):
@@ -6435,6 +6437,8 @@ class App:
             self.gpg.open_sign_time()
         elif kind == "gpg-encrypt-replace":
             self.gpg.start_encrypt()
+        elif kind == "gpg-delete":
+            self.gpg.delete_selected()
 
     def _descriptor_choice_message(self) -> str:
         if self.descriptor_choice and self.descriptor_choice.get("multisig"):

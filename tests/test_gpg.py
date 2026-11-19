@@ -168,6 +168,37 @@ def test_import_requires_import_status_not_only_zero_exit(monkeypatch, tmp_path)
     assert calls == [["--status-fd", "1", "--import"]] * 4
 
 
+def test_delete_runs_secret_then_public_removal(monkeypatch, tmp_path):
+    backend = GpgBackend(tmp_path)
+    calls = []
+
+    def command(name, args, **kwargs):
+        calls.append((name, args, kwargs.get("agent")))
+        if name == "Delete Secret Keys":
+            return CommandResult(name, 2, "[GNUPG:] DELETE_PROBLEM 1\n", "gpg: key not found")
+        return CommandResult(name, 0, "", "")
+
+    monkeypatch.setattr(backend, "command", command)
+    assert not backend.delete_key("not-a-fingerprint").ok
+    assert calls == []
+    deleted = backend.delete_key(FPR)
+    assert deleted.ok, deleted
+    assert calls == [
+        ("Delete Secret Keys", ["--yes", "--status-fd", "1", "--delete-secret-keys", "--", FPR], True),
+        ("Delete Keys", ["--yes", "--status-fd", "1", "--delete-keys", "--", FPR], None),
+    ]
+    calls.clear()
+
+    def refused(name, args, **kwargs):
+        calls.append(name)
+        return CommandResult(name, 2, "[GNUPG:] FAILURE delete\n", "gpg: delete key failed")
+
+    monkeypatch.setattr(backend, "command", refused)
+    failed = backend.delete_key(FPR)
+    assert not failed.ok and [stage.name for stage in failed.stages] == ["Delete Secret Keys", "Delete Keys"]
+    assert calls == ["Delete Secret Keys", "Delete Keys"]
+
+
 def test_default_keyring_uses_a_private_ram_directory_separate_from_temporary_files(monkeypatch, tmp_path):
     monkeypatch.setattr(sdcard, "TEMPORARY_ROOT", str(tmp_path / "bigsigner"))
     monkeypatch.setattr(sdcard, "_mounted_filesystems", lambda: [(tmp_path, "tmpfs")])
@@ -261,6 +292,35 @@ def test_real_public_export_is_armored_and_private_export_is_refused(real_backen
     assert "-----BEGIN PGP PRIVATE KEY BLOCK-----" not in public.stages[0].stdout
     private = backend.export_key(fingerprint, secret=True)
     assert not private.ok
+
+
+def test_real_delete_removes_a_secret_key_with_subkeys_and_a_public_key(real_backend):
+    backend, _root = real_backend
+    env = dict(os.environ, GNUPGHOME=str(backend.home), LC_ALL="C", LANG="C", TZ="UTC")
+    generated = subprocess.run(
+        ["gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
+         "--quick-gen-key", "Delete <delete@example.invalid>", "ed25519", "cert", "never"],
+        capture_output=True, env=env)
+    assert generated.returncode == 0, generated.stderr.decode()
+    fingerprint = backend.list_keys().keys[0].fingerprint
+    added = subprocess.run(
+        ["gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
+         "--quick-add-key", fingerprint, "cv25519", "encrypt", "never"],
+        capture_output=True, env=env)
+    assert added.returncode == 0, added.stderr.decode()
+    listed = backend.list_keys()
+    assert listed.ok and listed.keys[0].subkeys and listed.keys[0].secret
+    deleted = backend.delete_key(fingerprint)
+    assert deleted.ok, deleted
+    assert [stage.name for stage in deleted.stages] == ["Delete Secret Keys", "Delete Keys"]
+    assert [stage.returncode for stage in deleted.stages] == [0, 0]
+    assert backend.list_keys().keys == []
+    public = _import(backend)
+    removed = backend.delete_key(public)
+    assert removed.ok, removed
+    assert "DELETE_PROBLEM 1" in removed.stages[0].stdout
+    assert removed.stages[1].returncode == 0
+    assert backend.list_keys(VERIFY_TIME).keys == []
 
 
 def test_real_secret_key_exports_an_armored_private_key(real_backend):
