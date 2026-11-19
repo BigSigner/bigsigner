@@ -318,7 +318,7 @@ def test_split_guide_quotes_spaces_and_a_single_quote_in_the_file_name():
     app = _details(b"y" * 500, name="my file's data.bin")
     _tap(app, "Show QR")
     assert app.screen == "fs-qr-guide"
-    assert app.fs.qr_command.endswith("'my file'\\''s data.bin'")
+    assert app.fs.qr_command.startswith("filename='my file'\\''s data.bin'")
     app.render()
     assert app.scroll_max["fs-qr-guide"] > 0
 
@@ -342,7 +342,7 @@ def test_long_binary_base64_splits_and_pages_with_brightness():
     app.scroll["fs-qr-guide"] = 10**9
     app.render()
     shown = " ".join(item["text"] for item in app.texts)
-    assert "gzip -t 'file.txt.gz'" in app.fs.qr_command and "'file.txt'" in shown
+    assert "gunzip \"${filename}.gz\"" in app.fs.qr_command and "filename='file.txt'" in shown
     assert app.scroll_max["fs-qr-guide"] > 0
     app.scroll["fs-qr-guide"] = 0
     app.pointer_down(200, 400)

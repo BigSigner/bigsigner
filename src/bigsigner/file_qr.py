@@ -29,7 +29,10 @@ def shell_words(text: str) -> list[str]:
             index += 1
             continue
         start = index
-        if text[index] == "'":
+        while index < len(text) and not text[index].isspace():
+            if text[index] != "'":
+                index += 1
+                continue
             index += 1
             while index < len(text):
                 if text.startswith("'\\''", index):
@@ -39,9 +42,6 @@ def shell_words(text: str) -> list[str]:
                     index += 1
                     break
                 index += 1
-        else:
-            while index < len(text) and not text[index].isspace():
-                index += 1
         words.append(text[start:index])
     return words
 
@@ -49,13 +49,13 @@ def shell_words(text: str) -> list[str]:
 def recovery_command(name: str) -> str:
     """The Mac or Linux command that joins the saved QR contents back into this file.
 
-    The base64 decode is written once. gzip -t checks that copy, and gzip -dc
-    writes the original file only when the check passes.
+    The file name is saved once. The base64 decode is written to that name plus
+    .gz, gzip -t checks the copy, and gunzip replaces it with the original file.
     """
-    archive = shell_quote(name + ".gz")
     return (
-        "cat file-part-* | tr -d ' ' | base64 -d > " + archive + "\n"
-        "gzip -t " + archive + " && gzip -dc " + archive + " > " + shell_quote(name)
+        "filename=" + shell_quote(name) + "\n"
+        "cat file-part-* | tr -d ' ' | base64 -d > \"${filename}.gz\"\n"
+        "gzip -t \"${filename}.gz\" && gunzip \"${filename}.gz\""
     )
 
 

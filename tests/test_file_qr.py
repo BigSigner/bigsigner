@@ -15,14 +15,17 @@ def test_parts_are_400_characters_with_a_space_prefix_and_an_index_suffix():
 
 def test_recovery_command_quotes_the_original_file_name():
     command = (
-        "cat file-part-* | tr -d ' ' | base64 -d > 'notes.txt.gz'\n"
-        "gzip -t 'notes.txt.gz' && gzip -dc 'notes.txt.gz' > 'notes.txt'"
+        "filename='notes.txt'\n"
+        "cat file-part-* | tr -d ' ' | base64 -d > \"${filename}.gz\"\n"
+        "gzip -t \"${filename}.gz\" && gunzip \"${filename}.gz\""
     )
     assert recovery_command("notes.txt") == command
     name = "my file's \"data\" $*.bin"
-    assert shell_quote(name) == "'my file'\\''s \"data\" $*.bin'"
-    assert recovery_command(name).endswith(shell_quote(name))
-    assert shell_words(recovery_command(name).split("\n")[1])[-1] == shell_quote(name)
+    quoted = "'my file'\\''s \"data\" $*.bin'"
+    assert shell_quote(name) == quoted
+    assignment = "filename=" + quoted
+    assert recovery_command(name).split("\n")[0] == assignment
+    assert shell_words(assignment) == [assignment]
 
 
 def test_shell_command_restores_text_and_a_quoted_binary_name(tmp_path):
@@ -51,7 +54,7 @@ def _restore(folder: Path, data: bytes, name: str):
     )
     assert completed.returncode == 0, completed.stderr
     assert (folder / name).read_bytes() == data
-    assert (folder / f"{name}.gz").is_file()
+    assert not (folder / f"{name}.gz").exists()
 
 
 def test_a_failed_gzip_check_does_not_write_the_file(tmp_path):
