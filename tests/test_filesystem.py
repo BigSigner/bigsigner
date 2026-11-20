@@ -955,7 +955,23 @@ def test_done_releases_the_hold_and_deletes_the_ram_copy(monkeypatch, tmp_path):
     _tap(app, "Done")
     assert released == [True]
     assert not copy.exists()
+    assert app.screen == "filesystem"
+    assert app.back == []
+
+
+def test_a_removed_sd_card_on_file_details_returns_to_file_system(monkeypatch):
+    app = _details(b"hello")
     assert app.screen == "fs-details"
+
+    def missing(*_args, **_kwargs):
+        raise sdcard.SdError("No SD card is available.")
+
+    monkeypatch.setattr(sdcard, "file_size", missing)
+    app.render()
+    assert "No SD card is available." in _shown(app)
+    _tap(app, "back")
+    assert app.screen == "filesystem"
+    assert app.back == []
 
 
 def _finish_file(app):

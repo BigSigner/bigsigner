@@ -39,6 +39,7 @@ class FileSystemUI:
         self.editor = TextEditor(OPEN_LIMIT)
         self.path = ""
         self.storage = "sd"
+        self.sd_missing = False
         self.is_new = False
         self.data = b""
         self.name_mode = "create"
@@ -115,6 +116,17 @@ class FileSystemUI:
         app.menu = app.add_menu = False
         app.open_dropdown = None
 
+    def _show_filesystem(self):
+        """Leave a file flow and show the SD Card and Temporary FS choice."""
+        app = self.app
+        app.sd_mode = "manage"
+        app.sd_dir = ""
+        app.back = []
+        app.screen = "filesystem"
+        app.confirm = None
+        app.menu = app.add_menu = False
+        app.open_dropdown = None
+
     def act(self, action):
         app = self.app
         try:
@@ -122,6 +134,7 @@ class FileSystemUI:
                 self.path = action[len("fs-select:"):]
                 self.storage = app.sd_storage
                 sdcard.file_size(self.path, storage=self.storage)
+                self.sd_missing = False
                 app.scroll["fs-details"] = 0
                 app.go("fs-details")
             elif action.startswith("fs-move-storage:"):
@@ -221,7 +234,7 @@ class FileSystemUI:
                 app.confirm = "fs-burn-skip"
             elif action == "fs-burn-done":
                 self.leave_burn_result()
-                app.back_one()
+                self._show_filesystem()
             elif action == "fs-qr-ok":
                 app.back_one()
                 self.open_data()
@@ -328,6 +341,9 @@ class FileSystemUI:
         app = self.app
         if app.screen == "fs-burn-result":
             self.leave_burn_result()
+        if app.screen == "fs-details" and self.sd_missing:
+            self._show_filesystem()
+            return True
         if app.screen != "fs-edit":
             return False
         if self.editor.changed:
@@ -933,9 +949,11 @@ class FileSystemUI:
             size = sdcard.file_size(self.path, storage=self.storage)
             text = self._is_ascii_file(size)
         except sdcard.SdError as exc:
+            self.sd_missing = self.storage == "sd" and str(exc) == "No SD card is available."
             frame.header("File Details", "back")
             frame.text(str(exc), MARGIN, HEADER + 24, size=TITLE_SIZE, fill=RED)
             return
+        self.sd_missing = False
         end = self._details_flow(frame, size, text, False, 0)
         offset = app._scroll_offset("fs-details", end, clearance=20)
         self._details_flow(frame, size, text, True, offset)
