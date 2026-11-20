@@ -46,7 +46,8 @@ Wallets are descriptors built from those keys. Changing the network drops wallet
 | `psbt_qr.py` | QR parts for a signed PSBT: Animated UR, Static UR, base64, Specter Animated, and BBQr. |
 | `psbt_review.py` | Check a PSBT against one loaded wallet, then sign with a seed that is in memory. |
 | `diskimage.py` | Detect an MBR disk image, including one stored with gzip, and write it to the whole microSD after holding automount. |
-| `ui/filesystem.py` | File details, creation, editing, move, rename, deletion, image burning, and single-QR capture. Uses the shared storage choice and browser in `App`. |
+| `archive.py` | Gzip a file, or extract a gzip after `gzip -t`, with the `gzip` and `tar` commands. A failed checksum, or a tar member that is absolute, contains `..`, or is a link, is refused before anything is written. |
+| `ui/filesystem.py` | File details, creation, editing, move, copy, gzip, rename, deletion, image burning, and single-QR capture. Uses the shared storage choice and browser in `App`. |
 | `gpg.py` | GnuPG colon/status parsing, a private RAM keyring, native signature verification, and SHA256 checks. |
 | `ui/gpg.py` | GPG navigation, UTC date entry, public-key review, background command jobs, and scrollable output with stderr/FAILED coloring. |
 | `ui/text_editor.py` | A bounded editor with cached line offsets and viewport-only rendering. Preserves whitespace and line endings, supports cursor placement and the existing keyboard, and limits content to 50,000 bytes. |

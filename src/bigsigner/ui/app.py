@@ -723,6 +723,8 @@ class App:
             delays.append(self.fs.burn_delay())
         if self.screen == "fs-sha-progress":
             delays.append(self.fs.sha_delay())
+        if self.screen == "fs-file-progress":
+            delays.append(self.fs.file_delay())
         if not delays:
             return None
         return min(delays)
@@ -761,6 +763,7 @@ class App:
         self.gpg.advance()
         self.fs.advance_burn()
         self.fs.advance_sha()
+        self.fs.advance_file()
         frame = Frame()
         self._painters[self.screen](frame)
         if self.menu:
@@ -789,7 +792,7 @@ class App:
             return True
         if self.screen == "gpg-working":
             return True
-        if self.screen == "psbt-progress" or self.screen == "fs-burn-progress" or self.screen == "fs-sha-progress":
+        if self.screen == "psbt-progress" or self.screen == "fs-burn-progress" or self.screen == "fs-sha-progress" or self.screen == "fs-file-progress":
             return True
         if self._psbt_signing and self._psbt_signing_shown:
             return True
@@ -873,7 +876,7 @@ class App:
             return True
 
     def pointer_down(self, x: int, y: int):
-        if self.screen == "psbt-progress" or self.screen == "fs-burn-progress" or self.screen == "fs-sha-progress":
+        if self.screen == "psbt-progress" or self.screen == "fs-burn-progress" or self.screen == "fs-sha-progress" or self.screen == "fs-file-progress":
             self._discard_gesture = True
             return
         if self._addresses_loading and self._addresses_loading_shown:
@@ -2239,24 +2242,30 @@ class App:
     def _sd(self, frame: Frame):
         exporting = self.sd_mode == "export"
         managing = self.sd_mode == "manage"
-        moving = self.sd_mode == "move"
+        place_labels = {
+            "move": ("Move Here", "fs-move-here"),
+            "copy": ("Select Folder", "fs-copy-folder"),
+            "gzip": ("Select Folder", "fs-gzip-folder"),
+            "gunzip": ("Extract Here", "fs-gunzip-here"),
+        }
+        placing = self.sd_mode in place_labels
         title = "SD Card" if self.sd_storage == "sd" else "Temporary FS"
         try:
             entries = list_folder(self.sd_dir, storage=self.sd_storage)
-            usage = disk_usage(storage=self.sd_storage) if exporting or managing or moving else None
+            usage = disk_usage(storage=self.sd_storage) if exporting or managing or placing else None
         except SdError as exc:
             frame.header(title, "back")
             frame.text(str(exc), MARGIN, HEADER + 24, size=TITLE_SIZE)
             return
         rows = []
         if self.sd_dir:
-            rows.append(("..", "fs-move-up" if moving else "sd-up"))
+            rows.append(("..", "fs-move-up" if placing else "sd-up"))
         for entry in entries:
             relative = child_path(self.sd_dir, entry["name"])
             if entry["kind"] == "dir":
-                verb = "fs-move-into" if moving else "sd-into"
+                verb = "fs-move-into" if placing else "sd-into"
                 rows.append((entry["name"] + "/", f"{verb}:{relative}"))
-            elif not moving:
+            elif not placing:
                 if self.sd_expect == "gpg-sign-folder":
                     rows.append((entry["name"], ""))
                 else:
@@ -2275,18 +2284,22 @@ class App:
             top += height + 8
         end = top if placed else list_top
         signing_folder = self.sd_expect == "gpg-sign-folder"
-        button_h = frame.button_height("Move Here" if moving else "Sign This Folder" if signing_folder else "New File") if exporting or moving or signing_folder else 0
-        clearance = button_h + 28 if exporting or moving or signing_folder else 96
-        list_bottom = HEIGHT - clearance if exporting or moving or signing_folder else HEIGHT
-        offset = self._scroll_offset("fs-move" if moving else "sd", end, clearance=clearance)
+        place_label = place_labels[self.sd_mode][0] if placing else "Sign This Folder" if signing_folder else "New File"
+        button_h = frame.button_height(place_label) if exporting or placing or signing_folder else 0
+        clearance = button_h + 28 if exporting or placing or signing_folder else 96
+        list_bottom = HEIGHT - clearance if exporting or placing or signing_folder else HEIGHT
+        offset = self._scroll_offset("fs-move" if placing else "sd", end, clearance=clearance)
         for row_top, height, lines, label, action in placed:
             self._sd_row(frame, row_top - offset, list_top, list_bottom, height, lines, label, action)
-        if exporting or moving:
+        if exporting or placing:
             frame.draw.rectangle((0, list_bottom, WIDTH, HEIGHT), fill=PAPER)
-            if moving:
-                current = child_path(self.sd_dir, Path(self.fs.path).name)
-                enabled = self.sd_storage != self.fs.storage or current != self.fs.path
-                frame.button(HEIGHT - 16 - button_h, "Move Here", "fs-move-here", enabled=enabled)
+            if placing:
+                label, action = place_labels[self.sd_mode]
+                enabled = True
+                if self.sd_mode == "move":
+                    current = child_path(self.sd_dir, Path(self.fs.path).name)
+                    enabled = self.sd_storage != self.fs.storage or current != self.fs.path
+                frame.button(HEIGHT - 16 - button_h, label, action, enabled=enabled)
             else:
                 frame.button(HEIGHT - 16 - button_h, "New File", "export-new")
         elif signing_folder:

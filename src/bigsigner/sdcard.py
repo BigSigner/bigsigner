@@ -14,6 +14,7 @@ Other hosts and the browser keep temporary files in Python memory.
 """
 
 import base64
+import errno
 import os
 import sys
 from pathlib import Path
@@ -354,6 +355,52 @@ def move_file(source: str, destination: str, *, storage: str = "sd", destination
         # A second copy is preferable to losing the only complete copy when
         # the original card disappears or becomes read-only during a move.
         raise SdError("The file was copied, but the original could not be deleted.")
+
+
+def copy_file(source: str, destination: str, *, storage: str = "sd", destination_storage: str | None = None, progress=None) -> None:
+    """Copy a file. Never replace a destination or follow a path outside storage."""
+    destination_storage = destination_storage or storage
+    size = file_size(source, storage=storage)
+    if path_exists(destination, storage=destination_storage):
+        raise SdError("A file or directory already has that name.")
+    parent = parent_path(destination)
+    if parent and not path_exists(parent, storage=destination_storage):
+        raise SdError("That folder is not available.")
+    source_native = native_path(source, storage=storage)
+    destination_native = native_path(destination, storage=destination_storage)
+    if source_native is not None and destination_native is not None:
+        if size > disk_usage(storage=destination_storage)[2]:
+            raise SdError("There is not enough free space.")
+        _copy_native(source_native, destination_native, progress, size)
+        return
+    data = b"".join(read_chunks(source, storage=storage))
+    if progress is not None:
+        progress(len(data), max(size, 1))
+    create_file(destination, data, storage=destination_storage)
+
+
+def _copy_native(source: Path, destination: Path, progress, size: int) -> None:
+    created = False
+    read = 0
+    try:
+        with open(source, "rb") as src, open(destination, "xb") as dst:
+            created = True
+            while chunk := src.read(64 * 1024):
+                dst.write(chunk)
+                read += len(chunk)
+                if progress is not None:
+                    progress(read, max(size, 1))
+            dst.flush()
+            os.fsync(dst.fileno())
+    except OSError as exc:
+        if created:
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if exc.errno == errno.ENOSPC:
+            raise SdError("There is not enough free space.") from exc
+        raise SdError("Could not copy that file.") from exc
 
 
 def _mark_changed(storage: str) -> None:

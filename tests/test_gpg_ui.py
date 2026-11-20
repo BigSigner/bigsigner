@@ -174,7 +174,14 @@ def test_gpg_menu_is_below_file_system_and_all_three_routes_are_available():
     assert rows["GPG"][3] == rows["Settings"][1]
     _tap(app, "GPG")
     app.render()
-    assert {hit["label"] for hit in app.hits} >= {"List GPG Keys", "Load GPG Key", "Verify Signature"}
+    assert {hit["label"] for hit in app.hits} >= {"List GPG Keys", "Load GPG Key", "Verify Signature", "Encrypt", "Decrypt"}
+    encrypt = next(hit for hit in app.hits if hit["label"] == "Encrypt")
+    decrypt = next(hit for hit in app.hits if hit["label"] == "Decrypt")
+    entropy = next(hit for hit in app.hits if hit["label"] == "Add Entropy to OS")
+    assert encrypt["box"][1] == decrypt["box"][1] and encrypt["box"][3] == decrypt["box"][3]
+    assert encrypt["box"][0] == MARGIN and decrypt["box"][2] == WIDTH - MARGIN
+    assert encrypt["box"][2] <= decrypt["box"][0]
+    assert encrypt["box"][3] <= entropy["box"][1]
     version = next(item for item in app.texts if item["text"] == "gpg (GnuPG) 2.4.8")
     first = next(hit for hit in app.hits if hit["label"] == "List GPG Keys")
     assert version["box"][3] <= first["box"][1]

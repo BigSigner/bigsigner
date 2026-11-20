@@ -653,10 +653,19 @@ class GpgUI:
         y = frame.button(y, "List GPG Keys", "gpg-list")
         y = frame.button(y, "Load GPG Key", "gpg-load")
         y = frame.button(y, "Verify Signature", "gpg-formats")
-        y = frame.button(y, "Encrypt", "gpg-encrypt-menu")
-        y = frame.button(y, "Decrypt", "gpg-decrypt")
+        y = self._button_row(frame, y, ("Encrypt", "gpg-encrypt-menu"), ("Decrypt", "gpg-decrypt"))
         y = frame.button(y, "Add Entropy to OS", "gpg-entropy")
         frame.text("GPG keys stay in RAM and are cleared when the power is off.", MARGIN, y + 12, size=28, fill=MUTED)
+
+    @staticmethod
+    def _button_row(frame, y, left, right):
+        gap = 12
+        height = max(frame.button_height(left[0]), frame.button_height(right[0]))
+        text_delta = frame._button_metrics(left[0], False)[4]
+        width = (WIDTH - 2 * MARGIN - gap) // 2
+        frame.button_box((MARGIN, y, MARGIN + width, y + height), left[0], left[1], text_delta=text_delta)
+        frame.button_box((MARGIN + width + gap, y, WIDTH - MARGIN, y + height), right[0], right[1], text_delta=text_delta)
+        return y + height + 12
 
     def formats(self, frame):
         frame.header("Verify Signature", "back")

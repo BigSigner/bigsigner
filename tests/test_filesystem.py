@@ -4,6 +4,7 @@ import base64
 import gzip
 import hashlib
 import io
+import tarfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,7 +16,15 @@ from bigsigner.gpg import GpgError, Outcome
 from bigsigner.ui.app import App, QR_BRIGHTNESS_DEFAULT
 from bigsigner.ui.canvas import BLUE, HEADER, HEIGHT, INK, MARGIN, RED, WIDTH
 from bigsigner.ui.filesystem import OPEN_LIMIT, SD_DELETE_NOTE, SEQUENCE_NOTE, is_text
-from test_sdcard import _tap
+from test_sdcard import _tap as _tap_hit
+
+
+def _tap(app, label):
+    app.render()
+    if not any(hit["label"] == label or hit["action"] == label for hit in app.hits):
+        app.scroll[app.screen] = 10**9
+        app.render()
+    _tap_hit(app, label)
 
 
 @pytest.fixture(autouse=True)
@@ -252,7 +261,9 @@ def test_file_details_show_exact_size_and_open_limit(size, can_open):
         assert app.screen == "fs-edit"
     else:
         assert "Files larger than 50 KB cannot" in " ".join(item["text"] for item in app.texts)
-        assert {hit["label"] for hit in app.hits} >= {"Rename", "Move", "Delete"}
+        app.scroll["fs-details"] = 10**9
+        app.render()
+        assert {hit["label"] for hit in app.hits} >= {"Copy", "GZIP", "Delete"}
 
 
 @pytest.mark.parametrize("size", [0, file_qr.TEXT_DIRECT, file_qr.TEXT_DIRECT + 1, file_qr.QR_SPLIT_LIMIT, file_qr.QR_SPLIT_LIMIT + 1, OPEN_LIMIT + 1])
@@ -465,14 +476,20 @@ def test_rename_and_move_share_a_row_and_sha256_sits_above_delete():
     app = _details(b"hello")
     rename = next(hit for hit in app.hits if hit["label"] == "Rename")
     move = next(hit for hit in app.hits if hit["label"] == "Move")
+    copy = next(hit for hit in app.hits if hit["label"] == "Copy")
+    gzip_button = next(hit for hit in app.hits if hit["label"] == "GZIP")
     sha = next(hit for hit in app.hits if hit["label"] == "Calculate SHA256")
     delete = next(hit for hit in app.hits if hit["label"] == "Delete")
-    assert rename["box"][1] == move["box"][1] == rename["box"][1]
+    assert rename["box"][1] == move["box"][1]
     assert rename["box"][3] == move["box"][3]
     assert rename["box"][2] <= move["box"][0]
     assert rename["box"][0] == MARGIN and move["box"][2] == WIDTH - MARGIN
-    assert sha["box"][1] >= rename["box"][3]
+    assert copy["box"][1] == gzip_button["box"][1]
+    assert copy["box"][1] >= rename["box"][3]
+    assert copy["box"][0] == MARGIN and gzip_button["box"][2] == WIDTH - MARGIN
+    assert sha["box"][1] >= copy["box"][3]
     assert delete["box"][1] >= sha["box"][3]
+    assert "fs-burn" not in {hit["action"] for hit in app.hits}
     assert sha["box"][0] == MARGIN and sha["box"][2] == WIDTH - MARGIN
     assert sha["box"][3] - sha["box"][1] == rename["box"][3] - rename["box"][1]
 
@@ -797,10 +814,28 @@ def _finish_burn(app):
     app.render()
 
 
+def _reveal(app, label, key="fs-details"):
+    app.render()
+    if any(hit["label"] == label or hit["action"] == label for hit in app.hits):
+        return
+    app.scroll[key] = 10**9
+    app.render()
+
+
 def test_a_binary_file_that_is_not_an_image_cannot_be_burned():
     app = _details(b"\xff" * 64, name="blob.bin")
+    _reveal(app, "Delete")
+    delete = next(hit for hit in app.hits if hit["label"] == "Delete")
+    note = next(item for item in app.texts if item["text"] == "This file is not a disk image.")
     assert "fs-burn" not in {hit["action"] for hit in app.hits}
-    assert "This file is not a disk image." in _shown(app)
+    assert note["box"][3] <= delete["box"][1]
+    app = _details(_mbr(), name="os.img")
+    _reveal(app, "Delete")
+    burn = next(hit for hit in app.hits if hit["label"] == "Burn to SD Card")
+    sha = next(hit for hit in app.hits if hit["label"] == "Calculate SHA256")
+    delete = next(hit for hit in app.hits if hit["label"] == "Delete")
+    assert sha["box"][3] <= burn["box"][1]
+    assert burn["box"][3] <= delete["box"][1]
     app = _details(b"hello")
     assert "fs-burn" not in {hit["action"] for hit in app.hits}
     assert "disk image" not in _shown(app)
@@ -811,6 +846,7 @@ def test_a_gzip_image_can_be_burned_without_storing_the_uncompressed_bytes():
     _tap(app, "Burn to SD Card")
     assert app.screen == "fs-burn-verify"
     plain = _details(gzip.compress(b"\xff" * 64), name="notes.gz")
+    plain.scroll["fs-details"] = 10**9
     assert "fs-burn" not in {hit["action"] for hit in plain.hits}
     assert "This file is not a disk image." in _shown(plain)
 
@@ -920,3 +956,137 @@ def test_done_releases_the_hold_and_deletes_the_ram_copy(monkeypatch, tmp_path):
     assert released == [True]
     assert not copy.exists()
     assert app.screen == "fs-details"
+
+
+def _finish_file(app):
+    if not app.fs.file_shown:
+        app.render()
+    try:
+        notice = app.fs._file_job()
+    except sdcard.SdError as exc:
+        app.fs.finish_file(error=str(exc))
+    else:
+        app.fs.finish_file(notice)
+    app._search_touch_at -= 1
+    app._ignore_search_touch()
+    app.render()
+
+
+def _gzip_with_name(name, payload):
+    buffer = io.BytesIO()
+    with gzip.GzipFile(fileobj=buffer, filename=name, mode="wb", mtime=0) as handle:
+        handle.write(payload)
+    return buffer.getvalue()
+
+
+def _tar_gz(entries):
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        for name, payload in entries:
+            if payload is None:
+                info = tarfile.TarInfo(name)
+                info.type = tarfile.DIRTYPE
+                info.mode = 0o755
+                archive.addfile(info)
+                continue
+            if isinstance(payload, tuple):
+                info = tarfile.TarInfo(name)
+                info.type = tarfile.SYMTYPE
+                info.linkname = payload[1]
+                archive.addfile(info)
+                continue
+            data = payload if isinstance(payload, bytes) else payload.encode()
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+    return buffer.getvalue()
+
+
+def test_copy_asks_for_a_folder_and_a_new_filename():
+    app = _details(b"content")
+    sdcard.create_directory("folder")
+    _tap(app, "Copy")
+    assert app.screen == "fs-move-storage"
+    assert "Copy File" in _shown(app)
+    _tap(app, "SD Card")
+    _tap(app, "folder/")
+    _tap(app, "Select Folder")
+    assert app.screen == "fs-name"
+    assert app.filename == "file.txt"
+    app.filename = "copy.txt"
+    app.filename_cursor = len(app.filename)
+    _tap(app, "Save")
+    assert app.screen == "fs-file-progress"
+    app.render()
+    assert [item["text"] for item in app.texts] == ["Copying\u2026"]
+    assert app.hits == []
+    app.pointer_down(240, 400)
+    app.pointer_up(240, 400)
+    assert app.screen == "fs-file-progress"
+    _finish_file(app)
+    assert app.screen == "sd"
+    assert app.sd_dir == "folder"
+    assert sdcard.read_bytes("folder/copy.txt") == b"content"
+    assert sdcard.read_bytes("file.txt") == b"content"
+
+
+def test_gzip_suggests_a_gz_name_and_gunzip_extracts_inside_the_folder():
+    app = _details(b"content")
+    sdcard.create_directory("folder")
+    _tap(app, "GZIP")
+    assert "GZIP File" in _shown(app)
+    _tap(app, "Temporary FS")
+    _tap(app, "Select Folder")
+    assert app.filename == "file.txt.gz"
+    _tap(app, "Save")
+    assert "Compressing\u2026" in _shown(app)
+    _finish_file(app)
+    assert app.sd_storage == "temporary"
+    packed = sdcard.read_bytes("file.txt.gz", storage="temporary")
+    assert gzip.decompress(packed) == b"content"
+    assert sdcard.read_bytes("file.txt") == b"content"
+    _tap(app, "file.txt.gz")
+    _reveal(app, "GUNZIP")
+    assert any(hit["label"] == "GUNZIP" for hit in app.hits)
+    _tap(app, "GUNZIP")
+    assert "GUNZIP File" in _shown(app)
+    _tap(app, "SD Card")
+    _tap(app, "folder/")
+    _tap(app, "Extract Here")
+    assert "Extracting\u2026" in _shown(app)
+    _finish_file(app)
+    assert app.sd_dir == "folder"
+    assert sdcard.read_bytes("folder/file.txt") == b"content"
+
+
+def test_gunzip_extracts_a_tar_tree_and_refuses_paths_outside_the_folder():
+    nested = _tar_gz([("nested", None), ("nested/inside.txt", b"yes")])
+    app = _details(nested, name="tree.tar.gz")
+    sdcard.create_directory("folder")
+    _tap(app, "GUNZIP")
+    _tap(app, "SD Card")
+    _tap(app, "folder/")
+    _tap(app, "Extract Here")
+    _finish_file(app)
+    assert sdcard.read_bytes("folder/nested/inside.txt") == b"yes"
+    outside = _tar_gz([("ok.txt", b"kept"), ("/etc/passwd", b"no"), ("../escape.txt", b"no"), ("link", ("symlink", "/etc/passwd"))])
+    app = _details(outside, name="bad.tar.gz")
+    _tap(app, "GUNZIP")
+    _tap(app, "SD Card")
+    _tap(app, "Extract Here")
+    _finish_file(app)
+    assert app.notice_error
+    assert "outside the selected folder" in app.notice
+    assert not sdcard.file_exists("ok.txt")
+    assert not sdcard.file_exists("etc/passwd")
+    assert not sdcard.file_exists("escape.txt")
+    planted = _gzip_with_name("/etc/passwd", b"secret")
+    app = _details(planted, name="notes.gz")
+    sdcard.create_directory("safe")
+    _tap(app, "GUNZIP")
+    _tap(app, "SD Card")
+    _tap(app, "safe/")
+    _tap(app, "Extract Here")
+    _finish_file(app)
+    assert sdcard.read_bytes("safe/notes") == b"secret"
+    assert not sdcard.path_exists("etc/passwd")

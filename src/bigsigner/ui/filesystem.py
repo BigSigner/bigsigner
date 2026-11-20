@@ -5,7 +5,7 @@ import hashlib
 import re
 import sys
 
-from .. import file_qr, sdcard
+from .. import archive, file_qr, sdcard
 from ..diskimage import BurnResult, CardBurner, header_from_bytes, header_from_path, looks_like_disk_image
 from .canvas import BLUE, BODY_SIZE, GREEN, HEADER, HEIGHT, INK, LINE, MARGIN, MUTED, RED, TITLE_SIZE, WHITE, WIDTH, Frame, Icons, font, wrap
 from .text_editor import TextEditor
@@ -42,8 +42,16 @@ class FileSystemUI:
         self.is_new = False
         self.data = b""
         self.name_mode = "create"
+        self.transfer = "move"
         self.destination_storage = "sd"
         self.destination_dir = ""
+        self.file_kind = ""
+        self.file_target = ""
+        self.file_done = 0
+        self.file_total = 1
+        self.file_shown = False
+        self.file_future = None
+        self.file_executor = None
         self.qr_parts: list = []
         self.qr_index = 0
         self.qr_note = ""
@@ -93,6 +101,7 @@ class FileSystemUI:
             "fs-burn-result": self.burn_result,
             "fs-sha-progress": self.sha_progress,
             "fs-sha256": self.sha_result,
+            "fs-file-progress": self.file_progress,
         }
 
     def open(self):
@@ -133,6 +142,13 @@ class FileSystemUI:
                 self.storage, self.path = self.destination_storage, target
                 self.to_browser()
                 app.set_notice("The file was moved.")
+            elif action in ("fs-copy-folder", "fs-gzip-folder"):
+                suggested = Path(self.path).name
+                if action == "fs-gzip-folder":
+                    suggested += ".gz"
+                self.begin_name("copy" if action == "fs-copy-folder" else "gzip", suggested)
+            elif action == "fs-gunzip-here":
+                self._begin_file_job("gunzip", self.destination_dir)
             elif action == "fs-open":
                 self.data = sdcard.read_bytes(self.path, storage=self.storage, max_bytes=OPEN_LIMIT)
                 self.is_new = False
@@ -174,6 +190,13 @@ class FileSystemUI:
             elif action == "fs-rename":
                 self.begin_name("rename", Path(self.path).name)
             elif action == "fs-move":
+                self.transfer = "move"
+                app.go("fs-move-storage")
+            elif action == "fs-copy":
+                self.transfer = "copy"
+                app.go("fs-move-storage")
+            elif action == "fs-archive":
+                self.transfer = "gunzip" if self._starts_with_gzip() else "gzip"
                 app.go("fs-move-storage")
             elif action == "fs-sha256":
                 self.begin_sha()
@@ -239,6 +262,12 @@ class FileSystemUI:
             self.path = target
             app.back_one()
             app.set_notice("The file was renamed.")
+            return
+        if self.name_mode in ("copy", "gzip"):
+            target = sdcard.child_path(self.destination_dir, name)
+            if sdcard.path_exists(target, storage=self.destination_storage):
+                raise sdcard.SdError("A file or directory already has that name.")
+            self._begin_file_job(self.name_mode, target)
             return
         target = sdcard.child_path(app.sd_dir, name)
         if self.name_mode == "directory":
@@ -377,6 +406,12 @@ class FileSystemUI:
         self.qr_index = (self.qr_index + delta) % len(self.qr_parts)
         self.app.qr_text = self.qr_parts[self.qr_index]
         self.app.qr_zoom = None
+
+    def _starts_with_gzip(self) -> bool:
+        try:
+            return sdcard.read_prefix(self.path, storage=self.storage, size=2).startswith(b"\x1f\x8b")
+        except sdcard.SdError:
+            return False
 
     def _is_disk_image(self, size: int) -> bool:
         key = (self.storage, self.path, size)
@@ -690,6 +725,100 @@ class FileSystemUI:
         self.app.screen = "fs-sha256"
         self.app._arm_search_touch_quiet()
 
+    def _begin_file_job(self, kind, target):
+        app = self.app
+        if self.file_executor is not None:
+            self.file_executor.shutdown(wait=False)
+            self.file_executor = None
+        self.file_kind = kind
+        self.file_target = target
+        self.file_done = 0
+        self.file_total = 1
+        if kind != "gunzip":
+            self.file_total = max(1, sdcard.file_size(self.path, storage=self.storage))
+        self.file_shown = False
+        self.file_future = None
+        app.confirm = None
+        app.menu = False
+        app.go("fs-file-progress")
+
+    def file_delay(self) -> float:
+        if self.file_future is None:
+            return 0
+        return 0 if self.file_future.done() else 0.2
+
+    def advance_file(self):
+        if self.app.screen != "fs-file-progress" or not self.file_shown:
+            return
+        try:
+            if self.file_future is None:
+                if sys.platform in ("emscripten", "wasi"):
+                    self.file_future = _Ready(self._file_job())
+                else:
+                    from concurrent.futures import ThreadPoolExecutor
+
+                    if self.file_executor is None:
+                        self.file_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bigsigner-file")
+                    self.file_future = self.file_executor.submit(self._file_job)
+                return
+            if not self.file_future.done():
+                return
+            notice = self.file_future.result()
+        except Exception as exc:
+            message = str(exc) if isinstance(exc, sdcard.SdError) else "Could not finish that file."
+            self.finish_file(error=message)
+            return
+        self.finish_file(notice)
+
+    def _file_progress(self, done, total):
+        self.file_done = done
+        self.file_total = max(1, total)
+
+    def _file_job(self) -> str:
+        if self.file_kind == "copy":
+            sdcard.copy_file(
+                self.path, self.file_target,
+                storage=self.storage, destination_storage=self.destination_storage,
+                progress=self._file_progress,
+            )
+            return "The file was copied."
+        if self.file_kind == "gzip":
+            archive.gzip_file(
+                self.path, self.file_target,
+                storage=self.storage, destination_storage=self.destination_storage,
+                progress=self._file_progress,
+            )
+            return "The file was compressed."
+        archive.extract_gzip(
+            self.path, self.file_target,
+            storage=self.storage, destination_storage=self.destination_storage,
+            progress=self._file_progress,
+        )
+        return "The file was extracted."
+
+    def finish_file(self, notice: str = "", error: str = ""):
+        app = self.app
+        if self.file_executor is not None:
+            self.file_executor.shutdown(wait=False)
+            self.file_executor = None
+        self.file_future = None
+        if error or not notice:
+            if app.screen == "fs-file-progress":
+                app.back_one()
+            app.set_error(error or "Could not finish that file.")
+            app._arm_search_touch_quiet()
+            return
+        self.storage = self.destination_storage
+        self.path = self.file_target if self.file_kind != "gunzip" else sdcard.child_path(self.destination_dir, "extracted")
+        self.to_browser()
+        app.set_notice(notice)
+        app._arm_search_touch_quiet()
+
+    def file_progress(self, frame):
+        message = {"copy": "Copying\u2026", "gzip": "Compressing\u2026", "gunzip": "Extracting\u2026"}.get(self.file_kind, "Copying\u2026")
+        self._progress_bar(frame, message, self.file_done, self.file_total)
+        self.file_shown = True
+
     def sha_progress(self, frame):
         message = "Calculating SHA256\u2026"
         face = font(BODY_SIZE)
@@ -716,6 +845,31 @@ class FileSystemUI:
                 radius=6, fill=BLUE,
             )
         self.sha_shown = True
+
+    def _progress_bar(self, frame, message, done, total):
+        face = font(BODY_SIZE)
+        lines = wrap(frame.draw, message, face, WIDTH - 2 * MARGIN) or [""]
+        bar_h = 28
+        bar_bottom = HEIGHT - 110
+        bar_top = bar_bottom - bar_h
+        text_h = len(lines) * (BODY_SIZE + 8)
+        y = max(MARGIN, (HEIGHT - text_h) // 2)
+        for line in lines:
+            width = frame.draw.textlength(line, font=face)
+            x = (WIDTH - width) / 2
+            frame.draw.text((x, y), line, font=face, fill=INK)
+            frame.mark(line, frame.draw.textbbox((x, y), line, font=face))
+            y += BODY_SIZE + 8
+        left, right = MARGIN, WIDTH - MARGIN
+        frame.draw.rounded_rectangle((left, bar_top, right, bar_bottom), radius=10, outline=LINE, width=2, fill=WHITE)
+        span = right - left - 8
+        total = total if total > 0 else 1
+        filled = int(span * min(1.0, done / total))
+        if filled > 0:
+            frame.draw.rounded_rectangle(
+                (left + 4, bar_top + 4, left + 4 + filled, bar_bottom - 4),
+                radius=6, fill=BLUE,
+            )
 
     def sha_result(self, frame):
         from .app import QR_BRIGHTNESS_DEFAULT, _qr_image, _qr_light
@@ -823,13 +977,16 @@ class FileSystemUI:
                 y += 8
         else:
             y = self._binary_qr_row(frame, y, size, paint, offset)
+        y = self._action_row(frame, y, paint, offset, ("Rename", "fs-rename"), ("Move", "fs-move"))
+        archive_label = "GUNZIP" if self._starts_with_gzip() else "GZIP"
+        y = self._action_row(frame, y, paint, offset, ("Copy", "fs-copy"), (archive_label, "fs-archive"))
+        y = app._flow_button(frame, y, "Calculate SHA256", "fs-sha256", paint, offset)
+        if not text:
             image = self._is_disk_image(size)
             y = app._flow_button(frame, y, "Burn to SD Card", "fs-burn", paint, offset, enabled=image)
             if not image:
                 y = app._flow_text(frame, y, "This file is not a disk image.", paint, offset, 28, MUTED)
                 y += 8
-        y = self._action_row(frame, y, paint, offset, ("Rename", "fs-rename"), ("Move", "fs-move"))
-        y = app._flow_button(frame, y, "Calculate SHA256", "fs-sha256", paint, offset)
         return app._flow_button(frame, y, "Delete", "fs-delete", paint, offset, color=RED)
 
     def _action_row(self, frame, y, paint, offset, left, right):
@@ -1035,7 +1192,10 @@ class FileSystemUI:
 
     def name(self, frame):
         app = self.app
-        title = {"directory": "New Folder", "create": "New File", "rename": "Rename File"}[self.name_mode]
+        title = {
+            "directory": "New Folder", "create": "New File", "rename": "Rename File",
+            "copy": "Copy File", "gzip": "GZIP File",
+        }[self.name_mode]
         frame.header(title, "back")
         box = (MARGIN, HEADER + 16, WIDTH - MARGIN, HEADER + 88)
         app._paint_hscroll_field(frame, box, app.filename, app.filename_cursor, "Name")
@@ -1044,14 +1204,15 @@ class FileSystemUI:
         app._passphrase_keyboard(frame)
 
     def move_storage(self, frame):
-        frame.header("Move File", "back")
+        title = {"move": "Move File", "copy": "Copy File", "gzip": "GZIP File", "gunzip": "GUNZIP File"}[self.transfer]
+        frame.header(title, "back")
         y = frame.button(HEADER + 24, "SD Card", "fs-move-storage:sd")
         frame.button(y, "Temporary FS", "fs-move-storage:temporary")
 
     def move_browser(self, frame):
         app = self.app
         saved = app.sd_dir, app.sd_storage, app.sd_mode
-        app.sd_dir, app.sd_storage, app.sd_mode = self.destination_dir, self.destination_storage, "move"
+        app.sd_dir, app.sd_storage, app.sd_mode = self.destination_dir, self.destination_storage, self.transfer
         try:
             app._sd(frame)
         finally:
