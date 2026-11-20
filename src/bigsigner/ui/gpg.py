@@ -152,7 +152,7 @@ class GpgUI:
         self.painters = {"gpg": self.home, "gpg-formats": self.formats, "gpg-date": self.date_screen,
                          "gpg-subkey-time": self.date_screen, "gpg-subkey-expire": self.date_screen,
                          "gpg-number": self.number,
-                         "gpg-key-source": self.key_source, "gpg-working": self.working, "gpg-keys": self.keys,
+                         "gpg-working": self.working, "gpg-keys": self.keys,
                          "gpg-key-details": self.details, "gpg-export": self.export_choice,
                          "gpg-key-qr": self.key_qr, "gpg-qr-guide": self.qr_guide,
                          "gpg-review": self.review, "gpg-result": self.result,
@@ -295,8 +295,6 @@ class GpgUI:
             self._commit_encrypt()
         elif action == "gpg-home":
             self.open()
-        elif action == "gpg-load":
-            app.go("gpg-key-source")
         elif action == "gpg-formats":
             app.go("gpg-formats")
         elif action.startswith("gpg-date:"):
@@ -643,6 +641,7 @@ class GpgUI:
         self.app.scroll["gpg-result"] = 0
 
     def home(self, frame):
+        app = self.app
         frame.header("GPG", "menu")
         y = HEADER + 24
         version = self.backend.version_line()
@@ -651,11 +650,20 @@ class GpgUI:
             line_width = frame.draw.textlength(version, font=face)
             y = frame.text(version, (WIDTH - line_width) / 2, HEADER + 16, size=28, fill=MUTED, mono=True) + 8
         y = frame.button(y, "List GPG Keys", "gpg-list")
-        y = frame.button(y, "Load GPG Key", "gpg-load")
         y = frame.button(y, "Verify Signature", "gpg-formats")
         y = self._button_row(frame, y, ("Encrypt", "gpg-encrypt-menu"), ("Decrypt", "gpg-decrypt"))
         y = frame.button(y, "Add Entropy to OS", "gpg-entropy")
         frame.text("GPG keys stay in RAM and are cleared when the power is off.", MARGIN, y + 12, size=28, fill=MUTED)
+        if app.add_menu:
+            app._speed_dial(
+                frame,
+                (
+                    ("Load from File", "gpg-load-file", Icons.FILE),
+                    ("Scan QR Code", "gpg-scan-key", Icons.CAMERA),
+                    ("Load from Bitcoin Seed (BIP-85)", "gpg-load-seed", Icons.SEED),
+                ),
+            )
+        app._plus(frame, "toggle-add", Icons.CLOSE if app.add_menu else Icons.PLUS)
 
     @staticmethod
     def _button_row(frame, y, left, right):
@@ -749,12 +757,6 @@ class GpgUI:
             x, y = MARGIN + i % 3 * (width + gap), 304 + i // 3 * 84
             frame.button_box((x, y, x + width, y + 72), {"clear": "Clear", "delete": "Del"}.get(digit, digit), "gpg-digit:" + digit)
         frame.button(HEIGHT - 110, "Save", "gpg-number-save", enabled=bool(self.draft))
-
-    def key_source(self, frame):
-        frame.header("Load GPG Key", "back")
-        y = frame.button(HEADER + 24, "Load from File", "gpg-load-file", icon=Icons.FILE, awesome=True)
-        y = frame.button(y, "Scan QR Code", "gpg-scan-key", icon=Icons.CAMERA, awesome=True)
-        frame.button(y, "Load RSA Key from Bitcoin Seed (BIP-85)", "gpg-load-seed", icon=Icons.SEED, awesome=True)
 
     def working(self, frame):
         frame.header("GPG")
