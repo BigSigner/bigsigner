@@ -721,6 +721,8 @@ class App:
             delays.append(self.gpg.delay())
         if self.screen == "fs-burn-progress":
             delays.append(self.fs.burn_delay())
+        if self.screen == "fs-sha-progress":
+            delays.append(self.fs.sha_delay())
         if not delays:
             return None
         return min(delays)
@@ -758,6 +760,7 @@ class App:
         self._advance_psbt_signing()
         self.gpg.advance()
         self.fs.advance_burn()
+        self.fs.advance_sha()
         frame = Frame()
         self._painters[self.screen](frame)
         if self.menu:
@@ -786,7 +789,7 @@ class App:
             return True
         if self.screen == "gpg-working":
             return True
-        if self.screen == "psbt-progress" or self.screen == "fs-burn-progress":
+        if self.screen == "psbt-progress" or self.screen == "fs-burn-progress" or self.screen == "fs-sha-progress":
             return True
         if self._psbt_signing and self._psbt_signing_shown:
             return True
@@ -870,7 +873,7 @@ class App:
             return True
 
     def pointer_down(self, x: int, y: int):
-        if self.screen == "psbt-progress" or self.screen == "fs-burn-progress":
+        if self.screen == "psbt-progress" or self.screen == "fs-burn-progress" or self.screen == "fs-sha-progress":
             self._discard_gesture = True
             return
         if self._addresses_loading and self._addresses_loading_shown:
@@ -1113,7 +1116,7 @@ class App:
         if self.fs.before_back():
             return
         self.gpg.before_back()
-        leaving_lit_qr = self.screen in ("seed-show", "address", "gpg-key-qr") or (
+        leaving_lit_qr = self.screen in ("seed-show", "address", "gpg-key-qr", "fs-sha256") or (
             self.screen == "qr" and self.qr_kind in ("key", "descriptor", "file")
         )
         leaving_wallet = self.screen == "wallet"
@@ -1958,7 +1961,7 @@ class App:
         self.go("sd")
 
     def _read_sd_file(self, relative: str):
-        if self.sd_expect in ("gpg-key", "gpg-verify", "gpg-sign-file", "gpg-encrypt-file", "gpg-aes-file", "gpg-aes-pass"):
+        if self.sd_expect in ("gpg-key", "gpg-verify", "gpg-sign-file", "gpg-encrypt-file", "gpg-aes-file", "gpg-aes-pass", "gpg-decrypt-file", "gpg-decrypt-pass"):
             self.gpg.accept_file(relative)
             return
         if self.sd_expect == "psbt":
@@ -5879,6 +5882,9 @@ class App:
         if self.screen == "gpg-aes-type":
             self.gpg.type_aes_password(key)
             return
+        if self.screen == "gpg-decrypt-type":
+            self.gpg.type_decrypt_password(key)
+            return
         if key == "backspace":
             if self.passphrase_cursor > 0:
                 self.passphrase_text = (
@@ -7504,7 +7510,7 @@ class App:
             return bool(self.message_signature)
         if self.screen == "seed-show":
             return SEED_FORMATS[self.seed_format] != "words"
-        if self.screen in ("address", "psbt-qr", "psbt-input-qr", "gpg-key-qr"):
+        if self.screen in ("address", "psbt-qr", "psbt-input-qr", "gpg-key-qr", "fs-sha256"):
             return True
         return self.screen == "qr" and self.qr_kind in ("key", "descriptor", "file")
 

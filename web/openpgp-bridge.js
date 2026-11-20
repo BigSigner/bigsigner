@@ -36,6 +36,7 @@ async function dispatch(request) {
   if (request.op === "verify-detached") return verifyDetached(request);
   if (request.op === "verify-cleartext") return verifyCleartext(request);
   if (request.op === "encrypt") return encrypt(request);
+  if (request.op === "decrypt") return decrypt(request);
   throw new Error("The GPG command is not available in the web emulator.");
 }
 
@@ -228,6 +229,22 @@ async function encrypt(request) {
     config: CONFIG,
   });
   return {armor: await text(armored)};
+}
+
+async function decrypt(request) {
+  const message = request.armored
+    ? await openpgp.readMessage({armoredMessage: request.armored, config: CONFIG})
+    : await openpgp.readMessage({binaryMessage: bytes(request.binary), config: CONFIG});
+  const options = {message, format: "binary", config: CONFIG};
+  if (request.password) options.passwords = [request.password];
+  else options.decryptionKeys = [...ring.values()].filter((key) => key.isPrivate());
+  const result = await openpgp.decrypt(options);
+  const data = result.data instanceof Uint8Array ? result.data : new TextEncoder().encode(result.data);
+  let binary = "";
+  data.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return {data: btoa(binary)};
 }
 
 function publicKeys() {

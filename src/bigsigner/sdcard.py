@@ -173,6 +173,35 @@ def read_bytes(relative: str, *, storage: str = "sd", max_bytes: int = 256_000) 
     return _read_disk_bytes(relative, storage, max_bytes)
 
 
+def read_chunks(relative: str, *, storage: str = "sd", chunk_size: int = 65536):
+    """Yield a file in pieces, with no size cap.
+
+    A memory file is already resident and is sliced. A disk file is read
+    from storage ``chunk_size`` bytes at a time, so a large image can be
+    hashed without holding it in Python.
+    """
+    if chunk_size < 1:
+        raise SdError("That is not a file.")
+    card = _memory_card(storage)
+    if card is not None:
+        data = _file_bytes(relative, card, MEMORY_CAPACITY)
+        for start in range(0, len(data), chunk_size):
+            yield data[start:start + chunk_size]
+        return
+    path = _disk_path(relative, storage)
+    if not path.is_file():
+        raise SdError("That is not a file.")
+    try:
+        with open(path, "rb") as handle:
+            while True:
+                chunk = handle.read(chunk_size)
+                if not chunk:
+                    return
+                yield chunk
+    except OSError as exc:
+        raise SdError("That is not a file.") from exc
+
+
 def read_prefix(relative: str, *, storage: str = "sd", size: int = 512) -> bytes:
     """The first ``size`` bytes of a file, without loading the rest."""
     card = _memory_card(storage)

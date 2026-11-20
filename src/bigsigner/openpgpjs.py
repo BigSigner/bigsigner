@@ -14,7 +14,8 @@ import re
 from . import sdcard
 from .gpg import (
     CHECKSUM_LIMIT, CHECKSUM_NAME, CHECKSUM_SIGNATURE, CommandResult, GpgError, Outcome, PublicKey,
-    _manifest_line, _password_bytes, files_left_unchecked, manifest_for_name,
+    _decrypt_password, _manifest_line, _password_bytes, _with_decrypted_name, files_left_unchecked,
+    manifest_for_name, pgp_encryption_kind,
 )
 from .openpgp_subkey import secret_subkey_armor
 
@@ -138,6 +139,28 @@ class OpenPgpJsBackend:
             return Outcome(False, "The file could not be encrypted.", [CommandResult("Encrypt File", 1, "", "The file could not be encrypted.")])
         sdcard.write_bytes(_sibling(relative, output_name), armor.encode("utf-8"), storage=storage)
         return Outcome(True, stages=[CommandResult("Encrypt File", 0, f'The encrypted file "{output_name}" was written.\n')])
+
+    def encryption_kind(self, relative: str, storage: str) -> str:
+        try:
+            data = sdcard.read_prefix(relative, storage=storage, size=16384)
+        except sdcard.SdError as exc:
+            raise GpgError(str(exc)) from exc
+        return pgp_encryption_kind(data)
+
+    def decrypt_file(self, relative: str, output_name: str, storage: str, password: str | None = None):
+        if password is not None:
+            _decrypt_password(password)
+        if not output_name or output_name in (".", "..") or "/" in output_name or "\\" in output_name or "\x00" in output_name:
+            raise GpgError("The file name is not valid.")
+        data = _read(relative, storage)
+        try:
+            result = self._call({"op": "decrypt", "password": password, **_content(data)})
+        except GpgError as exc:
+            return Outcome(False, str(exc), [CommandResult("Decrypt File", 1, "", str(exc))])
+        raw = base64.b64decode(result.get("data") or "")
+        sdcard.write_bytes(_sibling(relative, output_name), raw, storage=storage)
+        written = CommandResult("Decrypt File", 0, f'The decrypted file "{output_name}" was written.\n')
+        return Outcome(True, stages=[_with_decrypted_name(written, output_name)])
 
     def sign_file(self, fingerprint: str, relative: str, storage: str, timestamp: int):
         data = _read(relative, storage)

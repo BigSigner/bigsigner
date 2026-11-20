@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from bigsigner import sdcard
-from bigsigner.gpg import CommandResult, Outcome, PublicKey, parse_keys
+from bigsigner.gpg import CommandResult, GpgError, Outcome, PublicKey, parse_keys
 from bigsigner.file_qr import QR_SPLIT_LIMIT, gzip_base64, recovery_command, spaced_parts
 from bigsigner.ui.app import QR_BRIGHTNESS_DEFAULT, App
 from bigsigner.ui.canvas import HEADER, HEIGHT, INK, MARGIN, MUTED, RED, WARNING, WIDTH, font
@@ -21,6 +21,7 @@ class FakeBackend:
     def __init__(self):
         self.calls = []
         self.good = True
+        self.kinds = {}
         self.secret = False
         self.subkey_only = False
         self.huge = False
@@ -101,6 +102,19 @@ class FakeBackend:
         if self.good:
             return Outcome(True, stages=[CommandResult("Encrypt File", 0, "")])
         return Outcome(False, "The file could not be encrypted.", [CommandResult("Encrypt File", 2, "", "gpg: encryption failed")])
+
+    def encryption_kind(self, relative, storage):
+        self.calls.append(("kind", relative, storage))
+        kind = self.kinds.get(relative)
+        if kind is None:
+            raise GpgError("This file is not an encrypted message.")
+        return kind
+
+    def decrypt_file(self, source, output_name, storage, password):
+        self.calls.append(("decrypt", source, output_name, storage, password))
+        if self.good:
+            return Outcome(True, stages=[CommandResult("Decrypt File", 0, f'The decrypted file "{output_name}" was written.\n')])
+        return Outcome(False, "The file could not be decrypted.", [CommandResult("Decrypt File", 2, "", "gpg: decryption failed")])
 
     def verify(self, relative, storage, timestamp, checksums):
         self.calls.append(("verify", relative, storage, timestamp, checksums))
@@ -940,6 +954,54 @@ def test_aes256_encryption_takes_a_password_or_a_password_file_then_the_camera()
     _tap(typed, "Capture")
     _settle(typed)
     assert typed.gpg.backend.calls[-1] == ("encrypt-symmetric", "note.txt", "note.txt.enc (1).asc", "sd", "secret")
+
+
+def test_decrypt_asks_for_a_password_only_when_the_message_is_symmetric():
+    app = _app(files={
+        "note.txt.enc.asc": "cipher",
+        "key.asc": "locked",
+        "plain.txt": "nope",
+        "secret.txt": "hunter2\n",
+        "long.txt": "x" * 256,
+    })
+    app.gpg.backend.threaded = False
+    app.gpg.backend.kinds = {"note.txt.enc.asc": "symmetric", "key.asc": "key"}
+    _tap(app, "Decrypt")
+    _tap(app, "SD Card")
+    _tap(app, "plain.txt")
+    _settle(app)
+    assert app.screen == "gpg-result"
+    assert "This file is not an encrypted message." in " ".join(item["text"] for item in app.texts)
+    _tap(app, "Done")
+
+    _tap(app, "Decrypt")
+    _tap(app, "SD Card")
+    _tap(app, "note.txt.enc.asc")
+    _settle(app)
+    assert app.screen == "gpg-decrypt-password"
+    assert app.gpg.decrypt_name == "note.txt"
+    _tap(app, "Load from File")
+    _tap(app, "SD Card")
+    _tap(app, "long.txt")
+    assert app.notice == "The password is longer than 255 characters."
+    _tap(app, "Dismiss")
+    _tap(app, "secret.txt")
+    _settle(app)
+    assert app.gpg.backend.calls[-1] == ("decrypt", "note.txt.enc.asc", "note.txt", "sd", "hunter2")
+    assert 'The decrypted file "note.txt" was written.' in " ".join(item["text"] for item in app.texts)
+    assert app.screen != "camera"
+
+    keyed = _app(files={"key.asc": "locked", "note.txt": "already"})
+    keyed.gpg.backend.threaded = False
+    keyed.gpg.backend.kinds = {"key.asc": "key"}
+    _tap(keyed, "Decrypt")
+    _tap(keyed, "SD Card")
+    _tap(keyed, "key.asc")
+    _settle(keyed)
+    assert keyed.screen == "gpg-working"
+    _settle(keyed)
+    assert keyed.gpg.backend.calls[-1] == ("decrypt", "key.asc", "key", "sd", None)
+    assert 'The decrypted file "key" was written.' in " ".join(item["text"] for item in keyed.texts)
 
 
 def test_gpg_screens_save_screenshots(real_backend):

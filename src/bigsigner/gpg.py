@@ -1,7 +1,9 @@
 """GnuPG operations with a private RAM keyring and native, streaming file checks."""
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import base64
 import fcntl
 import hashlib
 import os
@@ -31,6 +33,16 @@ def _password_bytes(password: str) -> bytes:
     if len(encoded) > PASSWORD_LIMIT:
         raise GpgError("The password is longer than 255 bytes.")
     return encoded
+
+
+def _decrypt_password(password: str) -> str:
+    if not isinstance(password, str) or "\x00" in password or "\n" in password or "\r" in password:
+        raise GpgError("The password is not valid.")
+    if not password:
+        raise GpgError("The password is empty.")
+    if len(password) > PASSWORD_LIMIT:
+        raise GpgError("The password is longer than 255 characters.")
+    return password
 
 
 def mix_kernel_entropy(digest: bytes) -> None:
@@ -83,14 +95,133 @@ class CommandResult:
     raw_stdout: bytes | None = None
 
 
-def _with_encrypted_name(result: CommandResult, output_name: str) -> CommandResult:
+def _with_written_name(result: CommandResult, output_name: str, verb: str) -> CommandResult:
     if result.returncode != 0:
         return result
-    line = f'The encrypted file "{output_name}" was written.'
+    line = f'The {verb} file "{output_name}" was written.'
     stdout = result.stdout.rstrip("\n")
     if line not in stdout:
         stdout = f"{stdout}\n{line}" if stdout else line
     return CommandResult(result.name, result.returncode, stdout + "\n", result.stderr, result.checksums, result.raw_stdout)
+
+
+def _with_encrypted_name(result: CommandResult, output_name: str) -> CommandResult:
+    return _with_written_name(result, output_name, "encrypted")
+
+
+def _with_decrypted_name(result: CommandResult, output_name: str) -> CommandResult:
+    return _with_written_name(result, output_name, "decrypted")
+
+
+def decrypted_filename(name: str) -> str:
+    """The plaintext name implied by an encrypted filename."""
+    for suffix in (".enc.asc", ".enc.gpg", ".asc", ".gpg", ".pgp", ".enc"):
+        if len(name) > len(suffix) and name.lower().endswith(suffix):
+            return name[: -len(suffix)]
+    return name + ".dec"
+
+
+def pgp_encryption_kind(data: bytes) -> str:
+    """``symmetric`` when the message has only a password, otherwise ``key``."""
+    body = _pgp_message_bytes(data)
+    symmetric = False
+    keyed = False
+    offset = 0
+    for _packet in range(8):
+        parsed = _pgp_packet(body, offset)
+        if parsed is None:
+            break
+        tag, header, length = parsed
+        if tag == 3:
+            symmetric = True
+        elif tag == 1:
+            keyed = True
+        if symmetric or keyed:
+            break
+        if length is None:
+            break
+        offset += header + length
+        if offset > len(body):
+            break
+    if symmetric and not keyed:
+        return "symmetric"
+    if keyed:
+        return "key"
+    raise GpgError("This file is not an encrypted message.")
+
+
+def _pgp_message_bytes(data: bytes) -> bytes:
+    stripped = data.lstrip()
+    if not stripped.startswith(b"-----BEGIN PGP"):
+        return data
+    body = []
+    in_body = False
+    seen = False
+    for line in stripped.splitlines():
+        if line.startswith(b"-----BEGIN "):
+            seen = True
+            continue
+        if not seen:
+            continue
+        if line.startswith(b"-----END "):
+            break
+        if not in_body:
+            if line.strip() == b"":
+                in_body = True
+            continue
+        if line.startswith(b"="):
+            break
+        body.append(line.strip())
+    raw = b"".join(body)
+    raw = raw[: len(raw) - (len(raw) % 4)]
+    try:
+        return base64.b64decode(raw, validate=False)
+    except Exception as exc:
+        raise GpgError("This file is not an encrypted message.") from exc
+
+
+def _pgp_packet(data: bytes, offset: int):
+    if offset >= len(data) or not data[offset] & 0x80:
+        return None
+    byte = data[offset]
+    if byte & 0x40:
+        tag = byte & 0x3F
+        if offset + 1 >= len(data):
+            return None
+        length_byte = data[offset + 1]
+        if length_byte < 192:
+            return tag, 2, length_byte
+        if length_byte < 224:
+            if offset + 2 >= len(data):
+                return None
+            return tag, 3, ((length_byte - 192) << 8) + data[offset + 2] + 192
+        if length_byte == 255:
+            if offset + 5 >= len(data):
+                return None
+            return tag, 6, int.from_bytes(data[offset + 2 : offset + 6], "big")
+        return tag, 2, None
+    tag = (byte >> 2) & 0x0F
+    kind = byte & 0x03
+    if kind == 0 and offset + 1 < len(data):
+        return tag, 2, data[offset + 1]
+    if kind == 1 and offset + 2 < len(data):
+        return tag, 3, int.from_bytes(data[offset + 1 : offset + 3], "big")
+    if kind == 2 and offset + 4 < len(data):
+        return tag, 5, int.from_bytes(data[offset + 1 : offset + 5], "big")
+    if kind == 3:
+        return tag, 1, None
+    return None
+
+
+@contextmanager
+def _passphrase_on_disk(home: Path, password: str):
+    path = home / "aes-passphrase"
+    path.write_bytes(password.encode("utf-8") + b"\n")
+    path.chmod(0o600)
+    try:
+        yield path
+    finally:
+        path.unlink(missing_ok=True)
 
 
 @dataclass
@@ -587,22 +718,49 @@ class GpgBackend:
         path = sdcard.native_path(relative, storage=storage)
         if path is None or not path.is_file():
             raise GpgError("Encrypting a file requires the device filesystem.")
-        encoded = _password_bytes(password)
+        _password_bytes(password)
         if not output_name or output_name in (".", "..") or "/" in output_name or "\\" in output_name or "\x00" in output_name:
             raise GpgError("The file name is not valid.")
         home = self._home()
-        passphrase_file = home / "aes-passphrase"
-        passphrase_file.write_bytes(encoded + b"\n")
-        passphrase_file.chmod(0o600)
-        args = ["--pinentry-mode", "loopback", "--passphrase-file", str(passphrase_file),
-                "--yes", "--armor", "--symmetric", "--cipher-algo", "AES256",
-                "--output", output_name, "--", path.name]
-        try:
+        with _passphrase_on_disk(home, password) as passphrase_file:
+            args = ["--pinentry-mode", "loopback", "--passphrase-file", str(passphrase_file),
+                    "--yes", "--armor", "--symmetric", "--cipher-algo", "AES256",
+                    "--output", output_name, "--", path.name]
             encrypted = self.command("Encrypt File", args, cwd=path.parent, agent=True)
-        finally:
-            passphrase_file.unlink(missing_ok=True)
         encrypted = _with_encrypted_name(encrypted, output_name)
         return Outcome(encrypted.returncode == 0, "" if encrypted.returncode == 0 else "The file could not be encrypted.", [encrypted])
+
+    def encryption_kind(self, relative: str, storage: str) -> str:
+        """``symmetric`` for a password message, ``key`` for a public-key message."""
+        path = sdcard.native_path(relative, storage=storage)
+        if path is None or not path.is_file():
+            raise GpgError("Decrypting a file requires the device filesystem.")
+        try:
+            with path.open("rb") as handle:
+                data = handle.read(16384)
+        except OSError as exc:
+            raise GpgError("This file is not an encrypted message.") from exc
+        return pgp_encryption_kind(data)
+
+    def decrypt_file(self, relative: str, output_name: str, storage: str, password: str | None = None):
+        """``gpg --decrypt``. A symmetric message uses the supplied password."""
+        path = sdcard.native_path(relative, storage=storage)
+        if path is None or not path.is_file():
+            raise GpgError("Decrypting a file requires the device filesystem.")
+        if not output_name or output_name in (".", "..") or "/" in output_name or "\\" in output_name or "\x00" in output_name:
+            raise GpgError("The file name is not valid.")
+        if output_name == path.name:
+            raise GpgError("Choose a different file name.")
+        args = ["--yes", "--decrypt", "--output", output_name, "--", path.name]
+        if password is not None:
+            password = _decrypt_password(password)
+            with _passphrase_on_disk(self._home(), password) as passphrase_file:
+                args = ["--pinentry-mode", "loopback", "--passphrase-file", str(passphrase_file), *args]
+                decrypted = self.command("Decrypt File", args, cwd=path.parent, agent=True)
+        else:
+            decrypted = self.command("Decrypt File", args, cwd=path.parent, agent=True)
+        decrypted = _with_decrypted_name(decrypted, output_name)
+        return Outcome(decrypted.returncode == 0, "" if decrypted.returncode == 0 else "The file could not be decrypted.", [decrypted])
 
     def sign_file(self, fingerprint: str, relative: str, storage: str, timestamp: int):
         """Detached armored signature ``<name>.asc`` for one file, using that exact key."""

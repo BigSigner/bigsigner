@@ -1,6 +1,7 @@
 """File System screens, using the same storage and keyboard as imports/exports."""
 
 from pathlib import Path
+import hashlib
 import re
 import sys
 
@@ -66,6 +67,14 @@ class FileSystemUI:
         self.burn_remove = False
         self.burn_held = False
         self.burn_copy = ""
+        self.sha_digest = ""
+        self.sha_done = 0
+        self.sha_total = 1
+        self.sha_shown = False
+        self.sha_future = None
+        self.sha_executor = None
+        self._sha_qr_image = None
+        self._sha_qr_key = None
         self.painters = {
             "filesystem": app._storage,
             "fs-details": self.details,
@@ -82,6 +91,8 @@ class FileSystemUI:
             "fs-burn-checksums": self.burn_checksums,
             "fs-burn-progress": self.burn_progress,
             "fs-burn-result": self.burn_result,
+            "fs-sha-progress": self.sha_progress,
+            "fs-sha256": self.sha_result,
         }
 
     def open(self):
@@ -164,6 +175,8 @@ class FileSystemUI:
                 self.begin_name("rename", Path(self.path).name)
             elif action == "fs-move":
                 app.go("fs-move-storage")
+            elif action == "fs-sha256":
+                self.begin_sha()
             elif action == "fs-delete":
                 message = f'Delete "{Path(self.path).name}"?'
                 if self.storage == "sd" or app._text_height(Frame(), message, BODY_SIZE) > 320:
@@ -589,6 +602,160 @@ class FileSystemUI:
                 pass
             self.burn_copy = ""
 
+    def begin_sha(self):
+        size = sdcard.file_size(self.path, storage=self.storage)
+        if self.sha_executor is not None:
+            self.sha_executor.shutdown(wait=False)
+            self.sha_executor = None
+        self.sha_digest = ""
+        self.sha_done = 0
+        self.sha_total = max(1, size)
+        self.sha_shown = False
+        self.sha_future = None
+        self._sha_qr_image = None
+        self._sha_qr_key = None
+        self.app.confirm = None
+        self.app.menu = False
+        self.app.go("fs-sha-progress")
+
+    def sha_delay(self) -> float:
+        if self.sha_future is None:
+            return 0
+        return 0 if self.sha_future.done() else 0.2
+
+    def advance_sha(self):
+        if self.app.screen != "fs-sha-progress" or not self.sha_shown:
+            return
+        try:
+            if self.sha_future is None:
+                if sys.platform in ("emscripten", "wasi"):
+                    self.sha_future = _Ready(self._sha_job())
+                else:
+                    from concurrent.futures import ThreadPoolExecutor
+
+                    if self.sha_executor is None:
+                        self.sha_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bigsigner-sha")
+                    self.sha_future = self.sha_executor.submit(self._sha_job)
+                return
+            if not self.sha_future.done():
+                return
+            digest = self.sha_future.result()
+        except Exception as exc:
+            message = str(exc) if isinstance(exc, sdcard.SdError) else "Could not calculate SHA256."
+            self.finish_sha(error=message)
+            return
+        self.finish_sha(digest)
+
+    def _sha_job(self) -> str:
+        digest = hashlib.sha256()
+        read = 0
+        for chunk in sdcard.read_chunks(self.path, storage=self.storage):
+            digest.update(chunk)
+            read += len(chunk)
+            self.sha_done = read
+            if read > self.sha_total:
+                self.sha_total = read
+        self.sha_done = self.sha_total = max(self.sha_total, read, 1)
+        return digest.hexdigest()
+
+    def finish_sha(self, digest: str = "", error: str = ""):
+        if self.sha_executor is not None:
+            self.sha_executor.shutdown(wait=False)
+            self.sha_executor = None
+        self.sha_future = None
+        if error or not digest:
+            self.sha_digest = ""
+            self._sha_qr_image = None
+            self._sha_qr_key = None
+            if self.app.screen == "fs-sha-progress":
+                self.app.back_one()
+            self.app.set_error(error or "Could not calculate SHA256.")
+            # A press that began on the calculation screen must not click File Details.
+            self.app._arm_search_touch_quiet()
+            return
+        self.sha_digest = digest
+        self._sha_qr_image = None
+        self._sha_qr_key = None
+        self.app.scroll["fs-sha256"] = 0
+        self.app.screen = "fs-sha256"
+        self.app._arm_search_touch_quiet()
+
+    def sha_progress(self, frame):
+        message = "Calculating SHA256\u2026"
+        face = font(BODY_SIZE)
+        lines = wrap(frame.draw, message, face, WIDTH - 2 * MARGIN) or [""]
+        bar_h = 28
+        bar_bottom = HEIGHT - 110
+        bar_top = bar_bottom - bar_h
+        text_h = len(lines) * (BODY_SIZE + 8)
+        y = max(MARGIN, (HEIGHT - text_h) // 2)
+        for line in lines:
+            width = frame.draw.textlength(line, font=face)
+            x = (WIDTH - width) / 2
+            frame.draw.text((x, y), line, font=face, fill=INK)
+            frame.mark(line, frame.draw.textbbox((x, y), line, font=face))
+            y += BODY_SIZE + 8
+        left, right = MARGIN, WIDTH - MARGIN
+        frame.draw.rounded_rectangle((left, bar_top, right, bar_bottom), radius=10, outline=LINE, width=2, fill=WHITE)
+        span = right - left - 8
+        total = self.sha_total if self.sha_total > 0 else 1
+        filled = int(span * min(1.0, self.sha_done / total))
+        if filled > 0:
+            frame.draw.rounded_rectangle(
+                (left + 4, bar_top + 4, left + 4 + filled, bar_bottom - 4),
+                radius=6, fill=BLUE,
+            )
+        self.sha_shown = True
+
+    def sha_result(self, frame):
+        from .app import QR_BRIGHTNESS_DEFAULT, _qr_image, _qr_light
+
+        app = self.app
+        light = _qr_light(QR_BRIGHTNESS_DEFAULT)
+        frame.draw.rectangle((0, 0, WIDTH, HEIGHT), fill=light)
+        control_h = 52
+        bright_y = HEIGHT - 16 - control_h
+        view_top = HEADER + 16
+        view_bottom = bright_y - 12
+        image = self._sha_code(_qr_image, light)
+        face = font(TITLE_SIZE, mono=True)
+        lines = wrap(frame.draw, self.sha_digest, face, WIDTH - 2 * MARGIN) or [""]
+        line_h = TITLE_SIZE + 8
+        text_top = view_top + image.height + 16
+        content_end = text_top + len(lines) * line_h
+        offset = app._scroll_offset("fs-sha256", content_end, clearance=HEIGHT - view_bottom)
+        self._paste_visible(frame, image, (WIDTH - image.width) // 2, view_top - offset, HEADER, view_bottom)
+        for index, line in enumerate(lines):
+            y = text_top + index * line_h - offset
+            # A line that would run into the brightness control waits until it fits.
+            if y + TITLE_SIZE <= view_bottom and y + TITLE_SIZE > HEADER:
+                frame.draw.text((MARGIN, y), line, font=face, fill=INK)
+                frame.mark(line, frame.draw.textbbox((MARGIN, y), line, font=face))
+        app._brightness_control(frame, bright_y)
+        app._still_boxes.append((0, view_bottom, WIDTH, HEIGHT))
+        frame.header("SHA256", "back")
+
+    def _sha_code(self, qr_image, light):
+        box = WIDTH - 2 * MARGIN
+        key = (self.sha_digest, box, light)
+        if self._sha_qr_image is None or self._sha_qr_key != key:
+            self._sha_qr_image = qr_image(self.sha_digest, box, light)
+            self._sha_qr_key = key
+        return self._sha_qr_image
+
+    @staticmethod
+    def _paste_visible(frame, image, x, y, top, bottom):
+        if y >= bottom or y + image.height <= top:
+            return
+        src_top = max(0, top - y)
+        src_bottom = min(image.height, bottom - y)
+        if src_bottom <= src_top:
+            return
+        frame.image.paste(
+            image.crop((0, int(src_top), image.width, int(src_bottom))),
+            (int(x), int(y + src_top)),
+        )
+
     def _is_ascii_file(self, size: int) -> bool:
         key = (self.storage, self.path, size)
         if self._text_key != key:
@@ -651,9 +818,26 @@ class FileSystemUI:
             if not image:
                 y = app._flow_text(frame, y, "This file is not a disk image.", paint, offset, 28, MUTED)
                 y += 8
-        y = app._flow_button(frame, y, "Rename", "fs-rename", paint, offset)
-        y = app._flow_button(frame, y, "Move", "fs-move", paint, offset)
+        y = self._action_row(frame, y, paint, offset, ("Rename", "fs-rename"), ("Move", "fs-move"))
+        y = app._flow_button(frame, y, "Calculate SHA256", "fs-sha256", paint, offset)
         return app._flow_button(frame, y, "Delete", "fs-delete", paint, offset, color=RED)
+
+    def _action_row(self, frame, y, paint, offset, left, right):
+        gap = 12
+        height = max(frame.button_height(left[0]), frame.button_height(right[0]))
+        top = y - offset
+        clip_top = getattr(frame, "clip_top", HEADER)
+        clip_bottom = getattr(frame, "clip_bottom", HEIGHT)
+        width = (WIDTH - 2 * MARGIN - gap) // 2
+        if paint and top + height >= clip_top and top < clip_bottom:
+            text_delta = frame._button_metrics(left[0], False)[4]
+            frame.button_box(
+                (MARGIN, top, MARGIN + width, top + height), left[0], left[1], text_delta=text_delta,
+            )
+            frame.button_box(
+                (MARGIN + width + gap, top, WIDTH - MARGIN, top + height), right[0], right[1], text_delta=text_delta,
+            )
+        return y + height + 12
 
     def _binary_qr_row(self, frame, y, size, paint, offset):
         app = self.app

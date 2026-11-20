@@ -12,7 +12,7 @@ from ..bip85gpg import creation_text, expiration_seconds, identity, path_text, s
 from ..entropy import camera_digest
 from ..gpg import (
     CHECKSUM_LIMIT, CHECKSUM_NAME, CHECKSUM_SIGNATURE, GpgBackend, GpgError, KEY_LIMIT, Outcome,
-    PASSWORD_LIMIT, looks_like_sha256sums,
+    PASSWORD_LIMIT, decrypted_filename, looks_like_sha256sums,
 )
 from .. import file_qr
 from .canvas import BLUE, BODY_SIZE, HEADER, HEIGHT, INK, LINE, MARGIN, MUTED, PAPER, RED, TITLE_SIZE, WARNING, WHITE, WIDTH, Frame, Icons, font, wrap
@@ -134,6 +134,10 @@ class GpgUI:
         self.encrypt_storage = "sd"
         self.encrypt_name = ""
         self.encrypt_password = ""
+        self.decrypt_source = ""
+        self.decrypt_storage = "sd"
+        self.decrypt_name = ""
+        self.decrypt_password = ""
         self.job = None
         self.future = None
         self.executor = None
@@ -154,6 +158,7 @@ class GpgUI:
                          "gpg-encrypt-menu": self.encrypt_menu,
                          "gpg-encrypt-keys": self.encrypt_keys, "gpg-encrypt-name": self.encrypt_name_screen,
                          "gpg-aes-password": self.aes_password, "gpg-aes-type": self.aes_type,
+                         "gpg-decrypt-password": self.decrypt_password_screen, "gpg-decrypt-type": self.decrypt_type,
                          "gpg-checksum-warning": self.checksum_warning}
 
     def open(self):
@@ -233,6 +238,18 @@ class GpgUI:
         elif action == "gpg-aes-continue":
             if self._password_ok(self.encrypt_password):
                 self._open_aes_camera()
+        elif action == "gpg-decrypt":
+            self.decrypt_password = ""
+            app._open_sd("gpg-decrypt-file")
+        elif action == "gpg-decrypt-type":
+            self.decrypt_password = ""
+            app.passphrase_mode = "lower"
+            app.go("gpg-decrypt-type")
+        elif action == "gpg-decrypt-pass-file":
+            app._open_sd("gpg-decrypt-pass")
+        elif action == "gpg-decrypt-continue":
+            if self._decrypt_password_ok(self.decrypt_password):
+                self.start_decrypt()
         elif action.startswith("gpg-encrypt-toggle:"):
             fingerprint = action.split(":", 1)[1]
             if fingerprint in self.encrypt_selected:
@@ -466,6 +483,12 @@ class GpgUI:
             if app.sd_expect == "gpg-aes-pass":
                 self._accept_aes_password(relative)
                 return
+            if app.sd_expect == "gpg-decrypt-file":
+                self._choose_decrypt_file(relative)
+                return
+            if app.sd_expect == "gpg-decrypt-pass":
+                self._accept_decrypt_password(relative)
+                return
             if not relative.lower().endswith(".asc"):
                 raise GpgError("Choose an .asc signature file.")
             storage = app.sd_storage
@@ -556,6 +579,16 @@ class GpgUI:
         elif outcome.ok and self.job_kind == "encrypt-list":
             self.build_encrypt_keys()
             self.app.screen = "gpg-encrypt-keys"
+        elif outcome.ok and self.job_kind == "decrypt-inspect":
+            if outcome.message == "symmetric":
+                self.decrypt_password = ""
+                self.app.screen = "gpg-decrypt-password"
+            elif outcome.message == "key":
+                self.start_decrypt(replace=True)
+            else:
+                self.outcome = Outcome(False, "This file is not an encrypted message.")
+                self.build_result()
+                self.app.screen = "gpg-result"
         elif outcome.ok and self.job_kind == "add-subkey":
             fingerprint = self.selected.fingerprint if self.selected else ""
             match = next((key for key in outcome.keys if key.fingerprint == fingerprint), None)
@@ -590,6 +623,7 @@ class GpgUI:
         y = frame.button(y, "Load GPG Key", "gpg-load")
         y = frame.button(y, "Verify Signature", "gpg-formats")
         y = frame.button(y, "Encrypt", "gpg-encrypt-menu")
+        y = frame.button(y, "Decrypt", "gpg-decrypt")
         frame.text("GPG keys stay in RAM and are cleared on reboot.", MARGIN, y + 12, size=28, fill=MUTED)
 
     def formats(self, frame):
@@ -687,7 +721,8 @@ class GpgUI:
                   "verify": "Verifying Signature…", "export": self._export_progress(),
                   "add-subkey": "Adding a Subkey…", "sign": "Signing File…", "delete": "Deleting GPG Key…",
                   "bip85": "Creating a GPG Key…", "encrypt-list": "Listing GPG Keys…",
-                  "encrypt": "Encrypting File…"}
+                  "encrypt": "Encrypting File…", "decrypt-inspect": "Reading Encrypted File…",
+                  "decrypt": "Decrypting File…"}
         frame.text(labels.get(self.job_kind, "Working…"), MARGIN, HEADER + 40, size=BODY_SIZE)
         self.work_shown = True
 
@@ -852,6 +887,20 @@ class GpgUI:
         frame.text("At most 255 bytes.", MARGIN, y, size=28, fill=MUTED)
         self.app._passphrase_keyboard(frame)
 
+    def decrypt_password_screen(self, frame):
+        frame.header("Password", "back")
+        y = frame.button(HEADER + 24, "Enter Password", "gpg-decrypt-type")
+        y = frame.button(y, "Load from File", "gpg-decrypt-pass-file", icon=Icons.FILE, awesome=True)
+        frame.text("The password can be at most 255 characters.", MARGIN, y, size=28, fill=MUTED)
+
+    def decrypt_type(self, frame):
+        frame.header("Password", "back")
+        box = (MARGIN, HEADER + 16, WIDTH - MARGIN, HEADER + 88)
+        self.app._paint_hscroll_field(frame, box, self.decrypt_password, len(self.decrypt_password), "Password")
+        y = frame.button(box[3] + 16, "Continue", "gpg-decrypt-continue", enabled=self._decrypt_password_ok(self.decrypt_password))
+        frame.text("At most 255 characters.", MARGIN, y, size=28, fill=MUTED)
+        self.app._passphrase_keyboard(frame)
+
     def encrypt_keys(self, frame):
         ready = bool(self._selected_fingerprints())
         self.content(frame, "Encrypt to Keys", footer=("Continue", "gpg-encrypt-continue", ready))
@@ -963,6 +1012,98 @@ class GpgUI:
         name = self.encrypt_name.strip()
         source, storage = self.encrypt_source, self.encrypt_storage
         self.start("encrypt", lambda: self.backend.encrypt_symmetric(source, name, storage, password))
+
+    def _choose_decrypt_file(self, relative):
+        from .app import _unused_filename
+
+        self.close_picker()
+        self.decrypt_source = relative
+        self.decrypt_storage = self.app.sd_storage
+        self.decrypt_password = ""
+        parent = str(Path(relative.replace("\\", "/")).parent)
+        parent = "" if parent == "." else parent
+        suggested = decrypted_filename(Path(relative).name)
+        if suggested == Path(relative).name:
+            suggested += ".dec"
+        try:
+            taken = {item["name"] for item in sdcard.list_folder(parent, storage=self.decrypt_storage)}
+        except sdcard.SdError:
+            taken = set()
+        self.decrypt_name = _unused_filename(suggested, taken)
+        source, storage = self.decrypt_source, self.decrypt_storage
+        self.start("decrypt-inspect", lambda: self._decrypt_kind(source, storage))
+
+    def _decrypt_kind(self, source, storage):
+        try:
+            kind = self.backend.encryption_kind(source, storage)
+        except GpgError as exc:
+            return Outcome(False, str(exc))
+        return Outcome(True, message=kind)
+
+    def _accept_decrypt_password(self, relative):
+        password = self._password_from_file(relative, characters=True)
+        if password is None:
+            return
+        self.decrypt_password = password
+        self.close_picker()
+        self.start_decrypt()
+
+    def _password_from_file(self, relative, *, characters):
+        try:
+            data = sdcard.read_bytes(relative, storage=self.app.sd_storage, max_bytes=PASSWORD_LIMIT * 4 + 1)
+        except sdcard.SdError as exc:
+            too_long = "The password is longer than 255 characters." if characters else "The password is longer than 255 bytes."
+            self.app.set_error(too_long if str(exc) == "That file is too large." else str(exc))
+            return None
+        if data.endswith(b"\r\n"):
+            data = data[:-2]
+        elif data.endswith(b"\n"):
+            data = data[:-1]
+        try:
+            password = data.decode("utf-8")
+        except UnicodeDecodeError:
+            self.app.set_error("The password file is not text.")
+            return None
+        if not password:
+            self.app.set_error("The password file is empty.")
+            return None
+        if characters:
+            if len(password) > PASSWORD_LIMIT or "\n" in password or "\r" in password or "\x00" in password:
+                self.app.set_error(
+                    "The password is longer than 255 characters." if len(password) > PASSWORD_LIMIT else "The password is not valid."
+                )
+                return None
+        elif not self._password_ok(password):
+            self.app.set_error(
+                "The password is longer than 255 bytes."
+                if len(password.encode("utf-8")) > PASSWORD_LIMIT else "The password is not valid."
+            )
+            return None
+        return password
+
+    def _decrypt_password_ok(self, password):
+        if not password or "\x00" in password or "\n" in password or "\r" in password:
+            return False
+        return len(password) <= PASSWORD_LIMIT
+
+    def type_decrypt_password(self, key):
+        if key in ("enter", "\n"):
+            return
+        if key == "backspace":
+            self.decrypt_password = self.decrypt_password[:-1]
+            return
+        if len(key) != 1:
+            return
+        candidate = self.decrypt_password + key
+        if self._decrypt_password_ok(candidate):
+            self.decrypt_password = candidate
+
+    def start_decrypt(self, *, replace=False):
+        password = self.decrypt_password if self._decrypt_password_ok(self.decrypt_password) else None
+        self.decrypt_password = ""
+        name = self.decrypt_name.strip()
+        source, storage = self.decrypt_source, self.decrypt_storage
+        self.start("decrypt", lambda: self.backend.decrypt_file(source, name, storage, password), replace=replace)
 
     def _encrypt_parent(self):
         parent = str(Path(self.encrypt_source.replace("\\", "/")).parent)

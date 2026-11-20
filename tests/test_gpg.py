@@ -12,7 +12,8 @@ import pytest
 
 from bigsigner import sdcard
 from bigsigner.gpg import (
-    CHECKSUM_NAME, CommandResult, GpgBackend, GpgError, check_manifest_paths, files_left_unchecked,
+    CHECKSUM_NAME, CommandResult, GpgBackend, GpgError, check_manifest_paths, decrypted_filename,
+    files_left_unchecked, pgp_encryption_kind,
     looks_like_sha256sums, manifest_filenames, manifest_for_name, mix_kernel_entropy, parse_keys, passphrase_required,
     quick_add_arguments, sha256_manifest, signature_is_deterministic, signature_ok,
 )
@@ -707,3 +708,53 @@ def test_real_symmetric_encryption_uses_aes256(real_backend):
         capture_output=True, env=env)
     assert decrypted.returncode == 0, decrypted.stderr.decode()
     assert decrypted.stdout == b"hello airgap\n"
+
+
+def test_encryption_kind_reads_the_leading_session_key_packet():
+    symmetric = bytes([0xC3, 4, 4, 0, 0, 0])
+    keyed = bytes([0xC1, 4, 3, 0, 0, 0])
+    armor = b"-----BEGIN PGP MESSAGE-----\n\n" + __import__("base64").b64encode(symmetric) + b"\n-----END PGP MESSAGE-----\n"
+    assert pgp_encryption_kind(symmetric) == "symmetric"
+    assert pgp_encryption_kind(armor) == "symmetric"
+    assert pgp_encryption_kind(keyed) == "key"
+    assert decrypted_filename("note.txt.enc.asc") == "note.txt"
+    assert decrypted_filename("note.txt.gpg") == "note.txt"
+    assert decrypted_filename("photo.bin") == "photo.bin.dec"
+    with pytest.raises(GpgError, match="not an encrypted message"):
+        pgp_encryption_kind(b"hello")
+
+
+def test_real_decrypt_uses_a_password_only_for_symmetric_messages(real_backend):
+    backend, root = real_backend
+    env = dict(os.environ, GNUPGHOME=str(backend.home), LC_ALL="C", LANG="C", TZ="UTC")
+    (root / "note.txt").write_bytes(b"hello airgap\n")
+    encrypted = backend.encrypt_symmetric("note.txt", "note.txt.enc.asc", "sd", "secret")
+    assert encrypted.ok, encrypted
+    assert backend.encryption_kind("note.txt.enc.asc", "sd") == "symmetric"
+    (root / "note.txt").unlink()
+    opened = backend.decrypt_file("note.txt.enc.asc", "note.txt", "sd", "secret")
+    assert opened.ok, opened
+    assert 'The decrypted file "note.txt" was written.' in opened.stages[0].stdout
+    assert (root / "note.txt").read_bytes() == b"hello airgap\n"
+    assert not (backend.home / "aes-passphrase").exists()
+
+    generated = subprocess.run(
+        ["gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
+         "--quick-gen-key", "Decrypt <dec@example.invalid>", "ed25519", "cert", "never"],
+        capture_output=True, env=env)
+    assert generated.returncode == 0, generated.stderr.decode()
+    fingerprint = backend.list_keys().keys[0].fingerprint
+    added = subprocess.run(
+        ["gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
+         "--quick-add-key", fingerprint, "cv25519", "encrypt", "never"],
+        capture_output=True, env=env)
+    assert added.returncode == 0, added.stderr.decode()
+    recipient = next(sub["fingerprint"] for sub in backend.list_keys().keys[0].subkeys if "e" in sub["capabilities"].lower())
+    (root / "secret.txt").write_bytes(b"keyed\n")
+    locked = backend.encrypt_file([recipient], "secret.txt", "secret.txt.enc.asc", "sd")
+    assert locked.ok, locked
+    assert backend.encryption_kind("secret.txt.enc.asc", "sd") == "key"
+    (root / "secret.txt").unlink()
+    opened = backend.decrypt_file("secret.txt.enc.asc", "secret.txt", "sd", None)
+    assert opened.ok, opened
+    assert (root / "secret.txt").read_bytes() == b"keyed\n"

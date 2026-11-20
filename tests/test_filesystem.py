@@ -1,6 +1,7 @@
 """Storage mutations and the File System screens, including bounded viewers."""
 
 import base64
+import hashlib
 import io
 from pathlib import Path
 from types import SimpleNamespace
@@ -428,6 +429,137 @@ def test_non_text_files_open_as_scrollable_hex(data):
     assert any(item["text"] == " ".join(f"{byte:02x}" for byte in data[:8]) for item in app.texts)
 
 
+def _finish_sha(app):
+    if not app.fs.sha_shown:
+        app.render()
+    try:
+        digest = app.fs._sha_job()
+    except sdcard.SdError as exc:
+        app.fs.finish_sha(error=str(exc))
+    else:
+        app.fs.finish_sha(digest)
+    app._search_touch_at -= 1
+    app._ignore_search_touch()
+    app.render()
+
+
+def _hex_lines(app):
+    app.render()
+    return [
+        item for item in app.texts
+        if item["text"] and set(item["text"]) <= set("0123456789abcdef")
+    ]
+
+
+def test_rename_and_move_share_a_row_and_sha256_sits_above_delete():
+    app = _details(b"hello")
+    rename = next(hit for hit in app.hits if hit["label"] == "Rename")
+    move = next(hit for hit in app.hits if hit["label"] == "Move")
+    sha = next(hit for hit in app.hits if hit["label"] == "Calculate SHA256")
+    delete = next(hit for hit in app.hits if hit["label"] == "Delete")
+    assert rename["box"][1] == move["box"][1] == rename["box"][1]
+    assert rename["box"][3] == move["box"][3]
+    assert rename["box"][2] <= move["box"][0]
+    assert rename["box"][0] == MARGIN and move["box"][2] == WIDTH - MARGIN
+    assert sha["box"][1] >= rename["box"][3]
+    assert delete["box"][1] >= sha["box"][3]
+    assert sha["box"][0] == MARGIN and sha["box"][2] == WIDTH - MARGIN
+    assert sha["box"][3] - sha["box"][1] == rename["box"][3] - rename["box"][1]
+
+
+def test_calculate_sha256_shows_progress_then_qr_and_left_aligned_hex():
+    data = b"hello"
+    app = _details(data)
+    _tap(app, "Calculate SHA256")
+    assert app.screen == "fs-sha-progress"
+    app.render()
+    assert [item["text"] for item in app.texts] == ["Calculating SHA256\u2026"]
+    assert app.hits == []
+    app.pointer_down(240, 400)
+    app.pointer_up(240, 400)
+    assert app.screen == "fs-sha-progress"
+    _finish_sha(app)
+    digest = hashlib.sha256(data).hexdigest()
+    assert app.screen == "fs-sha256" and app.fs.sha_digest == digest
+    assert app._shown_to_a_camera()
+    lines = _hex_lines(app)
+    assert lines
+    assert all(item["box"][0] <= MARGIN + 4 for item in lines)
+    assert lines[-1]["box"][0] < WIDTH // 3
+    from bigsigner.ui.app import QR_BRIGHTNESS_DEFAULT, _qr_image, _qr_light
+
+    code = _qr_image(digest, WIDTH - 2 * MARGIN, _qr_light(QR_BRIGHTNESS_DEFAULT))
+    image = app.render()
+    crop = image.crop((MARGIN, HEADER + 16, MARGIN + code.width, HEADER + 16 + code.height))
+    assert crop.tobytes() == code.tobytes()
+    bright = next(hit["box"] for hit in app.hits if hit["action"] == "brightness-down")
+    assert bright[1] > max(item["box"][3] for item in lines)
+    app.scroll["fs-sha256"] = 10**9
+    app.render()
+    assert next(hit["box"] for hit in app.hits if hit["action"] == "brightness-down") == bright
+    collected = ""
+    offset = 0
+    limit = app.scroll_max["fs-sha256"]
+    while True:
+        app.scroll["fs-sha256"] = offset
+        chunk = "".join(item["text"] for item in _hex_lines(app))
+        if chunk:
+            if not collected:
+                collected = chunk
+            else:
+                for count in range(len(chunk), -1, -1):
+                    if collected.endswith(chunk[:count]):
+                        collected += chunk[count:]
+                        break
+        if offset >= limit:
+            break
+        offset = min(limit, offset + 24)
+    assert collected == digest
+    app.scroll["fs-sha256"] = 0
+    normal = app.render()
+    _tap(app, "brightness-down")
+    dimmed = app.render()
+    assert app.qr_brightness == QR_BRIGHTNESS_DEFAULT - 1
+    assert dimmed.getpixel((0, HEIGHT - 1))[0] < normal.getpixel((0, HEIGHT - 1))[0]
+    assert (0, 0, 0) in [color for _count, color in dimmed.getcolors(WIDTH * HEIGHT)]
+    _tap(app, "back")
+    assert app.screen == "fs-details"
+    assert app.qr_brightness == QR_BRIGHTNESS_DEFAULT
+
+
+def test_sha256_of_a_large_file_matches_and_a_missing_file_returns_to_details():
+    data = b"xyz" * 100_000
+    app = _details(data, name="big.bin")
+    _tap(app, "Calculate SHA256")
+    _finish_sha(app)
+    assert app.fs.sha_digest == hashlib.sha256(data).hexdigest()
+    app = _details(b"hello", storage="temporary")
+    _tap(app, "Calculate SHA256")
+    app.render()
+    sdcard.delete_file("file.txt", storage="temporary")
+    _finish_sha(app)
+    assert app.screen == "fs-details"
+    assert "not a file" in app.notice
+
+
+def test_read_chunks_hashes_a_disk_file_past_the_open_limit(monkeypatch, tmp_path):
+    monkeypatch.setenv("BIGSIGNER_SDCARD_PATH", str(tmp_path))
+    data = bytes(range(256)) * 2000
+    (tmp_path / "big.bin").write_bytes(data)
+    digest = hashlib.sha256()
+    total = 0
+    chunks = 0
+    for chunk in sdcard.read_chunks("big.bin", chunk_size=1000):
+        digest.update(chunk)
+        total += len(chunk)
+        chunks += 1
+        assert len(chunk) <= 1000
+    assert chunks > 1 and total == len(data)
+    assert digest.hexdigest() == hashlib.sha256(data).hexdigest()
+    (tmp_path / "empty.bin").write_bytes(b"")
+    assert list(sdcard.read_chunks("empty.bin")) == []
+
+
 def test_rename_and_move_to_another_storage_from_file_details():
     app = _details(b"content")
     _tap(app, "Rename")
@@ -567,6 +699,14 @@ def test_filesystem_screens_save_screenshots():
     record.click(app, "back")
     record.click(app, "hello.txt")
     record.shot(app, "file-details")
+    record.click(app, "Calculate SHA256")
+    record.shot(app, "sha-progress")
+    _finish_sha(app)
+    record.shot(app, "sha-result")
+    if app.scroll_max.get("fs-sha256", 0) > 0:
+        app.scroll["fs-sha256"] = 10**9
+        record.shot(app, "sha-result-bottom")
+    record.click(app, "back")
     record.click(app, "Show QR")
     record.shot(app, "file-qr")
     record.click(app, "brightness-down")
