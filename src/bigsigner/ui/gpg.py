@@ -8,7 +8,7 @@ import re
 import time
 
 from .. import sdcard
-from ..bip85gpg import creation_text, expiration_seconds, identity, path_text, secret_armor
+from ..bip85gpg import creation_text, entropy_path, expiration_seconds, identity, path_text, raw_entropy, secret_armor
 from ..entropy import camera_digest
 from ..gpg import (
     CHECKSUM_LIMIT, CHECKSUM_NAME, CHECKSUM_SIGNATURE, GpgBackend, GpgError, KEY_LIMIT, Outcome,
@@ -25,6 +25,10 @@ SIGN_NOTE = "Signing a file requires this key's private key."
 SIGN_PASSPHRASE_NOTE = "Signing a file requires a key with no passphrase."
 SIGN_TIME_NOTE = "This time is written on the signature. The air-gapped device has no reliable clock."
 BIP85_EXPIRE_NOTE = "This date is written on the certificate. It does not change the RSA private key."
+ENTROPY_INDEX_NOTE = (
+    "Choose a unique index that will not be used for other purposes. "
+    "A good index could be the number of seconds since 1970-01-01."
+)
 SUBKEY_NOTE = "Adding a subkey requires the certificate's private key."
 PRIVATE_NOTE = "Contains a private key"
 _USAGE = (("c", "Certification"), ("s", "Signing"), ("e", "Encryption"), ("a", "Authentication"))
@@ -103,6 +107,8 @@ class GpgUI:
         self.bip85_expires = None
         self.bip85_clock = dict(year=2026, month=6, day=15)
         self.bip85_field = "name"
+        self.entropy_fp = None
+        self.entropy_index = 0
         self.bip85_draft = ""
         self.details_back = []
         self.operation = "detached"
@@ -159,6 +165,8 @@ class GpgUI:
                          "gpg-encrypt-keys": self.encrypt_keys, "gpg-encrypt-name": self.encrypt_name_screen,
                          "gpg-aes-password": self.aes_password, "gpg-aes-type": self.aes_type,
                          "gpg-decrypt-password": self.decrypt_password_screen, "gpg-decrypt-type": self.decrypt_type,
+                         "gpg-entropy": self.entropy_menu, "gpg-entropy-seed": self.entropy_seeds,
+                         "gpg-entropy-index": self.entropy_index_screen,
                          "gpg-checksum-warning": self.checksum_warning}
 
     def open(self):
@@ -241,6 +249,29 @@ class GpgUI:
         elif action == "gpg-decrypt":
             self.decrypt_password = ""
             app._open_sd("gpg-decrypt-file")
+        elif action == "gpg-entropy":
+            self.entropy_fp = None
+            self.entropy_index = 0
+            app.go("gpg-entropy")
+        elif action == "gpg-entropy-camera":
+            app.camera_frames = []
+            app.camera_final = b""
+            app.camera_purpose = "gpg"
+            self.camera_for = "entropy"
+            app.go("camera")
+        elif action == "gpg-entropy-seed":
+            self.entropy_index = 0
+            app.go("gpg-entropy-seed")
+        elif action.startswith("gpg-entropy-pick:"):
+            self._pick_entropy_seed(action.split(":", 1)[1])
+        elif action == "gpg-entropy-dec" and self.entropy_index > 0:
+            self.entropy_index -= 1
+        elif action == "gpg-entropy-inc" and self.entropy_index < 0x7FFFFFFF:
+            self.entropy_index += 1
+        elif action == "gpg-entropy-edit":
+            self._edit_entropy_index()
+        elif action == "gpg-entropy-add":
+            self._add_seed_entropy()
         elif action == "gpg-decrypt-type":
             self.decrypt_password = ""
             app.passphrase_mode = "lower"
@@ -624,6 +655,7 @@ class GpgUI:
         y = frame.button(y, "Verify Signature", "gpg-formats")
         y = frame.button(y, "Encrypt", "gpg-encrypt-menu")
         y = frame.button(y, "Decrypt", "gpg-decrypt")
+        y = frame.button(y, "Add Entropy to OS", "gpg-entropy")
         frame.text("GPG keys stay in RAM and are cleared on reboot.", MARGIN, y + 12, size=28, fill=MUTED)
 
     def formats(self, frame):
@@ -713,7 +745,7 @@ class GpgUI:
         frame.header("Load GPG Key", "back")
         y = frame.button(HEADER + 24, "Load from File", "gpg-load-file", icon=Icons.FILE, awesome=True)
         y = frame.button(y, "Scan QR Code", "gpg-scan-key", icon=Icons.CAMERA, awesome=True)
-        frame.button(y, "Load from Bitcoin Seed (BIP-85)", "gpg-load-seed", icon=Icons.SEED, awesome=True)
+        frame.button(y, "Load RSA Key from Bitcoin Seed (BIP-85)", "gpg-load-seed", icon=Icons.SEED, awesome=True)
 
     def working(self, frame):
         frame.header("GPG")
@@ -1467,7 +1499,7 @@ class GpgUI:
         self.app.camera_frames = []
         self.app.camera_final = b""
         try:
-            self.backend.mix_entropy(digest)
+            mixed = self.backend.mix_entropy(digest)
         except GpgError as exc:
             self.camera_for = ""
             self.show_error(str(exc))
@@ -1479,6 +1511,10 @@ class GpgUI:
         if self.camera_for == "aes":
             self.camera_for = ""
             self.start_aes_encrypt()
+            return
+        if self.camera_for == "entropy":
+            self.camera_for = ""
+            self._show_entropy_result(mixed is not False)
             return
         self.camera_for = ""
         self.subkey_algo = "ed25519"
@@ -1683,18 +1719,97 @@ class GpgUI:
         self.start("bip85", job)
 
     def bip85_seeds(self, frame):
+        self._seed_cards(frame, "Load a seed before deriving a GPG key.", "gpg-bip85-seed", "gpg-bip85-pick:")
+
+    def entropy_menu(self, frame):
+        frame.header("Add Entropy", "back")
+        y = frame.button(HEADER + 24, "Camera", "gpg-entropy-camera", icon=Icons.CAMERA, awesome=True)
+        frame.button(y, "Bitcoin Seed Raw Entropy (BIP-85)", "gpg-entropy-seed", icon=Icons.SEED, awesome=True)
+
+    def entropy_seeds(self, frame):
+        self._seed_cards(frame, "Load a seed before deriving entropy.", "gpg-entropy-seed", "gpg-entropy-pick:")
+
+    def entropy_index_screen(self, frame):
+        app = self.app
+        frame.header("Raw Entropy", "back")
+        if not any(record.fingerprint == self.entropy_fp for record in self._seed_records()):
+            frame.text("This seed is no longer loaded.", MARGIN, HEADER + 24, size=TITLE_SIZE)
+            return
+        y = HEADER + 16
+        y = app._account_selector(
+            frame, y, self.entropy_index, True, 0, caption="Index",
+            down="gpg-entropy-dec", up="gpg-entropy-inc", edit="gpg-entropy-edit", maximum=0x7FFFFFFF,
+        )
+        y = frame.text(ENTROPY_INDEX_NOTE, MARGIN, y, size=28, fill=MUTED)
+        y = frame.text("Derivation Path:", MARGIN, y + 12, size=TITLE_SIZE, fill=MUTED)
+        face = font(22, mono=True)
+        for line in wrap(frame.draw, entropy_path(self.entropy_index), face, WIDTH - 2 * MARGIN):
+            width = frame.draw.textlength(line, font=face)
+            x = max(MARGIN, (WIDTH - width) / 2)
+            frame.draw.text((x, y), line, font=face, fill=MUTED)
+            frame.mark(line, frame.draw.textbbox((x, y), line, font=face))
+            y += 30
+        frame.button(y + 8, "Add Entropy", "gpg-entropy-add")
+
+    def _show_entropy_result(self, mixed):
+        message = "Entropy was added to the OS." if mixed else "The emulator uses the browser's random source."
+        self.outcome = Outcome(True, message)
+        self.build_result()
+        self.app.go("gpg-result")
+        self.app.scroll["gpg-result"] = 0
+
+    def _pick_entropy_seed(self, fingerprint):
+        try:
+            fp = bytes.fromhex(fingerprint)
+        except ValueError:
+            return
+        if not any(record.fingerprint == fp for record in self._seed_records()):
+            self.app.set_error("This seed is no longer loaded.")
+            return
+        self.entropy_fp = fp
+        self.entropy_index = 0
+        self.app.go("gpg-entropy-index")
+
+    def _edit_entropy_index(self):
+        if self.entropy_fp not in self.app.session.fingerprints:
+            self.app.set_error("This seed is no longer loaded.")
+            return
+        self.app.account_fp = self.entropy_fp
+        self.app.account_text = str(self.entropy_index)
+        self.app.account_for = "gpg-entropy"
+        self.app.go("account")
+
+    def _add_seed_entropy(self):
+        root = None
+        record = self.app.session.fingerprints.get(self.entropy_fp)
+        if record is not None:
+            for key in record.keys:
+                if key.has_seed and getattr(key, "root", None) is not None:
+                    root = key.root
+                    break
+        if root is None:
+            self.show_error("This seed is no longer loaded.")
+            return
+        try:
+            mixed = self.backend.mix_entropy(raw_entropy(root, self.entropy_index))
+        except (ValueError, GpgError) as exc:
+            self.show_error(str(exc))
+            return
+        self._show_entropy_result(mixed is not False)
+
+    def _seed_cards(self, frame, empty, screen, prefix):
         app = self.app
         records = self._seed_records()
         if not records:
             frame.header("Select Seed", "back")
-            frame.text("Load a seed before deriving a GPG key.", MARGIN, HEADER + 24, size=TITLE_SIZE)
+            frame.text(empty, MARGIN, HEADER + 24, size=TITLE_SIZE)
             return
         y = HEADER + 24
         placed = []
         for record in records:
             placed.append((y, record))
             y += app._key_card_height(frame, record) + 12
-        offset = app._scroll_offset("gpg-bip85-seed", y, clearance=24)
+        offset = app._scroll_offset(screen, y, clearance=24)
         for top, record in placed:
             card_top = top - offset
             height = app._key_card_height(frame, record)
@@ -1704,7 +1819,7 @@ class GpgUI:
             app._key_card_body(frame, card_top, record, record.fingerprint, paint=True)
             frame.hit(
                 (MARGIN, max(card_top, HEADER), WIDTH - MARGIN, min(card_top + height, HEIGHT)),
-                "gpg-bip85-pick:" + record.fingerprint.hex(),
+                prefix + record.fingerprint.hex(),
                 record.nickname,
             )
         frame.header("Select Seed", "back")

@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from embit.bip85 import derive_entropy
 
 APPLICATION = 828365
+ENTROPY_APPLICATION = 128169
+ENTROPY_BYTES = 64
 CREATION = 1231006505  # 2009-01-03 18:15:05 UTC
 PUBLIC_EXPONENT = 65537
 _TRIAL = []
@@ -58,6 +60,21 @@ class ShakeReader:
 
 def drng_bytes(entropy: bytes, count: int) -> bytes:
     return ShakeReader(entropy).read(count)
+
+
+def raw_entropy(root, index: int) -> bytes:
+    """64 bytes at m/83696968h/128169h/64h/{index}h.
+
+    BIP-85 application 128169 is raw entropy. The HMAC-SHA512 output is 64
+    bytes, which is the maximum this application allows, so nothing is cut.
+    """
+    if index < 0 or index >= 0x80000000:
+        raise ValueError("The index is too large.")
+    return derive_entropy(root, ENTROPY_APPLICATION, [ENTROPY_BYTES, index])
+
+
+def entropy_path(index: int) -> str:
+    return f"m/83696968h/{ENTROPY_APPLICATION}h/{ENTROPY_BYTES}h/{index}h"
 
 
 def entropy_for(root, bits: int, index: int) -> bytes:

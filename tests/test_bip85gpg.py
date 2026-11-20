@@ -8,7 +8,7 @@ import pytest
 from embit.bip32 import HDKey
 from embit.bip39 import mnemonic_to_seed
 
-from bigsigner.bip85gpg import armor, derive_rsa, drng_bytes, entropy_for, secret_packets
+from bigsigner.bip85gpg import armor, derive_rsa, drng_bytes, entropy_for, entropy_path, raw_entropy, secret_packets
 from bigsigner.gpg import GpgBackend
 
 ABANDON = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
@@ -36,6 +36,21 @@ def _abandon():
 
 def test_the_drng_matches_the_bip85_vector():
     assert drng_bytes(_DRNG_ENTROPY, 80).hex() == _DRNG_80
+
+
+def test_raw_entropy_is_64_bytes_from_the_bip85_entropy_application():
+    root = _abandon()
+    assert entropy_path(7) == "m/83696968h/128169h/64h/7h"
+    first = raw_entropy(root, 0)
+    assert first == raw_entropy(root, 0)
+    assert len(first) == 64
+    assert first.hex() == (
+        "379f3ff670bf391ca62e6fbd62359a753e89c46bcb02751066ee5897c292487a"
+        "ccbfb091d2b59002086eb13d0f9d6746e7ab74d4a60a5f4998cfba3d3687f89a"
+    )
+    assert raw_entropy(root, 1) != first
+    with pytest.raises(ValueError):
+        raw_entropy(root, 0x80000000)
 
 
 def test_the_abandon_seed_recreates_one_rsa_modulus():

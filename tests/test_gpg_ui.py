@@ -74,6 +74,7 @@ class FakeBackend:
 
     def mix_entropy(self, digest):
         self.calls.append(("mix", digest))
+        return True
 
     def sign_file(self, fingerprint, relative, storage, timestamp):
         self.calls.append(("sign-file", fingerprint, relative, storage, timestamp))
@@ -1050,11 +1051,11 @@ def test_gpg_screens_save_screenshots(real_backend):
 
     bip = _app(fixture_date=False)
     record.click(bip, "Load GPG Key")
-    record.click(bip, "Load from Bitcoin Seed (BIP-85)")
+    record.click(bip, "Load RSA Key from Bitcoin Seed (BIP-85)")
     record.shot(bip, "bip85-no-seed")
     added = bip.session.add_mnemonic(ABANDON.split())
     record.click(bip, "back")
-    record.click(bip, "Load from Bitcoin Seed (BIP-85)")
+    record.click(bip, "Load RSA Key from Bitcoin Seed (BIP-85)")
     record.shot(bip, "bip85-seed")
     record.click(bip, "gpg-bip85-pick:" + added["fingerprint"].hex())
     record.shot(bip, "bip85-options")
@@ -1292,12 +1293,12 @@ def test_bip85_load_asks_for_a_seed_and_imports_one_primary_key():
 
     app = _app()
     _tap(app, "Load GPG Key")
-    _tap(app, "Load from Bitcoin Seed (BIP-85)")
+    _tap(app, "Load RSA Key from Bitcoin Seed (BIP-85)")
     app.render()
     assert "Load a seed before deriving a GPG key." in " ".join(item["text"] for item in app.texts)
     added = app.session.add_mnemonic(ABANDON.split())
     _tap(app, "back")
-    _tap(app, "Load from Bitcoin Seed (BIP-85)")
+    _tap(app, "Load RSA Key from Bitcoin Seed (BIP-85)")
     app.render()
     assert any(item["text"] == "Select Seed" for item in app.texts)
     assert added["fingerprint"].hex() in {item["text"] for item in app.texts}
@@ -1342,3 +1343,66 @@ def test_bip85_load_asks_for_a_seed_and_imports_one_primary_key():
     body = b"".join(line.strip() for line in data.splitlines() if line and not line.startswith(b"-----"))
     assert b"Ada Lovelace <ada@example.invalid>" in base64.b64decode(body)
     assert app.screen == "gpg-result"
+
+
+def _on_screen(app):
+    for item in list(app.texts) + list(app.hits):
+        left, _top, right, bottom = item["box"]
+        assert 0 <= left and right <= WIDTH, item.get("text") or item.get("label")
+        assert bottom <= HEIGHT, item.get("text") or item.get("label")
+
+
+def test_add_entropy_mixes_a_camera_capture_or_bip85_raw_entropy():
+    from bigsigner.bip85gpg import raw_entropy
+    from test_domain import ABANDON
+
+    app = _app()
+    app.render()
+    _on_screen(app)
+    _tap(app, "Add Entropy to OS")
+    app.render()
+    _on_screen(app)
+    assert {hit["label"] for hit in app.hits} >= {"Camera", "Bitcoin Seed Raw Entropy (BIP-85)"}
+    _tap(app, "Camera")
+    assert app.screen == "camera" and app.gpg.camera_for == "entropy"
+    app.render()
+    caption = " ".join(item["text"] for item in app.texts)
+    assert "This capture is mixed into the OS random number generation entropy" in caption
+    app.camera_final = b"picture"
+    app.camera_frames = [b"picture"]
+    _tap(app, "Capture")
+    app.render()
+    assert app.screen == "gpg-result"
+    mixed = [call for call in app.gpg.backend.calls if call[0] == "mix"]
+    assert len(mixed) == 1 and len(mixed[0][1]) == 32
+    assert app.gpg.outcome.message == "Entropy was added to the OS."
+    assert "".join(row[2] for row in app.gpg.rows).replace(" ", "") == "EntropywasaddedtotheOS."
+
+    app = _app()
+    _tap(app, "Add Entropy to OS")
+    _tap(app, "Bitcoin Seed Raw Entropy (BIP-85)")
+    app.render()
+    assert "".join(item["text"] for item in app.texts).replace(" ", "") == "SelectSeedLoadaseedbeforederivingentropy."
+    added = app.session.add_mnemonic(ABANDON.split())
+    _tap(app, "back")
+    _tap(app, "Bitcoin Seed Raw Entropy (BIP-85)")
+    _tap(app, "gpg-entropy-pick:" + added["fingerprint"].hex())
+    app.render()
+    text = " ".join(item["text"] for item in app.texts)
+    assert "Choose a unique index that will not be used for other purposes." in text
+    assert "number of seconds since 1970-01-01." in text
+    assert any(item["text"] == "m/83696968h/128169h/64h/0h" for item in app.texts)
+    _on_screen(app)
+    _tap(app, "Index")
+    _tap(app, "7")
+    _tap(app, "Use This Index")
+    app.render()
+    assert app.gpg.entropy_index == 7
+    assert any(item["text"] == "m/83696968h/128169h/64h/7h" for item in app.texts)
+    _tap(app, "Add Entropy")
+    app.render()
+    assert app.screen == "gpg-result"
+    seed_mix = [call for call in app.gpg.backend.calls if call[0] == "mix"]
+    assert seed_mix[-1][1] == raw_entropy(app.session.fingerprints[added["fingerprint"]].keys[0].root, 7)
+    assert app.gpg.outcome.message == "Entropy was added to the OS."
+    assert "".join(row[2] for row in app.gpg.rows).replace(" ", "") == "EntropywasaddedtotheOS."

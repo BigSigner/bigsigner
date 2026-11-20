@@ -46,22 +46,23 @@ def _decrypt_password(password: str) -> str:
 
 
 def mix_kernel_entropy(digest: bytes) -> None:
-    """Mix the camera digest into the kernel pool.
+    """Mix bytes into the kernel pool.
 
-    The entropy count is 0. The digest is 32 bytes wide, and that width is not
-    a measurement of how unpredictable the pictures were. The bytes are still mixed.
+    The entropy count is 0. That count is not a measurement of how
+    unpredictable the bytes were. The bytes are still mixed. A camera digest
+    is 32 bytes. BIP-85 raw entropy is 64 bytes.
     """
-    if len(digest) != 32:
-        raise GpgError("The camera digest is not 32 bytes.")
-    argument = struct.pack("ii32s", 0, 32, digest)
+    if not digest or len(digest) > 256:
+        raise GpgError("The entropy is not a valid length.")
+    argument = struct.pack(f"ii{len(digest)}s", 0, len(digest), digest)
     try:
         fd = os.open("/dev/random", os.O_RDWR)
     except OSError as exc:
-        raise GpgError("The camera capture could not be mixed into the Linux random number generator.") from exc
+        raise GpgError("The entropy could not be mixed into the Linux random number generator.") from exc
     try:
         fcntl.ioctl(fd, _RNDADDENTROPY, argument)
     except OSError as exc:
-        raise GpgError("The camera capture could not be mixed into the Linux random number generator.") from exc
+        raise GpgError("The entropy could not be mixed into the Linux random number generator.") from exc
     finally:
         os.close(fd)
 
@@ -618,10 +619,11 @@ class GpgBackend:
         ok = result.returncode == 0 and marker in result.stdout
         return Outcome(ok, "" if ok else "The key could not be exported.", [result])
 
-    def mix_entropy(self, digest: bytes):
+    def mix_entropy(self, digest: bytes) -> bool:
         if not self.supported:
             raise GpgError("GPG commands are not available in the web emulator. Use the BigSigner device.")
         mix_kernel_entropy(digest)
+        return True
 
     def add_subkey(self, fingerprint: str, algo: str, usage: str, expire: str, timestamp: int):
         """Add one subkey with ``gpg --quick-add-key`` at the typed UTC time."""

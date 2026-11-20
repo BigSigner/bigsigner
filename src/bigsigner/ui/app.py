@@ -4293,7 +4293,7 @@ class App:
             return
         if not self.account_text.isdigit():
             self.set_error(
-                "Enter an index." if self.account_for in ("bip85", "gpg-bip85", "address-find", "search-start") else "Enter an account index."
+                "Enter an index." if self.account_for in ("bip85", "gpg-bip85", "gpg-entropy", "address-find", "search-start") else "Enter an account index."
             )
             return
         account = int(self.account_text)
@@ -4301,11 +4301,11 @@ class App:
             if self._set_search_index(self.account_for[len("search-"):], account):
                 self.back_one()
             return
-        if self.account_for in ("derive", "bip85", "gpg-bip85", "address-find"):
+        if self.account_for in ("derive", "bip85", "gpg-bip85", "gpg-entropy", "address-find"):
             if account >= 0x80000000:
                 self.set_error(
                     "The index is too large."
-                    if self.account_for in ("bip85", "gpg-bip85", "address-find")
+                    if self.account_for in ("bip85", "gpg-bip85", "gpg-entropy", "address-find")
                     else "The account index is too large."
                 )
                 return
@@ -4313,6 +4313,8 @@ class App:
                 self.bip85_index = account
             elif self.account_for == "gpg-bip85":
                 self.gpg.bip85_index = account
+            elif self.account_for == "gpg-entropy":
+                self.gpg.entropy_index = account
             elif self.account_for == "address-find":
                 self.address_find_index = account
             else:
@@ -4333,7 +4335,7 @@ class App:
             self.set_error(str(exc))
 
     def _account(self, frame: Frame):
-        choosing_index = self.account_for in ("bip85", "gpg-bip85", "address-find", "search-start")
+        choosing_index = self.account_for in ("bip85", "gpg-bip85", "gpg-entropy", "address-find", "search-start")
         title = "Index" if choosing_index else "Account"
         save_label = "Use This Index" if choosing_index else "Use This Account"
         frame.header(title, "back")

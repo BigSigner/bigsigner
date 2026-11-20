@@ -48,9 +48,9 @@ class OpenPgpJsBackend:
             self._version_line = ""
         return self._version_line
 
-    def mix_entropy(self, digest: bytes):
-        """The browser random source cannot accept the camera digest."""
-        return None
+    def mix_entropy(self, digest: bytes) -> bool:
+        """The browser random source cannot accept these bytes."""
+        return False
 
     def list_keys(self, timestamp=None):
         try:

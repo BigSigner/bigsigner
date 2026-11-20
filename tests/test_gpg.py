@@ -549,6 +549,8 @@ def test_camera_digest_is_mixed_without_claiming_256_bits(monkeypatch):
     assert seen["path"] == "/dev/random"
     assert seen["request"] == (1 << 30) | (8 << 16) | (ord("R") << 8) | 3
     assert seen["argument"] == struct.pack("ii32s", 0, 32, b"\xab" * 32)
+    mix_kernel_entropy(b"\xcd" * 64)
+    assert seen["argument"] == struct.pack("ii64s", 0, 64, b"\xcd" * 64)
 
 
 def test_keyinfo_passphrase_flag_is_only_p():
