@@ -13,7 +13,7 @@ import pytest
 from bigsigner import sdcard
 from bigsigner.gpg import (
     CHECKSUM_NAME, CommandResult, GpgBackend, GpgError, check_manifest_paths, files_left_unchecked,
-    looks_like_sha256sums, manifest_filenames, mix_kernel_entropy, parse_keys, passphrase_required,
+    looks_like_sha256sums, manifest_filenames, manifest_for_name, mix_kernel_entropy, parse_keys, passphrase_required,
     quick_add_arguments, sha256_manifest, signature_is_deterministic, signature_ok,
 )
 
@@ -30,6 +30,17 @@ VERIFICATION_FAILURES = (
     ("release.txt.asc", "invalid-signature"),
     ("SHASUMS.asc", "invalid-signature"),
 )
+
+
+def test_an_image_check_keeps_only_that_files_checksum_line():
+    digest = b"a" * 64
+    other = b"b" * 64
+    body = digest + b" *os.img\n" + other + b" *other.bin\n" + b"not a checksum\n"
+    assert manifest_for_name(body, "os.img") == digest + b" *os.img\n"
+    assert manifest_for_name(body, "other.bin") == other + b" *other.bin\n"
+    assert manifest_for_name(body, "missing.img") is None
+    with pytest.raises(GpgError):
+        manifest_for_name(body, "../os.img")
 
 
 def test_a_sha256sums_file_is_ascii_lines_of_digests_blanks_or_spaces():

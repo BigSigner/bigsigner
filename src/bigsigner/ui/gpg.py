@@ -81,6 +81,7 @@ class GpgUI:
         self.date = dict(year=2026, month=6, day=15)
         self.subkey_clock = dict(year=2026, month=6, day=15, hour=0, minute=0)
         self.clock = "date"
+        self.operation = ""
         self.subkey_algo = "ed25519"
         self.subkey_usage = "sign"
         self.subkey_expire = None
@@ -267,6 +268,8 @@ class GpgUI:
                 self._start_add_subkey()
             elif self.clock == "sign":
                 self._start_sign()
+            elif self.operation in ("burn-detached", "burn-checksums"):
+                self.app.fs.start_signature_check()
             else:
                 app._open_sd("gpg-verify")
         elif action == "gpg-sign":
@@ -510,6 +513,10 @@ class GpgUI:
             self.executor.shutdown(wait=False)
             self.executor = None
         self.outcome = outcome
+        if self.operation in ("burn-detached", "burn-checksums"):
+            self.operation = ""
+            self.app.fs.finish_signature_check(outcome)
+            return
         if self.job_kind == "delete":
             fingerprint = self.selected.fingerprint if self.selected is not None else ""
             kept = previous_keys

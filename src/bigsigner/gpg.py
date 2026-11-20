@@ -266,6 +266,28 @@ def _only_spaces(line: bytes) -> bool:
 _SHA256_LINE = re.compile(rb"[0-9a-fA-F]{64} +.+")
 
 
+def manifest_for_name(content: bytes, name: str) -> bytes | None:
+    """The manifest lines that name ``name``, or None when it is absent.
+
+    Other lines are dropped, including ones this checker cannot parse. The
+    result is what ``sha256sum --check`` receives when only one file matters.
+    """
+    if not name or name in (".", "..") or "/" in name or "\\" in name or "\x00" in name:
+        raise GpgError("The image name is not valid.")
+    kept = []
+    for raw in content.split(b"\n"):
+        line = raw.rstrip(b"\r")
+        if not line.strip() or line.startswith(b"#") or _only_spaces(line):
+            continue
+        try:
+            names = manifest_filenames(line + b"\n")
+        except GpgError:
+            continue
+        if names == [name]:
+            kept.append(line + b"\n")
+    return b"".join(kept) if kept else None
+
+
 def manifest_filenames(content: bytes) -> list[str]:
     """Filenames named by a GNU or BSD SHA256 manifest, in file order."""
     names = []
@@ -562,7 +584,7 @@ class GpgBackend:
                 "--local-user", fingerprint + "!", "--output", output.name, "--", source.name]
         return self.command("Sign File", args, cwd=source.parent, timestamp=timestamp, agent=True, passphrase="")
 
-    def verify(self, relative, storage, timestamp, checksums=False):
+    def verify(self, relative, storage, timestamp, checksums=False, only=None):
         self._home()
         path = sdcard.native_path(relative, storage=storage)
         if path is None:
@@ -604,14 +626,23 @@ class GpgBackend:
             if extracted.returncode:
                 return Outcome(False, "The signed checksums could not be extracted.", stages)
             manifest = extracted.raw_stdout if extracted.raw_stdout is not None else extracted.stdout.encode("utf-8")
+        if only is not None:
+            # BusyBox sha256sum has no --ignore-missing. One line checks this file only.
+            filtered = manifest_for_name(manifest, only)
+            if filtered is None:
+                return Outcome(False, "This file is not listed in the checksum file.", stages)
+            manifest = filtered
         try:
             check_manifest_paths(manifest, directory)
         except GpgError as exc:
             return Outcome(False, str(exc), stages)
         checked = self.command("SHA256 Check", ["--check"], data=manifest, cwd=directory, checksums=True)
         stages.append(checked)
-        present = sorted((child.name for child in directory.iterdir() if child.is_file()), key=lambda name: (name.casefold(), name))
-        checksum_name = companion.name if companion.is_file() else ""
-        unchecked = files_left_unchecked(present, manifest_filenames(manifest), checksum_name, path.name)
+        if only is not None:
+            unchecked = []
+        else:
+            present = sorted((child.name for child in directory.iterdir() if child.is_file()), key=lambda name: (name.casefold(), name))
+            checksum_name = companion.name if companion.is_file() else ""
+            unchecked = files_left_unchecked(present, manifest_filenames(manifest), checksum_name, path.name)
         failed = checked.returncode != 0
         return Outcome(not failed, "The SHA256 check failed." if failed else "", stages, unverified=unchecked)

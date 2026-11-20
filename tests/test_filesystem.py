@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from bigsigner import file_qr, sdcard
+from bigsigner.diskimage import BurnResult
+from bigsigner.gpg import GpgError, Outcome
 from bigsigner.ui.app import App, QR_BRIGHTNESS_DEFAULT
 from bigsigner.ui.canvas import BLUE, HEADER, HEIGHT, MARGIN, WIDTH
 from bigsigner.ui.filesystem import OPEN_LIMIT, SD_DELETE_NOTE, SEQUENCE_NOTE, is_text
@@ -615,3 +617,132 @@ def test_filesystem_screens_save_screenshots():
     app = _details(b"content", storage="temporary")
     record.click(app, "Delete")
     record.shot(app, "temporary-delete")
+
+
+def _mbr():
+    data = bytearray(512)
+    data[446] = 0x80
+    data[450] = 0x0C
+    data[458:462] = (2048).to_bytes(4, "little")
+    data[510:512] = b"\x55\xaa"
+    return bytes(data)
+
+
+def _shown(app):
+    app.render()
+    return " ".join(item["text"] for item in app.texts)
+
+
+def _finish_burn(app):
+    if not app.fs.burn_shown:
+        app.render()
+    app.fs.finish_burn(app.fs._burn_job())
+    app._search_touch_at -= 1
+    app._ignore_search_touch()
+    app.render()
+
+
+def test_a_binary_file_that_is_not_an_image_cannot_be_burned():
+    app = _details(b"\xff" * 64, name="blob.bin")
+    assert "fs-burn" not in {hit["action"] for hit in app.hits}
+    assert "This file is not a disk image." in _shown(app)
+    app = _details(b"hello")
+    assert "fs-burn" not in {hit["action"] for hit in app.hits}
+    assert "disk image" not in _shown(app)
+
+
+def test_an_image_opens_verification_and_detached_signature_needs_a_companion():
+    app = _details(_mbr(), name="os.img")
+    _tap(app, "Burn to SD Card")
+    assert app.screen == "fs-burn-verify"
+    assert "fs-burn-detached" not in {hit["action"] for hit in app.hits}
+    assert "A similar filename.asc file was not found." in _shown(app)
+    assert "Continuing erases the SD card and writes this image." in _shown(app)
+
+
+def test_detached_signature_uses_the_gpg_date_and_a_failed_check_does_not_unmount():
+    image = {"base64": base64.b64encode(_mbr()).decode()}
+    app = _browser({"os.img": image, "os.img.asc": "signature"})
+    _tap(app, "os.img")
+    _tap(app, "Burn to SD Card")
+    _tap(app, "Detached Signature")
+    assert app.screen == "gpg-date"
+    assert app.gpg.operation == "burn-detached"
+
+    def fail(*args, **kwargs):
+        raise GpgError("Signature verification failed.")
+
+    app.gpg.backend.verify = fail
+    _tap(app, "Continue")
+    assert app.screen == "gpg-working"
+    app.render()
+    try:
+        outcome = app.gpg.job()
+    except Exception as exc:
+        outcome = Outcome(False, str(exc))
+    app.gpg.finish(outcome)
+    app._search_touch_at -= 1
+    app._ignore_search_touch()
+    app.render()
+    assert app.screen == "fs-burn-result"
+    assert "Signature verification failed." in _shown(app)
+    assert "You can remove the SD card." not in _shown(app)
+
+
+def test_signed_checksum_file_lists_only_asc_files_in_the_same_folder():
+    image = {"base64": base64.b64encode(_mbr()).decode()}
+    app = _browser({
+        "os.img": image,
+        "SHA256SUMS.asc": "signed",
+        "other.asc": "signed",
+        "note.txt": "plain",
+    })
+    _tap(app, "os.img")
+    _tap(app, "Burn to SD Card")
+    _tap(app, "Signed Checksum File")
+    assert app.screen == "fs-burn-checksums"
+    app.render()
+    labels = {hit["label"] for hit in app.hits}
+    assert {"SHA256SUMS.asc", "other.asc"} <= labels
+    assert "note.txt" not in labels
+    _tap(app, "SHA256SUMS.asc")
+    assert app.screen == "gpg-date"
+    assert app.gpg.operation == "burn-checksums"
+    assert app.fs.burn_signature == "SHA256SUMS.asc"
+
+
+def test_skip_verification_warns_and_the_emulator_does_not_write():
+    app = _details(_mbr(), name="os.img")
+    _tap(app, "Burn to SD Card")
+    _tap(app, "Skip Verification")
+    assert "no signature check" in app._confirm_message()
+    _tap(app, "Confirm")
+    assert app.screen == "fs-burn-progress"
+    _finish_burn(app)
+    assert "Burning an image requires the device." in _shown(app)
+    assert "You can remove the SD card." not in _shown(app)
+
+
+def test_done_releases_the_hold_and_deletes_the_ram_copy(monkeypatch, tmp_path):
+    copy = tmp_path / "image"
+    copy.write_bytes(b"copy")
+    released = []
+    app = _details(_mbr(), name="os.img")
+    monkeypatch.setattr(sdcard, "native_path", lambda relative, storage="sd": tmp_path / "os.img")
+
+    def fake_burn(source, *, on_card, progress):
+        progress("Writing the image\u2026", 1, 1)
+        return BurnResult(True, "The image was written.", str(copy), True, True)
+
+    app.fs.burner.burn = fake_burn
+    app.fs.burner.release = lambda: released.append(True)
+    _tap(app, "Burn to SD Card")
+    _tap(app, "Skip Verification")
+    _tap(app, "Confirm")
+    _finish_burn(app)
+    assert "The image was written." in _shown(app)
+    assert "You can remove the SD card." in _shown(app)
+    _tap(app, "Done")
+    assert released == [True]
+    assert not copy.exists()
+    assert app.screen == "fs-details"

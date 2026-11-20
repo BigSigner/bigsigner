@@ -14,7 +14,7 @@ import re
 from . import sdcard
 from .gpg import (
     CHECKSUM_LIMIT, CHECKSUM_NAME, CHECKSUM_SIGNATURE, CommandResult, GpgError, Outcome, PublicKey,
-    _manifest_line, files_left_unchecked,
+    _manifest_line, files_left_unchecked, manifest_for_name,
 )
 from .openpgp_subkey import secret_subkey_armor
 
@@ -149,7 +149,7 @@ class OpenPgpJsBackend:
         sdcard.write_bytes(sdcard.child_path(relative, CHECKSUM_SIGNATURE), armor.encode("utf-8"), storage=storage)
         return Outcome(True, stages=[CommandResult("Sign File", 0, "The signature was written.\n")])
 
-    def verify(self, relative, storage, timestamp, checksums=False):
+    def verify(self, relative, storage, timestamp, checksums=False, only=None):
         name = Path(relative).name
         if not name.lower().endswith(".asc") or len(name) <= 4:
             raise GpgError("Choose an .asc signature file.")
@@ -167,9 +167,12 @@ class OpenPgpJsBackend:
                 return Outcome(False, "Signature verification failed.", stages)
             if not checksums:
                 return Outcome(True, stages=stages)
-            checked = _check_manifest(data, parent, storage)
+            limited = _only_manifest(data, only)
+            if limited is None:
+                return Outcome(False, "This file is not listed in the checksum file.", stages)
+            checked = _check_manifest(limited, parent, storage)
             stages.append(checked)
-            unchecked = _unchecked_files(data, parent, storage, companion_name, name)
+            unchecked = [] if only is not None else _unchecked_files(limited, parent, storage, companion_name, name)
             failed = checked.returncode != 0
             return Outcome(not failed, "The SHA256 check failed." if failed else "", stages, unverified=unchecked)
         if not checksums:
@@ -178,9 +181,12 @@ class OpenPgpJsBackend:
         stages = [verified]
         if verified.returncode:
             return Outcome(False, "Signature verification failed.", stages)
-        checked = _check_manifest(body, parent, storage)
+        limited = _only_manifest(body, only)
+        if limited is None:
+            return Outcome(False, "This file is not listed in the checksum file.", stages)
+        checked = _check_manifest(limited, parent, storage)
         stages.append(checked)
-        unchecked = _unchecked_files(body, parent, storage, "", name)
+        unchecked = [] if only is not None else _unchecked_files(limited, parent, storage, "", name)
         failed = checked.returncode != 0
         return Outcome(not failed, "The SHA256 check failed." if failed else "", stages, unverified=unchecked)
 
@@ -295,6 +301,12 @@ def _folder_manifest(relative: str, storage: str) -> bytes:
     if not lines:
         raise GpgError("This folder has no files to sign.")
     return b"".join(lines)
+
+
+def _only_manifest(content: bytes, only: str | None) -> bytes | None:
+    if only is None:
+        return content
+    return manifest_for_name(content, only)
 
 
 def _unchecked_files(content: bytes, directory: str, storage: str, checksum_name: str, signature_name: str) -> list[str]:

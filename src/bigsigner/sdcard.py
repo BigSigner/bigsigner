@@ -173,6 +173,26 @@ def read_bytes(relative: str, *, storage: str = "sd", max_bytes: int = 256_000) 
     return _read_disk_bytes(relative, storage, max_bytes)
 
 
+def read_prefix(relative: str, *, storage: str = "sd", size: int = 512) -> bytes:
+    """The first ``size`` bytes of a file, without loading the rest."""
+    card = _memory_card(storage)
+    if card is not None:
+        path = _memory_path(relative)
+        if not path or path in card["dirs"] or path not in card["files"]:
+            raise SdError("That is not a file.")
+        stored = card["files"][path]
+        data = stored if isinstance(stored, bytes) else stored.encode("utf-8")
+        return data[:size]
+    path = _disk_path(relative, storage)
+    if not path.is_file():
+        raise SdError("That is not a file.")
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(size)
+    except OSError as exc:
+        raise SdError("That is not a file.") from exc
+
+
 def file_size(relative: str, *, storage: str = "sd") -> int:
     """Exact byte size without reading a disk file into memory."""
     card = _memory_card(storage)

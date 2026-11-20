@@ -2,10 +2,25 @@
 
 from pathlib import Path
 import re
+import sys
 
 from .. import file_qr, sdcard
-from .canvas import BODY_SIZE, HEADER, HEIGHT, INK, MARGIN, MUTED, RED, TITLE_SIZE, WIDTH, Frame, Icons, font, wrap
+from ..diskimage import BurnResult, CardBurner, looks_like_disk_image
+from .canvas import BLUE, BODY_SIZE, GREEN, HEADER, HEIGHT, INK, LINE, MARGIN, MUTED, RED, TITLE_SIZE, WHITE, WIDTH, Frame, Icons, font, wrap
 from .text_editor import TextEditor
+
+
+class _Ready:
+    """A finished burn, used when the page cannot start a thread."""
+
+    def __init__(self, result):
+        self._result = result
+
+    def done(self):
+        return True
+
+    def result(self):
+        return self._result
 
 
 OPEN_LIMIT = 50_000
@@ -35,6 +50,22 @@ class FileSystemUI:
         self.qr_command = ""
         self._text_key = None
         self._text_value = False
+        self._image_key = None
+        self._image_value = False
+        self.burner = CardBurner()
+        self.burn_asc_files: list[str] = []
+        self.burn_signature = ""
+        self.burn_status = ""
+        self.burn_done = 0
+        self.burn_total = 1
+        self.burn_shown = False
+        self.burn_future = None
+        self.burn_executor = None
+        self.burn_ok = False
+        self.burn_message = ""
+        self.burn_remove = False
+        self.burn_held = False
+        self.burn_copy = ""
         self.painters = {
             "filesystem": app._storage,
             "fs-details": self.details,
@@ -47,6 +78,10 @@ class FileSystemUI:
             "fs-delete": self.delete_warning,
             "fs-qr-warning": self.qr_warning,
             "fs-qr-guide": self.guide,
+            "fs-burn-verify": self.burn_verify,
+            "fs-burn-checksums": self.burn_checksums,
+            "fs-burn-progress": self.burn_progress,
+            "fs-burn-result": self.burn_result,
         }
 
     def open(self):
@@ -138,6 +173,19 @@ class FileSystemUI:
                     app.confirm = "fs-delete"
             elif action == "fs-delete-confirm":
                 self.delete()
+            elif action == "fs-burn":
+                self.open_burn()
+            elif action == "fs-burn-detached":
+                self.open_detached()
+            elif action == "fs-burn-checksums":
+                self.open_checksums()
+            elif action.startswith("fs-burn-asc:"):
+                self.choose_checksum(action[len("fs-burn-asc:"):])
+            elif action == "fs-burn-skip":
+                app.confirm = "fs-burn-skip"
+            elif action == "fs-burn-done":
+                self.leave_burn_result()
+                app.back_one()
             elif action == "fs-qr-ok":
                 app.back_one()
                 self.open_data()
@@ -236,6 +284,8 @@ class FileSystemUI:
 
     def before_back(self):
         app = self.app
+        if app.screen == "fs-burn-result":
+            self.leave_burn_result()
         if app.screen != "fs-edit":
             return False
         if self.editor.changed:
@@ -315,6 +365,230 @@ class FileSystemUI:
         self.app.qr_text = self.qr_parts[self.qr_index]
         self.app.qr_zoom = None
 
+    def _is_disk_image(self, size: int) -> bool:
+        key = (self.storage, self.path, size)
+        if self._image_key != key:
+            self._image_key = key
+            try:
+                header = sdcard.read_prefix(self.path, storage=self.storage, size=512)
+            except sdcard.SdError:
+                self._image_value = False
+            else:
+                self._image_value = looks_like_disk_image(header)
+        return self._image_value
+
+    def _signature_path(self) -> str:
+        return sdcard.child_path(sdcard.parent_path(self.path), Path(self.path).name + ".asc")
+
+    def open_burn(self):
+        size = sdcard.file_size(self.path, storage=self.storage)
+        if self._is_ascii_file(size) or not self._is_disk_image(size):
+            return
+        self.app.scroll["fs-burn-verify"] = 0
+        self.app.go("fs-burn-verify")
+
+    def open_detached(self):
+        signature = self._signature_path()
+        if not sdcard.file_exists(signature, storage=self.storage):
+            return
+        self.burn_signature = signature
+        self.app.gpg.operation = "burn-detached"
+        self.app.gpg.clock = "date"
+        self.app.go("gpg-date")
+
+    def open_checksums(self):
+        parent = sdcard.parent_path(self.path)
+        entries = sdcard.list_folder(parent, storage=self.storage)
+        self.burn_asc_files = [
+            item["name"] for item in entries
+            if item["kind"] == "file" and item["name"].lower().endswith(".asc")
+        ]
+        self.app.scroll["fs-burn-checksums"] = 0
+        self.app.go("fs-burn-checksums")
+
+    def choose_checksum(self, name: str):
+        if name not in self.burn_asc_files:
+            return
+        self.burn_signature = sdcard.child_path(sdcard.parent_path(self.path), name)
+        self.app.gpg.operation = "burn-checksums"
+        self.app.gpg.clock = "date"
+        self.app.go("gpg-date")
+
+    def burn_verify(self, frame):
+        frame.header("Verify Image", "back")
+        y = frame.text(
+            "Continuing erases the SD card and writes this image.",
+            MARGIN, HEADER + 20, size=BODY_SIZE,
+        )
+        y += 16
+        try:
+            present = sdcard.file_exists(self._signature_path(), storage=self.storage)
+        except sdcard.SdError:
+            present = False
+        y = frame.button(y, "Detached Signature", "fs-burn-detached", enabled=present)
+        if not present:
+            y = frame.text("A similar filename.asc file was not found.", MARGIN, y, size=28, fill=MUTED)
+            y += 8
+        y = frame.button(y, "Signed Checksum File", "fs-burn-checksums")
+        frame.button(y, "Skip Verification", "fs-burn-skip")
+
+    def burn_checksums(self, frame):
+        app = self.app
+        end = self._checksum_flow(frame, False, 0)
+        offset = app._scroll_offset("fs-burn-checksums", end, clearance=20)
+        self._checksum_flow(frame, True, offset)
+        frame.header("Signed Checksum File", "back")
+
+    def _checksum_flow(self, frame, paint, offset):
+        app = self.app
+        y = HEADER + 20
+        if not self.burn_asc_files:
+            return app._flow_text(frame, y, "This folder has no .asc file.", paint, offset, BODY_SIZE, MUTED)
+        y = app._flow_text(frame, y, "Choose a signed checksum file in this folder.", paint, offset, 28, MUTED)
+        y += 8
+        for name in self.burn_asc_files:
+            y = app._flow_button(frame, y, name, f"fs-burn-asc:{name}", paint, offset)
+        return y
+
+    def start_signature_check(self):
+        checksums = self.app.gpg.operation == "burn-checksums"
+        relative, storage = self.burn_signature, self.storage
+        only = Path(self.path).name if checksums else None
+        timestamp = self.app.gpg.timestamp()
+        backend = self.app.gpg.backend
+        self.app.gpg.start(
+            "verify",
+            lambda: backend.verify(relative, storage, timestamp, checksums, only=only),
+        )
+
+    def finish_signature_check(self, outcome):
+        self._drop_burn_detour()
+        if outcome.ok:
+            self.begin_burn()
+            return
+        self.burn_ok = False
+        self.burn_message = outcome.message or "Signature verification failed."
+        self.burn_remove = False
+        self.burn_held = False
+        self.burn_copy = ""
+        self.app.screen = "fs-burn-result"
+        self.app.scroll["fs-burn-result"] = 0
+        self.app._arm_search_touch_quiet()
+
+    def begin_burn(self):
+        self._drop_burn_detour()
+        self.burn_status = "Preparing the image\u2026"
+        self.burn_done = 0
+        self.burn_total = 1
+        self.burn_shown = False
+        self.burn_future = None
+        self.app.confirm = None
+        self.app.menu = False
+        self.app.screen = "fs-burn-progress"
+
+    def _drop_burn_detour(self):
+        while self.app.back and self.app.back[-1] in ("gpg-date", "gpg-number", "gpg-working"):
+            self.app.back.pop()
+
+    def burn_progress(self, frame):
+        message = self.burn_status or "Preparing the image\u2026"
+        face = font(BODY_SIZE)
+        lines = wrap(frame.draw, message, face, WIDTH - 2 * MARGIN) or [""]
+        bar_h = 28
+        bar_bottom = HEIGHT - 110
+        bar_top = bar_bottom - bar_h
+        text_h = len(lines) * (BODY_SIZE + 8)
+        y = max(MARGIN, (HEIGHT - text_h) // 2)
+        for line in lines:
+            width = frame.draw.textlength(line, font=face)
+            x = (WIDTH - width) / 2
+            frame.draw.text((x, y), line, font=face, fill=INK)
+            frame.mark(line, frame.draw.textbbox((x, y), line, font=face))
+            y += BODY_SIZE + 8
+        left, right = MARGIN, WIDTH - MARGIN
+        frame.draw.rounded_rectangle((left, bar_top, right, bar_bottom), radius=10, outline=LINE, width=2, fill=WHITE)
+        span = right - left - 8
+        total = self.burn_total if self.burn_total > 0 else 1
+        filled = int(span * min(1.0, self.burn_done / total))
+        if filled > 0:
+            frame.draw.rounded_rectangle(
+                (left + 4, bar_top + 4, left + 4 + filled, bar_bottom - 4),
+                radius=6, fill=BLUE,
+            )
+        self.burn_shown = True
+
+    def burn_delay(self) -> float:
+        if self.burn_future is None:
+            return 0
+        return 0 if self.burn_future.done() else 0.2
+
+    def advance_burn(self):
+        if self.app.screen != "fs-burn-progress" or not self.burn_shown:
+            return
+        try:
+            if self.burn_future is None:
+                if sys.platform in ("emscripten", "wasi"):
+                    self.burn_future = _Ready(self._burn_job())
+                else:
+                    from concurrent.futures import ThreadPoolExecutor
+
+                    if self.burn_executor is None:
+                        self.burn_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bigsigner-burn")
+                    self.burn_future = self.burn_executor.submit(self._burn_job)
+                return
+            if not self.burn_future.done():
+                return
+            result = self.burn_future.result()
+        except Exception as exc:
+            result = BurnResult(False, str(exc))
+        self.finish_burn(result)
+
+    def _burn_job(self) -> BurnResult:
+        path = sdcard.native_path(self.path, storage=self.storage)
+        if path is None:
+            return BurnResult(False, "Burning an image requires the device.")
+        return self.burner.burn(path, on_card=self.storage == "sd", progress=self._burn_progress)
+
+    def _burn_progress(self, message: str, done: int, total: int):
+        self.burn_status = message
+        self.burn_done = done
+        self.burn_total = max(1, total)
+
+    def finish_burn(self, result: BurnResult):
+        if self.burn_executor is not None:
+            self.burn_executor.shutdown(wait=False)
+            self.burn_executor = None
+        self.burn_future = None
+        self.burn_ok = result.ok
+        self.burn_message = result.message
+        self.burn_remove = result.remove_card
+        self.burn_held = result.held
+        self.burn_copy = result.copy_path
+        self.app.screen = "fs-burn-result"
+        self.app.scroll["fs-burn-result"] = 0
+        self.app._arm_search_touch_quiet()
+
+    def burn_result(self, frame):
+        frame.header("Image Written" if self.burn_ok else "Error", "back")
+        y = frame.text(self.burn_message, MARGIN, HEADER + 24, size=BODY_SIZE, fill=GREEN if self.burn_ok else RED)
+        if self.burn_remove:
+            y = frame.text("You can remove the SD card.", MARGIN, y + 16, size=BODY_SIZE)
+        frame.button(max(y + 24, HEIGHT - 16 - frame.button_height("Done")), "Done", "fs-burn-done")
+
+    def leave_burn_result(self):
+        if self.burn_held:
+            try:
+                self.burner.release()
+            except Exception:
+                pass
+            self.burn_held = False
+        if self.burn_copy:
+            try:
+                Path(self.burn_copy).unlink(missing_ok=True)
+            except OSError:
+                pass
+            self.burn_copy = ""
+
     def _is_ascii_file(self, size: int) -> bool:
         key = (self.storage, self.path, size)
         if self._text_key != key:
@@ -372,6 +646,11 @@ class FileSystemUI:
                 y += 8
         else:
             y = self._binary_qr_row(frame, y, size, paint, offset)
+            image = self._is_disk_image(size)
+            y = app._flow_button(frame, y, "Burn to SD Card", "fs-burn", paint, offset, enabled=image)
+            if not image:
+                y = app._flow_text(frame, y, "This file is not a disk image.", paint, offset, 28, MUTED)
+                y += 8
         y = app._flow_button(frame, y, "Rename", "fs-rename", paint, offset)
         y = app._flow_button(frame, y, "Move", "fs-move", paint, offset)
         return app._flow_button(frame, y, "Delete", "fs-delete", paint, offset, color=RED)

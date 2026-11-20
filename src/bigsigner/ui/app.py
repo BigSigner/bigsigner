@@ -719,6 +719,8 @@ class App:
             delays.append(0)
         if self.screen == "gpg-working":
             delays.append(self.gpg.delay())
+        if self.screen == "fs-burn-progress":
+            delays.append(self.fs.burn_delay())
         if not delays:
             return None
         return min(delays)
@@ -755,6 +757,7 @@ class App:
         self._advance_psbt_check()
         self._advance_psbt_signing()
         self.gpg.advance()
+        self.fs.advance_burn()
         frame = Frame()
         self._painters[self.screen](frame)
         if self.menu:
@@ -783,7 +786,7 @@ class App:
             return True
         if self.screen == "gpg-working":
             return True
-        if self.screen == "psbt-progress":
+        if self.screen == "psbt-progress" or self.screen == "fs-burn-progress":
             return True
         if self._psbt_signing and self._psbt_signing_shown:
             return True
@@ -867,7 +870,7 @@ class App:
             return True
 
     def pointer_down(self, x: int, y: int):
-        if self.screen == "psbt-progress":
+        if self.screen == "psbt-progress" or self.screen == "fs-burn-progress":
             self._discard_gesture = True
             return
         if self._addresses_loading and self._addresses_loading_shown:
@@ -6280,6 +6283,8 @@ class App:
             return "Your changes will not be saved. Discard changes?"
         if self.confirm == "fs-delete":
             return f'Delete "{Path(self.fs.path).name}"?'
+        if self.confirm == "fs-burn-skip":
+            return "Skipping verification writes this image with no signature check. The SD card's current contents will be erased."
         if self.confirm == "seed-warning":
             return self._seed_warning_message
         if self.confirm in ("show-seed", "show-passphrase"):
@@ -6383,7 +6388,7 @@ class App:
         if self.confirm == "seed-warning":
             yes = "OK"
         self._dialog_button(frame, cancel, no, "confirm-no", (132, 138, 148))
-        color = RED if self.confirm in ("delete-key", "delete-wallet", "replace-file", "fs-delete", "gpg-delete") else BLUE
+        color = RED if self.confirm in ("delete-key", "delete-wallet", "replace-file", "fs-delete", "fs-burn-skip", "gpg-delete") else BLUE
         self._dialog_button(frame, confirm, yes, "confirm-yes", color)
 
     def _dialog_button(self, frame: Frame, box, text: str, action: str, color):
@@ -6407,6 +6412,8 @@ class App:
             self.fs.discard()
         elif kind == "fs-delete":
             self.fs.act("fs-delete-confirm")
+        elif kind == "fs-burn-skip":
+            self.fs.begin_burn()
         elif kind == "seed-warning":
             pending = self._pending_seed_warning
             self._pending_seed_warning = None
