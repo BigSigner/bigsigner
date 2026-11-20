@@ -10,7 +10,7 @@ from bigsigner import sdcard
 from bigsigner.gpg import CommandResult, GpgError, Outcome, PublicKey, parse_keys
 from bigsigner.file_qr import QR_SPLIT_LIMIT, gzip_base64, recovery_command, spaced_parts
 from bigsigner.ui.app import QR_BRIGHTNESS_DEFAULT, App
-from bigsigner.ui.canvas import HEADER, HEIGHT, INK, MARGIN, MUTED, RED, WARNING, WIDTH, font
+from bigsigner.ui.canvas import BLUE, HEADER, HEIGHT, INK, MARGIN, MUTED, RED, WARNING, WIDTH, font
 from test_gpg import COLONS, FPR, SUB_FPR, VERIFY_TIME, VERIFICATION_FAILURES, _import, _prepare_verification_failure, real_backend
 from test_sdcard import _tap
 
@@ -167,6 +167,25 @@ def _review(source="file", good=True):
         app.accept_qr(b"public\x00\xffkey")
     _settle(app)
     return app
+
+
+def test_signature_verification_fills_a_progress_bar():
+    app = _app()
+    app.gpg.job_kind = "verify"
+    app.gpg.backend.progress_done = 0
+    app.gpg.backend.progress_total = 1
+    app.screen = "gpg-working"
+    image = app.render()
+    assert "Verifying Signature\u2026" in [item["text"] for item in app.texts]
+    assert app.hits == []
+    app.pointer_down(240, 400)
+    app.pointer_up(240, 400)
+    assert app.screen == "gpg-working"
+    assert image.getpixel((28, HEIGHT - 130))[:3] != BLUE
+    app.gpg.backend.progress_done = 1
+    app.gpg.backend.progress_total = 2
+    image = app.render()
+    assert image.getpixel((28, HEIGHT - 130))[:3] == BLUE
 
 
 def test_gpg_menu_is_below_file_system_and_all_three_routes_are_available():

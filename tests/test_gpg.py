@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import calendar
+import io
 import os
 import shutil
 import struct
@@ -15,7 +16,7 @@ from bigsigner.gpg import (
     CHECKSUM_NAME, CommandResult, GpgBackend, GpgError, check_manifest_paths, decrypted_filename,
     files_left_unchecked, pgp_encryption_kind,
     looks_like_sha256sums, manifest_filenames, manifest_for_name, mix_kernel_entropy, parse_keys, passphrase_required,
-    quick_add_arguments, sha256_manifest, signature_is_deterministic, signature_ok,
+    progress_amounts, quick_add_arguments, sha256_manifest, signature_is_deterministic, signature_ok,
 )
 
 VECTORS = Path(__file__).parent / "vectors" / "gpg"
@@ -149,6 +150,45 @@ def test_list_marks_secret_keys_and_export_asks_for_armor(monkeypatch):
     assert ["--armor", "--export-secret-keys", "--", FPR] in [args for _name, args in seen]
     assert ["--armor", "--export-secret-subkeys", "--", SUB_FPR + "!"] in [args for _name, args in seen]
     assert len(seen) == 5
+
+
+def test_progress_amounts_reads_the_gpg_status_line():
+    assert progress_amounts("[GNUPG:] PROGRESS /var/folders/sj/4h84 ? 22848 40960 KiB\n") == (22848, 40960)
+    assert progress_amounts("[GNUPG:] PROGRESS name ? 0 119 B") == (0, 119)
+    assert progress_amounts("[GNUPG:] PROGRESS ? ? 10 0") == (10, 0)
+    assert progress_amounts("[GNUPG:] VALIDSIG abc") is None
+
+
+def test_streamed_verification_reports_progress_and_hides_those_lines(monkeypatch, tmp_path):
+    backend = GpgBackend(tmp_path)
+    seen = []
+
+    class Proc:
+        def __init__(self, *_args, **_kwargs):
+            self.stdout = io.BytesIO(
+                b"[GNUPG:] PROGRESS file ? 1 4 KiB\n"
+                b"[GNUPG:] PROGRESS file ? 4 4 KiB\n"
+                b"[GNUPG:] VALIDSIG abc\n"
+            )
+            self.stderr = io.BytesIO(b"gpg: Good signature\n")
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            self.returncode = -9
+
+    monkeypatch.setattr(subprocess, "Popen", Proc)
+    result = backend.command(
+        "Signature Verification", ["--verify"],
+        progress=lambda done, total: seen.append((done, total)),
+    )
+    assert seen == [(1, 4), (4, 4)]
+    assert "PROGRESS" not in result.stdout
+    assert "[GNUPG:] VALIDSIG abc" in result.stdout
+    assert "Good signature" in result.stderr
+    assert result.returncode == 0
 
 
 @pytest.mark.parametrize("status", ["BADSIG", "ERRSIG", "EXPKEYSIG", "EXPSIG", "REVKEYSIG", "FAILURE", "NO_PUBKEY", "NODATA"])

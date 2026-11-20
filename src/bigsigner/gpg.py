@@ -12,6 +12,7 @@ import re
 import struct
 import subprocess
 import sys
+import threading
 
 from . import sdcard
 
@@ -328,6 +329,28 @@ def parse_keys(output: str, *, secret: bool = False) -> list[PublicKey]:
     return keys
 
 
+def progress_amounts(line: str) -> tuple[int, int] | None:
+    """Bytes done and total from a GnuPG ``PROGRESS`` status line.
+
+    The amounts share one unit, such as ``B`` or ``KiB``. A total of 0 means
+    GnuPG does not know the length.
+    """
+    if not line.startswith("[GNUPG:] PROGRESS "):
+        return None
+    parts = line.split()
+    if len(parts) < 6:
+        return None
+    if parts[-1].isdigit():
+        total, done = parts[-1], parts[-2]
+    elif len(parts) >= 7 and parts[-2].isdigit() and parts[-3].isdigit():
+        total, done = parts[-2], parts[-3]
+    else:
+        return None
+    if not done.isdigit():
+        return None
+    return int(done), int(total)
+
+
 def status_names(output: str) -> set[str]:
     return {line.split()[1] for line in output.splitlines()
             if line.startswith("[GNUPG:] ") and len(line.split()) > 1}
@@ -492,6 +515,8 @@ def check_manifest_paths(content: bytes, directory: Path) -> None:
 class GpgBackend:
     def __init__(self, home: Path | None = None):
         self.home = home
+        self.progress_done = 0
+        self.progress_total = 1
 
     @property
     def supported(self):
@@ -544,7 +569,11 @@ class GpgBackend:
         self._version_line = lines[0] if lines else ""
         return self._version_line
 
-    def command(self, name, args, *, data=None, cwd=None, timestamp=None, checksums=False, agent=False, passphrase=None):
+    def _note_progress(self, done: int, total: int) -> None:
+        self.progress_done = done
+        self.progress_total = max(total, 1)
+
+    def command(self, name, args, *, data=None, cwd=None, timestamp=None, checksums=False, agent=False, passphrase=None, progress=None):
         home = self._home()
         if checksums:
             argv = ["sha256sum", *args]
@@ -561,6 +590,8 @@ class GpgBackend:
                 argv += ["--pinentry-mode", "loopback", "--passphrase", passphrase]
             argv += args
         env = dict(os.environ, GNUPGHOME=str(home), LC_ALL="C", LANG="C", TZ="UTC")
+        if progress is not None and not checksums:
+            return self._stream_command(name, argv, data, cwd, env, progress)
         try:
             result = subprocess.run(argv, input=data, stdin=subprocess.DEVNULL if data is None else None,
                                     capture_output=True, cwd=cwd, env=env, timeout=3600)
@@ -573,6 +604,77 @@ class GpgBackend:
                                  (exc.stderr or b"").decode("utf-8", "replace") + "\nThe command timed out.", checksums)
         except OSError as exc:
             raise GpgError("The command could not be started: " + str(exc)) from exc
+
+    def _stream_command(self, name, argv, data, cwd, env, progress) -> CommandResult:
+        """Run one command and report GnuPG ``PROGRESS`` lines as they arrive."""
+        try:
+            proc = subprocess.Popen(
+                argv,
+                stdin=subprocess.PIPE if data is not None else subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd, env=env,
+            )
+        except FileNotFoundError:
+            return CommandResult(name, 127, stderr=f"{argv[0]} is not installed on this system.")
+        except OSError as exc:
+            raise GpgError("The command could not be started: " + str(exc)) from exc
+        stdout_parts: list[str] = []
+        stderr_parts: list[bytes] = []
+        errors: list[BaseException] = []
+
+        def read_stdout():
+            try:
+                for raw in proc.stdout:
+                    text = raw.decode("utf-8", "replace")
+                    amounts = progress_amounts(text)
+                    if amounts is not None:
+                        done, total = amounts
+                        if total > 0:
+                            progress(done, total)
+                        continue
+                    stdout_parts.append(text)
+            except Exception as exc:
+                errors.append(exc)
+
+        def read_stderr():
+            try:
+                stderr_parts.append(proc.stderr.read())
+            except Exception as exc:
+                errors.append(exc)
+
+        def feed():
+            try:
+                proc.stdin.write(data)
+                proc.stdin.close()
+            except BrokenPipeError:
+                try:
+                    proc.stdin.close()
+                except OSError:
+                    pass
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=read_stdout), threading.Thread(target=read_stderr)]
+        if data is not None:
+            threads.append(threading.Thread(target=feed))
+        for thread in threads:
+            thread.start()
+        timed_out = False
+        try:
+            code = proc.wait(timeout=3600)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            code = proc.wait()
+            timed_out = True
+        for thread in threads:
+            thread.join()
+        stdout = "".join(stdout_parts)
+        stderr = b"".join(stderr_parts).decode("utf-8", "replace")
+        if timed_out:
+            stderr += "\nThe command timed out."
+            code = 124
+        if errors:
+            raise GpgError("The command could not be read.") from errors[0]
+        return CommandResult(name, code, stdout, stderr, False, stdout.encode("utf-8"))
 
     def list_keys(self, timestamp=None):
         listed = self.command("GPG Keys", ["--with-colons", "--with-fingerprint", "--list-keys"], timestamp=timestamp)
@@ -825,7 +927,10 @@ class GpgBackend:
         stages = []
         manifest = None
         # This check treats each loaded key as trusted. It does not write ownertrust.
-        verify_args = ["--trust-model", "always", "--status-fd", "1", "--verify"]
+        # PROGRESS lines carry the byte counts for the verification bar.
+        self.progress_done = 0
+        self.progress_total = 1
+        verify_args = ["--trust-model", "always", "--status-fd", "1", "--enable-progress-filter", "--verify"]
         if companion.is_file():
             if checksums:
                 # Verify and check the same immutable bytes, without staging a file.
@@ -838,7 +943,10 @@ class GpgBackend:
             args, data = verify_args, signed
         else:
             raise GpgError(f'The matching file "{companion.name}" is missing from this folder.')
-        verified = self.command("Signature Verification", args, data=data, cwd=directory, timestamp=timestamp)
+        verified = self.command(
+            "Signature Verification", args, data=data, cwd=directory, timestamp=timestamp,
+            progress=self._note_progress,
+        )
         stages.append(verified)
         if not signature_ok(verified):
             return Outcome(False, "Signature verification failed.", stages)

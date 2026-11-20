@@ -759,15 +759,47 @@ class GpgUI:
         frame.button(HEIGHT - 110, "Save", "gpg-number-save", enabled=bool(self.draft))
 
     def working(self, frame):
+        if self.job_kind == "verify":
+            self._verify_progress(frame)
+            self.work_shown = True
+            return
         frame.header("GPG")
         labels = {"list": "Listing GPG Keys…", "preview": "Reading GPG Key…", "import": "Importing GPG Key…",
-                  "verify": "Verifying Signature…", "export": self._export_progress(),
+                  "export": self._export_progress(),
                   "add-subkey": "Adding a Subkey…", "sign": "Signing File…", "delete": "Deleting GPG Key…",
                   "bip85": "Creating a GPG Key…", "encrypt-list": "Listing GPG Keys…",
                   "encrypt": "Encrypting File…", "decrypt-inspect": "Reading Encrypted File…",
                   "decrypt": "Decrypting File…"}
         frame.text(labels.get(self.job_kind, "Working…"), MARGIN, HEADER + 40, size=BODY_SIZE)
         self.work_shown = True
+
+    def _verify_progress(self, frame):
+        message = "Verifying Signature\u2026"
+        face = font(BODY_SIZE)
+        lines = wrap(frame.draw, message, face, WIDTH - 2 * MARGIN) or [""]
+        bar_h = 28
+        bar_bottom = HEIGHT - 110
+        bar_top = bar_bottom - bar_h
+        text_h = len(lines) * (BODY_SIZE + 8)
+        y = max(MARGIN, (HEIGHT - text_h) // 2)
+        for line in lines:
+            width = frame.draw.textlength(line, font=face)
+            x = (WIDTH - width) / 2
+            frame.draw.text((x, y), line, font=face, fill=INK)
+            frame.mark(line, frame.draw.textbbox((x, y), line, font=face))
+            y += BODY_SIZE + 8
+        left, right = MARGIN, WIDTH - MARGIN
+        frame.draw.rounded_rectangle((left, bar_top, right, bar_bottom), radius=10, outline=LINE, width=2, fill=WHITE)
+        span = right - left - 8
+        done = getattr(self.backend, "progress_done", 0)
+        total = getattr(self.backend, "progress_total", 1) or 1
+        filled = int(span * min(1.0, done / total))
+        if filled > 0:
+            frame.draw.rounded_rectangle(
+                (left + 4, bar_top + 4, left + 4 + filled, bar_bottom - 4),
+                radius=6, fill=BLUE,
+            )
+        frame.header("GPG")
 
     def reset_layout(self):
         self.rows, self.cards, self.card_actions, self.buttons = [], [], [], []
