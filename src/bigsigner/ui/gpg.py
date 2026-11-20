@@ -656,7 +656,7 @@ class GpgUI:
         y = frame.button(y, "Encrypt", "gpg-encrypt-menu")
         y = frame.button(y, "Decrypt", "gpg-decrypt")
         y = frame.button(y, "Add Entropy to OS", "gpg-entropy")
-        frame.text("GPG keys stay in RAM and are cleared on reboot.", MARGIN, y + 12, size=28, fill=MUTED)
+        frame.text("GPG keys stay in RAM and are cleared when the power is off.", MARGIN, y + 12, size=28, fill=MUTED)
 
     def formats(self, frame):
         frame.header("Verify Signature", "back")

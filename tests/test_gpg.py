@@ -276,6 +276,20 @@ def test_version_line_is_empty_when_gpg_cannot_run(monkeypatch):
     assert GpgBackend().version_line() == ""
 
 
+def test_prepare_keyring_creates_the_keybox_before_a_listing():
+    if not shutil.which("gpg"):
+        pytest.skip("GPG is required")
+    with tempfile.TemporaryDirectory(prefix="bsgpg-test-") as home:
+        backend = GpgBackend(Path(home))
+        backend.prepare_keyring()
+        assert (backend.home / "pubring.kbx").is_file()
+        assert (backend.home / "trustdb.gpg").is_file()
+        listed = backend.list_keys()
+        assert listed.ok and listed.keys == []
+        assert not any("created" in stage.stderr for stage in listed.stages)
+        backend.prepare_keyring()
+
+
 @pytest.fixture
 def real_backend(tmp_path, monkeypatch):
     if not shutil.which("gpg") or not shutil.which("sha256sum"):

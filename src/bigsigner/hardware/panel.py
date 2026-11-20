@@ -28,6 +28,9 @@ def _kmsg(message: str):
 
 def run_panel():
     app = App()
+    # The keyring lives in RAM, so it is empty after every boot. Create it
+    # before the first frame, or List GPG Keys shows that creation as stderr.
+    app.gpg.backend.prepare_keyring()
     camera = LiveCamera()
     fb = os.open("/dev/fb0", os.O_RDWR)
     width, height, stride, bpp, channels = framebuffer_info(fb)

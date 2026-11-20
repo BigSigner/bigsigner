@@ -509,6 +509,25 @@ class GpgBackend:
         self.home.chmod(0o700)
         return self.home
 
+    def prepare_keyring(self) -> None:
+        """Create the empty keyring before a screen can show GPG's setup stderr.
+
+        The first ``--list-keys`` in a new home prints that it created
+        ``pubring.kbx`` and ``trustdb.gpg``. The panel does this at startup.
+        A home that already has both files is left alone.
+        """
+        if not self.supported:
+            return
+        try:
+            home = self._home()
+        except GpgError:
+            return
+        if (home / "pubring.kbx").is_file() and (home / "trustdb.gpg").is_file():
+            return
+        self.command("GPG Keys", ["--list-keys"])
+        if not (home / "trustdb.gpg").is_file():
+            self.command("Secret Keys", ["--list-secret-keys"], agent=True)
+
     def version_line(self) -> str:
         """First stdout line of ``gpg --version``. Empty when GPG cannot run."""
         if hasattr(self, "_version_line"):
