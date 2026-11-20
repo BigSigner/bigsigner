@@ -14,7 +14,7 @@ import re
 from . import sdcard
 from .gpg import (
     CHECKSUM_LIMIT, CHECKSUM_NAME, CHECKSUM_SIGNATURE, CommandResult, GpgError, Outcome, PublicKey,
-    _manifest_line, files_left_unchecked, manifest_for_name,
+    _manifest_line, _password_bytes, files_left_unchecked, manifest_for_name,
 )
 from .openpgp_subkey import secret_subkey_armor
 
@@ -116,6 +116,21 @@ class OpenPgpJsBackend:
         data = _read(relative, storage)
         try:
             result = self._call({"op": "encrypt", "fingerprints": list(fingerprints), "data": _b64(data)})
+        except GpgError as exc:
+            return Outcome(False, str(exc), [CommandResult("Encrypt File", 1, "", str(exc))])
+        armor = result.get("armor") or ""
+        if not armor.startswith("-----BEGIN PGP MESSAGE-----"):
+            return Outcome(False, "The file could not be encrypted.", [CommandResult("Encrypt File", 1, "", "The file could not be encrypted.")])
+        sdcard.write_bytes(_sibling(relative, output_name), armor.encode("utf-8"), storage=storage)
+        return Outcome(True, stages=[CommandResult("Encrypt File", 0, "The encrypted file was written.\n")])
+
+    def encrypt_symmetric(self, relative: str, output_name: str, storage: str, password: str):
+        _password_bytes(password)
+        if not output_name or output_name in (".", "..") or "/" in output_name or "\\" in output_name or "\x00" in output_name:
+            raise GpgError("The file name is not valid.")
+        data = _read(relative, storage)
+        try:
+            result = self._call({"op": "encrypt", "password": password, "data": _b64(data)})
         except GpgError as exc:
             return Outcome(False, str(exc), [CommandResult("Encrypt File", 1, "", str(exc))])
         armor = result.get("armor") or ""

@@ -15,10 +15,22 @@ from . import sdcard
 
 KEY_LIMIT = 1_048_576
 CHECKSUM_LIMIT = 4_194_304
+PASSWORD_LIMIT = 255
 # Linux RNDADDENTROPY is _IOW('R', 0x03, int[2]). The size in the request is 8.
 _RNDADDENTROPY = (1 << 30) | (8 << 16) | (ord("R") << 8) | 3
 _SUBKEY_ALGOS = {"ed25519", "cv25519", "rsa3072", "rsa4096"}
 _SUBKEY_USAGES = {"sign", "encr", "auth"}
+
+
+def _password_bytes(password: str) -> bytes:
+    if not isinstance(password, str) or "\x00" in password or "\n" in password or "\r" in password:
+        raise GpgError("The password is not valid.")
+    encoded = password.encode("utf-8")
+    if not encoded:
+        raise GpgError("The password is empty.")
+    if len(encoded) > PASSWORD_LIMIT:
+        raise GpgError("The password is longer than 255 bytes.")
+    return encoded
 
 
 def mix_kernel_entropy(digest: bytes) -> None:
@@ -557,6 +569,27 @@ class GpgBackend:
             args += ["--recipient", fingerprint + "!"]
         args += ["--output", output_name, "--", path.name]
         encrypted = self.command("Encrypt File", args, cwd=path.parent)
+        return Outcome(encrypted.returncode == 0, "" if encrypted.returncode == 0 else "The file could not be encrypted.", [encrypted])
+
+    def encrypt_symmetric(self, relative: str, output_name: str, storage: str, password: str):
+        """Armored symmetric encryption with ``gpg --symmetric --cipher-algo AES256``."""
+        path = sdcard.native_path(relative, storage=storage)
+        if path is None or not path.is_file():
+            raise GpgError("Encrypting a file requires the device filesystem.")
+        encoded = _password_bytes(password)
+        if not output_name or output_name in (".", "..") or "/" in output_name or "\\" in output_name or "\x00" in output_name:
+            raise GpgError("The file name is not valid.")
+        home = self._home()
+        passphrase_file = home / "aes-passphrase"
+        passphrase_file.write_bytes(encoded + b"\n")
+        passphrase_file.chmod(0o600)
+        args = ["--pinentry-mode", "loopback", "--passphrase-file", str(passphrase_file),
+                "--yes", "--armor", "--symmetric", "--cipher-algo", "AES256",
+                "--output", output_name, "--", path.name]
+        try:
+            encrypted = self.command("Encrypt File", args, cwd=path.parent, agent=True)
+        finally:
+            passphrase_file.unlink(missing_ok=True)
         return Outcome(encrypted.returncode == 0, "" if encrypted.returncode == 0 else "The file could not be encrypted.", [encrypted])
 
     def sign_file(self, fingerprint: str, relative: str, storage: str, timestamp: int):

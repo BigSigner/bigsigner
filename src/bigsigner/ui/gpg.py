@@ -12,7 +12,7 @@ from ..bip85gpg import creation_text, expiration_seconds, identity, path_text, s
 from ..entropy import camera_digest
 from ..gpg import (
     CHECKSUM_LIMIT, CHECKSUM_NAME, CHECKSUM_SIGNATURE, GpgBackend, GpgError, KEY_LIMIT, Outcome,
-    looks_like_sha256sums,
+    PASSWORD_LIMIT, looks_like_sha256sums,
 )
 from .. import file_qr
 from .canvas import BLUE, BODY_SIZE, HEADER, HEIGHT, INK, LINE, MARGIN, MUTED, PAPER, RED, TITLE_SIZE, WARNING, WHITE, WIDTH, Frame, Icons, font, wrap
@@ -133,6 +133,7 @@ class GpgUI:
         self.encrypt_source = ""
         self.encrypt_storage = "sd"
         self.encrypt_name = ""
+        self.encrypt_password = ""
         self.job = None
         self.future = None
         self.executor = None
@@ -150,7 +151,9 @@ class GpgUI:
                          "gpg-bip85-seed": self.bip85_seeds, "gpg-bip85": self.bip85_options,
                          "gpg-bip85-details": self.bip85_details, "gpg-bip85-text": self.bip85_text,
                          "gpg-bip85-expire": self.date_screen,
+                         "gpg-encrypt-menu": self.encrypt_menu,
                          "gpg-encrypt-keys": self.encrypt_keys, "gpg-encrypt-name": self.encrypt_name_screen,
+                         "gpg-aes-password": self.aes_password, "gpg-aes-type": self.aes_type,
                          "gpg-checksum-warning": self.checksum_warning}
 
     def open(self):
@@ -213,9 +216,23 @@ class GpgUI:
         app = self.app
         if action == "gpg-list":
             self.start("list", self.backend.list_keys)
+        elif action == "gpg-encrypt-menu":
+            app.go("gpg-encrypt-menu")
         elif action == "gpg-encrypt":
             self.encrypt_selected = set()
             self.start("encrypt-list", self.backend.list_keys)
+        elif action == "gpg-aes":
+            self.encrypt_password = ""
+            app._open_sd("gpg-aes-file")
+        elif action == "gpg-aes-type":
+            self.encrypt_password = ""
+            app.passphrase_mode = "lower"
+            app.go("gpg-aes-type")
+        elif action == "gpg-aes-pass-file":
+            app._open_sd("gpg-aes-pass")
+        elif action == "gpg-aes-continue":
+            if self._password_ok(self.encrypt_password):
+                self._open_aes_camera()
         elif action.startswith("gpg-encrypt-toggle:"):
             fingerprint = action.split(":", 1)[1]
             if fingerprint in self.encrypt_selected:
@@ -443,6 +460,12 @@ class GpgUI:
             if app.sd_expect == "gpg-encrypt-file":
                 self._choose_encrypt_file(relative)
                 return
+            if app.sd_expect == "gpg-aes-file":
+                self._choose_aes_file(relative)
+                return
+            if app.sd_expect == "gpg-aes-pass":
+                self._accept_aes_password(relative)
+                return
             if not relative.lower().endswith(".asc"):
                 raise GpgError("Choose an .asc signature file.")
             storage = app.sd_storage
@@ -566,7 +589,7 @@ class GpgUI:
         y = frame.button(y, "List GPG Keys", "gpg-list")
         y = frame.button(y, "Load GPG Key", "gpg-load")
         y = frame.button(y, "Verify Signature", "gpg-formats")
-        y = frame.button(y, "Encrypt to Keys", "gpg-encrypt")
+        y = frame.button(y, "Encrypt", "gpg-encrypt-menu")
         frame.text("GPG keys stay in RAM and are cleared on reboot.", MARGIN, y + 12, size=28, fill=MUTED)
 
     def formats(self, frame):
@@ -810,6 +833,25 @@ class GpgUI:
             self.card_actions.append("")
             self.content_end += 16
 
+    def encrypt_menu(self, frame):
+        frame.header("Encrypt", "back")
+        y = frame.button(HEADER + 24, "Encrypt to GPG Keys", "gpg-encrypt")
+        frame.button(y, "Encrypt with AES256", "gpg-aes")
+
+    def aes_password(self, frame):
+        frame.header("Password", "back")
+        y = frame.button(HEADER + 24, "Enter Password", "gpg-aes-type")
+        y = frame.button(y, "Load from File", "gpg-aes-pass-file", icon=Icons.FILE, awesome=True)
+        frame.text("The password can be at most 255 bytes.", MARGIN, y, size=28, fill=MUTED)
+
+    def aes_type(self, frame):
+        frame.header("Password", "back")
+        box = (MARGIN, HEADER + 16, WIDTH - MARGIN, HEADER + 88)
+        self.app._paint_hscroll_field(frame, box, self.encrypt_password, len(self.encrypt_password), "Password")
+        y = frame.button(box[3] + 16, "Continue", "gpg-aes-continue", enabled=self._password_ok(self.encrypt_password))
+        frame.text("At most 255 bytes.", MARGIN, y, size=28, fill=MUTED)
+        self.app._passphrase_keyboard(frame)
+
     def encrypt_keys(self, frame):
         ready = bool(self._selected_fingerprints())
         self.content(frame, "Encrypt to Keys", footer=("Continue", "gpg-encrypt-continue", ready))
@@ -834,20 +876,93 @@ class GpgUI:
                     chosen.append(fingerprint)
         return chosen
 
-    def _choose_encrypt_file(self, relative):
+    def _prepare_encrypt_name(self, relative):
         from .app import _unused_filename
 
-        self.close_picker()
         self.encrypt_source = relative
         self.encrypt_storage = self.app.sd_storage
-        parent = self._encrypt_parent()
+        parent = str(Path(relative.replace("\\", "/")).parent)
+        parent = "" if parent == "." else parent
         try:
             taken = {item["name"] for item in sdcard.list_folder(parent, storage=self.encrypt_storage)}
         except sdcard.SdError:
             taken = set()
         self.encrypt_name = _unused_filename(Path(relative).name + ".enc.asc", taken)
+
+    def _choose_encrypt_file(self, relative):
+        self.close_picker()
+        self._prepare_encrypt_name(relative)
         self.app.passphrase_mode = "lower"
         self.app.go("gpg-encrypt-name")
+
+    def _choose_aes_file(self, relative):
+        self.close_picker()
+        self._prepare_encrypt_name(relative)
+        self.encrypt_password = ""
+        self.app.go("gpg-aes-password")
+
+    def _accept_aes_password(self, relative):
+        try:
+            data = sdcard.read_bytes(relative, storage=self.app.sd_storage, max_bytes=PASSWORD_LIMIT + 1)
+        except sdcard.SdError as exc:
+            message = "The password is longer than 255 bytes." if str(exc) == "That file is too large." else str(exc)
+            self.app.set_error(message)
+            return
+        if data.endswith(b"\r\n"):
+            data = data[:-2]
+        elif data.endswith(b"\n"):
+            data = data[:-1]
+        try:
+            password = data.decode("utf-8")
+        except UnicodeDecodeError:
+            self.app.set_error("The password file is not text.")
+            return
+        if not password:
+            self.app.set_error("The password file is empty.")
+            return
+        if not self._password_ok(password):
+            self.app.set_error(
+                "The password is longer than 255 bytes."
+                if len(password.encode("utf-8")) > PASSWORD_LIMIT else "The password is not valid."
+            )
+            return
+        self.encrypt_password = password
+        self.close_picker()
+        self._open_aes_camera()
+
+    def _password_ok(self, password):
+        if not password or "\x00" in password or "\n" in password or "\r" in password:
+            return False
+        return len(password.encode("utf-8")) <= PASSWORD_LIMIT
+
+    def type_aes_password(self, key):
+        if key in ("enter", "\n"):
+            return
+        if key == "backspace":
+            self.encrypt_password = self.encrypt_password[:-1]
+            return
+        if len(key) != 1:
+            return
+        candidate = self.encrypt_password + key
+        if self._password_ok(candidate):
+            self.encrypt_password = candidate
+
+    def _open_aes_camera(self):
+        app = self.app
+        app.camera_frames = []
+        app.camera_final = b""
+        app.camera_purpose = "gpg"
+        self.camera_for = "aes"
+        app.go("camera")
+
+    def start_aes_encrypt(self):
+        password = self.encrypt_password
+        self.encrypt_password = ""
+        if not self._password_ok(password):
+            return
+        name = self.encrypt_name.strip()
+        source, storage = self.encrypt_source, self.encrypt_storage
+        self.start("encrypt", lambda: self.backend.encrypt_symmetric(source, name, storage, password))
 
     def _encrypt_parent(self):
         parent = str(Path(self.encrypt_source.replace("\\", "/")).parent)
@@ -1219,6 +1334,10 @@ class GpgUI:
         if self.camera_for == "sign":
             self.camera_for = ""
             self.app.go("gpg-sign-choice")
+            return
+        if self.camera_for == "aes":
+            self.camera_for = ""
+            self.start_aes_encrypt()
             return
         self.camera_for = ""
         self.subkey_algo = "ed25519"

@@ -202,6 +202,16 @@ async function verifyCleartext(request) {
 }
 
 async function encrypt(request) {
+  const message = await openpgp.createMessage({binary: bytes(request.data)});
+  if (request.password) {
+    const armored = await openpgp.encrypt({
+      message,
+      passwords: [request.password],
+      format: "armored",
+      config: CONFIG,
+    });
+    return {armor: await text(armored)};
+  }
   const encryptionKeys = [];
   const encryptionKeyIDs = [];
   for (const fingerprint of request.fingerprints || []) {
@@ -210,7 +220,6 @@ async function encrypt(request) {
     encryptionKeyIDs.push(await keyIdentifier(found.sub || found.key));
   }
   if (!encryptionKeys.length) throw new Error("Select an encryption key.");
-  const message = await openpgp.createMessage({binary: bytes(request.data)});
   const armored = await openpgp.encrypt({
     message,
     encryptionKeys,

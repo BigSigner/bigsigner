@@ -1958,7 +1958,7 @@ class App:
         self.go("sd")
 
     def _read_sd_file(self, relative: str):
-        if self.sd_expect in ("gpg-key", "gpg-verify", "gpg-sign-file", "gpg-encrypt-file"):
+        if self.sd_expect in ("gpg-key", "gpg-verify", "gpg-sign-file", "gpg-encrypt-file", "gpg-aes-file", "gpg-aes-pass"):
             self.gpg.accept_file(relative)
             return
         if self.sd_expect == "psbt":
@@ -2332,7 +2332,7 @@ class App:
             return None
         if self.screen == "scan":
             return (0, HEADER, WIDTH, HEIGHT - 108)
-        if self.screen == "camera" and self.camera_purpose == "gpg" and self.gpg.camera_for == "sign":
+        if self.screen == "camera" and self.camera_purpose == "gpg" and self.gpg.camera_for in ("sign", "aes"):
             return (MARGIN, HEADER + 16, WIDTH - MARGIN, HEIGHT - 360)
         if self.screen == "camera" and self.camera_purpose == "gpg":
             return (MARGIN, HEADER + 16, WIDTH - MARGIN, HEIGHT - 290)
@@ -2597,17 +2597,21 @@ class App:
         if self.camera_purpose == "gpg":
             self._gpg_camera_header(frame)
             self._viewfinder(frame)
-            signing = self.gpg.camera_for == "sign"
+            detailed = self.gpg.camera_for in ("sign", "aes")
             emulator = sys.platform in ("emscripten", "wasi")
+            if emulator:
+                caption = "The emulator uses the browser's random source."
+            elif self.gpg.camera_for == "sign":
+                caption = "This capture is mixed into the OS random number generation entropy. Good randomness is required for some signing algorithms."
+            elif self.gpg.camera_for == "aes":
+                caption = "This capture is mixed into the OS random number generation entropy. Good randomness is required for AES256 encryption."
+            else:
+                caption = "This capture is mixed into the OS random number generation entropy"
             frame.text(
-                "The emulator uses the browser's random source."
-                if emulator else
-                "This capture is mixed into the OS random number generation entropy. Good randomness is required for some signing algorithms."
-                if signing else
-                "This capture is mixed into the OS random number generation entropy",
+                caption,
                 MARGIN,
-                HEIGHT - 348 if signing else HEIGHT - 278,
-                size=28 if signing else TITLE_SIZE,
+                HEIGHT - 348 if detailed else HEIGHT - 278,
+                size=28 if detailed else TITLE_SIZE,
             )
         else:
             frame.header("Camera", "back")
@@ -5871,6 +5875,9 @@ class App:
             return
         if self.screen == "gpg-encrypt-name":
             self.gpg.type_encrypt_name(key)
+            return
+        if self.screen == "gpg-aes-type":
+            self.gpg.type_aes_password(key)
             return
         if key == "backspace":
             if self.passphrase_cursor > 0:

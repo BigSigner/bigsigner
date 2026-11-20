@@ -96,6 +96,12 @@ class FakeBackend:
             return Outcome(True, stages=[CommandResult("Encrypt File", 0, "")])
         return Outcome(False, "The file could not be encrypted.", [CommandResult("Encrypt File", 2, "", "gpg: encryption failed")])
 
+    def encrypt_symmetric(self, source, output_name, storage, password):
+        self.calls.append(("encrypt-symmetric", source, output_name, storage, password))
+        if self.good:
+            return Outcome(True, stages=[CommandResult("Encrypt File", 0, "")])
+        return Outcome(False, "The file could not be encrypted.", [CommandResult("Encrypt File", 2, "", "gpg: encryption failed")])
+
     def verify(self, relative, storage, timestamp, checksums):
         self.calls.append(("verify", relative, storage, timestamp, checksums))
         stages = [CommandResult("Signature Verification", 0, f"[GNUPG:] VALIDSIG {FPR}\n", "gpg: Good signature")]
@@ -843,7 +849,8 @@ def test_encrypt_to_selects_encryption_subkeys_and_names_the_armored_file():
     assert actions == ["gpg-encrypt-toggle:" + first, "gpg-encrypt-toggle:" + second]
     assert not any(signing in item[2] for item in app.gpg.rows)
     app.gpg.backend.calls.clear()
-    _tap(app, "Encrypt to Keys")
+    _tap(app, "Encrypt")
+    _tap(app, "Encrypt to GPG Keys")
     _settle(app)
     app.render()
     assert any(hit["label"] == "Select" for hit in app.hits)
@@ -875,6 +882,66 @@ def test_encrypt_to_selects_encryption_subkeys_and_names_the_armored_file():
     assert app.screen == "gpg-result"
 
 
+def test_aes256_encryption_takes_a_password_or_a_password_file_then_the_camera():
+    app = _app(files={
+        "note.txt": "hello",
+        "secret.txt": "hunter2\n",
+        "long.txt": "x" * 256,
+        "empty.txt": "",
+        "binary.txt": b"\xff",
+    })
+    _tap(app, "Encrypt")
+    app.render()
+    assert {hit["label"] for hit in app.hits} >= {"Encrypt to GPG Keys", "Encrypt with AES256"}
+    _tap(app, "Encrypt with AES256")
+    _tap(app, "SD Card")
+    _tap(app, "note.txt")
+    assert app.screen == "gpg-aes-password"
+    assert app.gpg.encrypt_name == "note.txt.enc.asc"
+    _tap(app, "Load from File")
+    _tap(app, "SD Card")
+    _tap(app, "long.txt")
+    assert app.notice == "The password is longer than 255 bytes."
+    _tap(app, "Dismiss")
+    _tap(app, "empty.txt")
+    assert app.notice == "The password file is empty."
+    _tap(app, "Dismiss")
+    _tap(app, "binary.txt")
+    assert app.notice == "The password file is not text."
+    _tap(app, "Dismiss")
+    _tap(app, "secret.txt")
+    assert app.screen == "camera" and app.gpg.camera_for == "aes"
+    app.render()
+    assert any("AES256" in item["text"] for item in app.texts)
+    app.camera_frames = [b"one"]
+    app.camera_final = b"scene"
+    _tap(app, "Capture")
+    _settle(app)
+    assert app.gpg.backend.calls[-2][0] == "mix"
+    assert app.gpg.backend.calls[-1] == ("encrypt-symmetric", "note.txt", "note.txt.enc.asc", "sd", "hunter2")
+    assert app.gpg.encrypt_password == ""
+
+    typed = _app(files={"note.txt": "hello", "note.txt.enc.asc": "old"})
+    _tap(typed, "Encrypt")
+    _tap(typed, "Encrypt with AES256")
+    _tap(typed, "SD Card")
+    _tap(typed, "note.txt")
+    assert typed.gpg.encrypt_name == "note.txt.enc (1).asc"
+    _tap(typed, "Enter Password")
+    assert typed.screen == "gpg-aes-type"
+    typed.render()
+    assert not any(hit["label"] == "Continue" for hit in typed.hits)
+    for char in "secret":
+        typed._act("passkey-" + char)
+    _tap(typed, "Continue")
+    assert typed.screen == "camera"
+    typed.camera_frames = [b"one"]
+    typed.camera_final = b"scene"
+    _tap(typed, "Capture")
+    _settle(typed)
+    assert typed.gpg.backend.calls[-1] == ("encrypt-symmetric", "note.txt", "note.txt.enc (1).asc", "sd", "secret")
+
+
 def test_gpg_screens_save_screenshots(real_backend):
     from test_ui import ScreenRecord
 
@@ -900,7 +967,9 @@ def test_gpg_screens_save_screenshots(real_backend):
     record.click(app, "Load GPG Key")
     record.shot(app, "key-source")
     enc = _app(fixture_date=False)
-    record.click(enc, "Encrypt to Keys")
+    record.click(enc, "Encrypt")
+    record.shot(enc, "encrypt-menu")
+    record.click(enc, "Encrypt to GPG Keys")
     record.shot(enc, "encrypt-listing")
     _settle(enc)
     record.shot(enc, "encrypt-keys")

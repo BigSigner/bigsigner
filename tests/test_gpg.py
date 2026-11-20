@@ -689,3 +689,20 @@ def test_real_encrypt_file_uses_the_exact_subkey(real_backend):
         capture_output=True, env=env)
     assert decrypted.returncode == 0, decrypted.stderr.decode()
     assert decrypted.stdout == b"hello airgap\n"
+
+
+def test_real_symmetric_encryption_uses_aes256(real_backend):
+    backend, root = real_backend
+    env = dict(os.environ, GNUPGHOME=str(backend.home), LC_ALL="C", LANG="C", TZ="UTC")
+    (root / "note.txt").write_bytes(b"hello airgap\n")
+    encrypted = backend.encrypt_symmetric("note.txt", "note.txt.enc.asc", "sd", "secret")
+    assert encrypted.ok, encrypted
+    assert not (backend.home / "aes-passphrase").exists()
+    packets = subprocess.run(["gpg", "--list-packets", str(root / "note.txt.enc.asc")], capture_output=True, env=env)
+    shown = packets.stdout.decode() + packets.stderr.decode()
+    assert "AES256" in shown
+    decrypted = subprocess.run(
+        ["gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "secret", "--decrypt", str(root / "note.txt.enc.asc")],
+        capture_output=True, env=env)
+    assert decrypted.returncode == 0, decrypted.stderr.decode()
+    assert decrypted.stdout == b"hello airgap\n"
