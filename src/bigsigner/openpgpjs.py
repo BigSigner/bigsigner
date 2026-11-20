@@ -122,7 +122,7 @@ class OpenPgpJsBackend:
         if not armor.startswith("-----BEGIN PGP MESSAGE-----"):
             return Outcome(False, "The file could not be encrypted.", [CommandResult("Encrypt File", 1, "", "The file could not be encrypted.")])
         sdcard.write_bytes(_sibling(relative, output_name), armor.encode("utf-8"), storage=storage)
-        return Outcome(True, stages=[CommandResult("Encrypt File", 0, "The encrypted file was written.\n")])
+        return Outcome(True, stages=[CommandResult("Encrypt File", 0, f'The encrypted file "{output_name}" was written.\n')])
 
     def encrypt_symmetric(self, relative: str, output_name: str, storage: str, password: str):
         _password_bytes(password)
@@ -137,7 +137,7 @@ class OpenPgpJsBackend:
         if not armor.startswith("-----BEGIN PGP MESSAGE-----"):
             return Outcome(False, "The file could not be encrypted.", [CommandResult("Encrypt File", 1, "", "The file could not be encrypted.")])
         sdcard.write_bytes(_sibling(relative, output_name), armor.encode("utf-8"), storage=storage)
-        return Outcome(True, stages=[CommandResult("Encrypt File", 0, "The encrypted file was written.\n")])
+        return Outcome(True, stages=[CommandResult("Encrypt File", 0, f'The encrypted file "{output_name}" was written.\n')])
 
     def sign_file(self, fingerprint: str, relative: str, storage: str, timestamp: int):
         data = _read(relative, storage)

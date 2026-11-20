@@ -697,6 +697,7 @@ def test_real_symmetric_encryption_uses_aes256(real_backend):
     (root / "note.txt").write_bytes(b"hello airgap\n")
     encrypted = backend.encrypt_symmetric("note.txt", "note.txt.enc.asc", "sd", "secret")
     assert encrypted.ok, encrypted
+    assert 'The encrypted file "note.txt.enc.asc" was written.' in encrypted.stages[0].stdout
     assert not (backend.home / "aes-passphrase").exists()
     packets = subprocess.run(["gpg", "--list-packets", str(root / "note.txt.enc.asc")], capture_output=True, env=env)
     shown = packets.stdout.decode() + packets.stderr.decode()

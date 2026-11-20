@@ -83,6 +83,16 @@ class CommandResult:
     raw_stdout: bytes | None = None
 
 
+def _with_encrypted_name(result: CommandResult, output_name: str) -> CommandResult:
+    if result.returncode != 0:
+        return result
+    line = f'The encrypted file "{output_name}" was written.'
+    stdout = result.stdout.rstrip("\n")
+    if line not in stdout:
+        stdout = f"{stdout}\n{line}" if stdout else line
+    return CommandResult(result.name, result.returncode, stdout + "\n", result.stderr, result.checksums, result.raw_stdout)
+
+
 @dataclass
 class PublicKey:
     fingerprint: str = ""
@@ -569,6 +579,7 @@ class GpgBackend:
             args += ["--recipient", fingerprint + "!"]
         args += ["--output", output_name, "--", path.name]
         encrypted = self.command("Encrypt File", args, cwd=path.parent)
+        encrypted = _with_encrypted_name(encrypted, output_name)
         return Outcome(encrypted.returncode == 0, "" if encrypted.returncode == 0 else "The file could not be encrypted.", [encrypted])
 
     def encrypt_symmetric(self, relative: str, output_name: str, storage: str, password: str):
@@ -590,6 +601,7 @@ class GpgBackend:
             encrypted = self.command("Encrypt File", args, cwd=path.parent, agent=True)
         finally:
             passphrase_file.unlink(missing_ok=True)
+        encrypted = _with_encrypted_name(encrypted, output_name)
         return Outcome(encrypted.returncode == 0, "" if encrypted.returncode == 0 else "The file could not be encrypted.", [encrypted])
 
     def sign_file(self, fingerprint: str, relative: str, storage: str, timestamp: int):
