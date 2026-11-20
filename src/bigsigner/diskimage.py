@@ -7,10 +7,13 @@ data-automount from mounting the card again while it is detached.
 """
 
 from dataclasses import dataclass
+import gzip
 import hashlib
+import io
 import os
 from pathlib import Path
 import subprocess
+import threading
 
 from . import sdcard
 
@@ -21,6 +24,7 @@ DATA_MOUNT = "/mnt/data"
 # Leave the panel enough RAM to keep drawing while the copy is in flight.
 RAM_MARGIN = 8 * 1024 * 1024
 _CHUNK = 1024 * 1024
+GZIP_MAGIC = b"\x1f\x8b"
 
 
 class BurnError(Exception):
@@ -44,6 +48,80 @@ def looks_like_disk_image(header: bytes) -> bool:
         if status in (0x00, 0x80) and partition_type not in (0x00, 0xEE) and sectors:
             types.append(partition_type)
     return bool(types)
+
+
+def header_from_bytes(data: bytes) -> bytes:
+    """The first 512 image bytes. A gzip member is inflated only that far."""
+    if not data.startswith(GZIP_MAGIC):
+        return data[:512]
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(data)) as handle:
+            return handle.read(512)
+    except (OSError, EOFError, gzip.BadGzipFile):
+        return b""
+
+
+def header_from_path(path: Path) -> bytes:
+    """The first 512 image bytes of a file, streaming gzip instead of expanding it."""
+    try:
+        with path.open("rb") as handle:
+            magic = handle.read(2)
+            if magic != GZIP_MAGIC:
+                handle.seek(0)
+                return handle.read(512)
+    except OSError:
+        return b""
+    reader = _GzipReader(path)
+    try:
+        return reader.read(512)
+    except BurnError:
+        return b""
+    finally:
+        reader.close()
+
+
+class _GzipReader:
+    """Uncompressed bytes from ``gzip -dc``, read as the command produces them."""
+
+    def __init__(self, path: Path):
+        try:
+            self.proc = subprocess.Popen(
+                ["gzip", "-dc", str(path)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError as exc:
+            raise BurnError("gzip is not available.") from exc
+        self._stdout = self.proc.stdout
+        self._code: int | None = None
+
+    def read(self, count: int) -> bytes:
+        if self._stdout is None:
+            return b""
+        return self._stdout.read(count)
+
+    def close(self) -> int:
+        if self._code is not None:
+            return self._code
+        if self._stdout is not None:
+            self._stdout.close()
+            self._stdout = None
+        if self.proc.poll() is None:
+            self.proc.kill()
+        self._code = self.proc.wait()
+        return self._code
+
+
+def _gzip_isize(path: Path) -> int:
+    """Uncompressed size stored in a one-member gzip trailer, modulo 2**32."""
+    try:
+        if path.stat().st_size < 8:
+            return 0
+        with path.open("rb") as handle:
+            handle.seek(-4, os.SEEK_END)
+            return int.from_bytes(handle.read(4), "little")
+    except OSError:
+        return 0
 
 
 @dataclass
@@ -109,31 +187,102 @@ class CardBurner:
         self._mount_boot()
 
     def _copy_to_ram(self, source: Path, progress) -> Path:
-        size = source.stat().st_size
+        """Copy a card file into RAM. A raw image is gzip-compressed as it is read."""
+        try:
+            size = source.stat().st_size
+            with source.open("rb") as handle:
+                already_gzip = handle.read(2) == GZIP_MAGIC
+        except OSError as exc:
+            raise BurnError("The image could not be copied into RAM.") from exc
         available = self._mem_available()
-        if available is not None and available < size + RAM_MARGIN:
+        if already_gzip and available is not None and available < size + RAM_MARGIN:
+            raise BurnError("There is not enough free RAM to copy this image.")
+        if not already_gzip and available is not None and available <= RAM_MARGIN:
             raise BurnError("There is not enough free RAM to copy this image.")
         try:
             directory = sdcard.ram_directory("bigsigner-burn")
         except sdcard.SdError as exc:
             raise BurnError("No RAM filesystem is available.") from exc
         dest = directory / "image"
-        written = 0
         try:
-            with source.open("rb") as src, dest.open("wb") as dst:
-                while True:
-                    chunk = src.read(_CHUNK)
-                    if not chunk:
-                        break
-                    dst.write(chunk)
-                    written += len(chunk)
-                    progress("Copying the image\u2026", written, max(size, 1))
-                dst.flush()
-                os.fsync(dst.fileno())
+            if already_gzip:
+                self._copy_bytes(source, dest, size, progress)
+            else:
+                self._gzip_into(source, dest, size, available, progress)
+        except BurnError:
+            self._delete(dest)
+            raise
         except OSError as exc:
             self._delete(dest)
             raise BurnError("The image could not be copied into RAM.") from exc
         return dest
+
+    def _copy_bytes(self, source: Path, dest: Path, size: int, progress) -> None:
+        written = 0
+        with source.open("rb") as src, dest.open("wb") as dst:
+            while True:
+                chunk = src.read(_CHUNK)
+                if not chunk:
+                    break
+                dst.write(chunk)
+                written += len(chunk)
+                progress("Copying the image\u2026", written, max(size, 1))
+            dst.flush()
+            os.fsync(dst.fileno())
+
+    def _gzip_into(self, source: Path, dest: Path, size: int, available: int | None, progress) -> None:
+        """Stream ``gzip -c`` into ``dest`` without storing the uncompressed image."""
+        try:
+            proc = subprocess.Popen(
+                ["gzip", "-c"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError as exc:
+            raise BurnError("gzip is not available.") from exc
+        failed: list[BaseException] = []
+
+        def feed():
+            try:
+                read = 0
+                with source.open("rb") as src:
+                    while True:
+                        chunk = src.read(_CHUNK)
+                        if not chunk:
+                            break
+                        proc.stdin.write(chunk)
+                        read += len(chunk)
+                        progress("Copying the image\u2026", read, max(size, 1))
+                proc.stdin.close()
+            except Exception as exc:
+                failed.append(exc)
+                proc.kill()
+
+        thread = threading.Thread(target=feed)
+        thread.start()
+        try:
+            stored = 0
+            with dest.open("wb") as dst:
+                while True:
+                    chunk = proc.stdout.read(_CHUNK)
+                    if not chunk:
+                        break
+                    stored += len(chunk)
+                    if available is not None and stored + RAM_MARGIN > available:
+                        raise BurnError("There is not enough free RAM to copy this image.")
+                    dst.write(chunk)
+                dst.flush()
+                os.fsync(dst.fileno())
+        except Exception:
+            if proc.poll() is None:
+                proc.kill()
+            thread.join()
+            proc.wait()
+            raise
+        thread.join()
+        if failed or proc.wait() != 0:
+            raise BurnError("The image could not be copied into RAM.")
 
     def _hold(self) -> None:
         fd = os.open(self.hold_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
@@ -152,39 +301,56 @@ class CardBurner:
                 raise BurnError("The SD card is still in use.")
 
     def _write_and_verify(self, image: Path, progress) -> None:
-        size = image.stat().st_size
-        if size <= 0:
+        try:
+            compressed = image.stat().st_size
+            with image.open("rb") as handle:
+                gzipped = handle.read(2) == GZIP_MAGIC
+        except OSError as exc:
+            raise BurnError("This file is not a disk image.") from exc
+        if compressed <= 0:
             raise BurnError("This file is not a disk image.")
-        if size > self._device_bytes():
+        device_bytes = self._device_bytes()
+        declared = _gzip_isize(image) if gzipped else compressed
+        if declared > device_bytes:
             raise BurnError("This image is larger than the SD card.")
+        total = declared or 1
+        reader = _GzipReader(image) if gzipped else image.open("rb")
         digest = hashlib.sha256()
         written = 0
         try:
             fd = os.open(self.device, os.O_RDWR)
         except OSError as exc:
+            reader.close()
             raise BurnError("The SD card is not available.") from exc
         try:
-            with image.open("rb") as src:
-                while True:
-                    chunk = src.read(_CHUNK)
-                    if not chunk:
-                        break
-                    digest.update(chunk)
-                    view = chunk
-                    while view:
-                        count = os.write(fd, view)
-                        if count <= 0:
-                            raise BurnError("The image could not be written.")
-                        view = view[count:]
-                    written += len(chunk)
-                    progress("Writing the image\u2026", written, size)
+            while True:
+                chunk = reader.read(_CHUNK)
+                if not chunk:
+                    break
+                if written + len(chunk) > device_bytes:
+                    raise BurnError("This image is larger than the SD card.")
+                digest.update(chunk)
+                view = chunk
+                while view:
+                    count = os.write(fd, view)
+                    if count <= 0:
+                        raise BurnError("The image could not be written.")
+                    view = view[count:]
+                written += len(chunk)
+                progress("Writing the image\u2026", written, total)
             os.fsync(fd)
+            if written <= 0:
+                raise BurnError("This file is not a disk image.")
+            if gzipped and reader.close() != 0:
+                raise BurnError("The gzip file could not be read.")
         except BurnError:
             raise
         except OSError as exc:
             raise BurnError("The image could not be written.") from exc
         finally:
             os.close(fd)
+            reader.close()
+        size = written
         self._drop_caches()
         self._reread_partitions()
         check = hashlib.sha256()

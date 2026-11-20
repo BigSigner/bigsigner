@@ -6,7 +6,7 @@ import re
 import sys
 
 from .. import file_qr, sdcard
-from ..diskimage import BurnResult, CardBurner, looks_like_disk_image
+from ..diskimage import BurnResult, CardBurner, header_from_bytes, header_from_path, looks_like_disk_image
 from .canvas import BLUE, BODY_SIZE, GREEN, HEADER, HEIGHT, INK, LINE, MARGIN, MUTED, RED, TITLE_SIZE, WHITE, WIDTH, Frame, Icons, font, wrap
 from .text_editor import TextEditor
 
@@ -382,13 +382,19 @@ class FileSystemUI:
         key = (self.storage, self.path, size)
         if self._image_key != key:
             self._image_key = key
-            try:
-                header = sdcard.read_prefix(self.path, storage=self.storage, size=512)
-            except sdcard.SdError:
-                self._image_value = False
-            else:
-                self._image_value = looks_like_disk_image(header)
+            self._image_value = looks_like_disk_image(self._image_header())
         return self._image_value
+
+    def _image_header(self) -> bytes:
+        """First 512 image bytes. Gzip is inflated only that far."""
+        path = sdcard.native_path(self.path, storage=self.storage)
+        if path is not None:
+            return header_from_path(path)
+        try:
+            data = b"".join(sdcard.read_chunks(self.path, storage=self.storage))
+        except sdcard.SdError:
+            return b""
+        return header_from_bytes(data)
 
     def _signature_path(self) -> str:
         return sdcard.child_path(sdcard.parent_path(self.path), Path(self.path).name + ".asc")
@@ -430,8 +436,12 @@ class FileSystemUI:
     def burn_verify(self, frame):
         frame.header("Verify Image", "back")
         y = frame.text(
-            "Continuing erases the SD card and writes this image.",
+            "How would you like to verify the GPG signature of this file?",
             MARGIN, HEADER + 20, size=BODY_SIZE,
+        )
+        y = frame.text(
+            "Continuing erases the SD card and writes this image.",
+            MARGIN, y + 16, size=BODY_SIZE, fill=RED,
         )
         y += 16
         try:
@@ -883,9 +893,12 @@ class FileSystemUI:
     def _guide_body(self, frame, paint, offset):
         app = self.app
         count = len(self.qr_parts)
-        codes = "1 QR code" if count == 1 else f"{count} QR codes"
+        if count <= 1:
+            lead = "This file is large and has been compressed to 1 QR code."
+        else:
+            lead = f"This file is large and has been split over {count} QR codes."
         intro = (
-            f"This file is large and has been split over {codes}. "
+            f"{lead} "
             "Save the content of each QR code in a file. "
             "Name them file-part-00, file-part-01, and so on, starting with the first QR code. "
             "On a Mac or Linux, run:"

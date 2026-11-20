@@ -1,6 +1,7 @@
 """Storage mutations and the File System screens, including bounded viewers."""
 
 import base64
+import gzip
 import hashlib
 import io
 from pathlib import Path
@@ -12,7 +13,7 @@ from bigsigner import file_qr, sdcard
 from bigsigner.diskimage import BurnResult
 from bigsigner.gpg import GpgError, Outcome
 from bigsigner.ui.app import App, QR_BRIGHTNESS_DEFAULT
-from bigsigner.ui.canvas import BLUE, HEADER, HEIGHT, MARGIN, WIDTH
+from bigsigner.ui.canvas import BLUE, HEADER, HEIGHT, INK, MARGIN, RED, WIDTH
 from bigsigner.ui.filesystem import OPEN_LIMIT, SD_DELETE_NOTE, SEQUENCE_NOTE, is_text
 from test_sdcard import _tap
 
@@ -269,6 +270,13 @@ def test_text_file_qr_follows_the_size_limits(size):
         app.render()
     else:
         assert app.screen == "fs-qr-guide"
+        app.render()
+        shown = " ".join(item["text"] for item in app.texts)
+        if len(app.fs.qr_parts) <= 1:
+            assert "This file is large and has been compressed to 1 QR code." in shown
+            assert "split over" not in shown
+        else:
+            assert f"split over {len(app.fs.qr_parts)} QR codes" in shown
         app.scroll["fs-qr-guide"] = 10**9
         app.render()
         assert "'file.txt'" in app.fs.qr_command
@@ -342,6 +350,8 @@ def test_long_binary_base64_splits_and_pages_with_brightness():
     app = _details(data)
     _tap(app, "Base64")
     assert app.screen == "fs-qr-guide" and len(app.fs.qr_parts) > 1
+    app.render()
+    assert f"This file is large and has been split over {len(app.fs.qr_parts)} QR codes." in _shown(app)
     app.scroll["fs-qr-guide"] = 10**9
     app.render()
     shown = " ".join(item["text"] for item in app.texts)
@@ -773,6 +783,11 @@ def _shown(app):
     return " ".join(item["text"] for item in app.texts)
 
 
+def _shows(image, box, color):
+    x0, y0, x1, y1 = box
+    return any(image.getpixel((x, y))[:3] == color for y in range(y0, y1) for x in range(x0, x1))
+
+
 def _finish_burn(app):
     if not app.fs.burn_shown:
         app.render()
@@ -791,13 +806,32 @@ def test_a_binary_file_that_is_not_an_image_cannot_be_burned():
     assert "disk image" not in _shown(app)
 
 
+def test_a_gzip_image_can_be_burned_without_storing_the_uncompressed_bytes():
+    app = _details(gzip.compress(_mbr()), name="os.img.gz")
+    _tap(app, "Burn to SD Card")
+    assert app.screen == "fs-burn-verify"
+    plain = _details(gzip.compress(b"\xff" * 64), name="notes.gz")
+    assert "fs-burn" not in {hit["action"] for hit in plain.hits}
+    assert "This file is not a disk image." in _shown(plain)
+
+
 def test_an_image_opens_verification_and_detached_signature_needs_a_companion():
     app = _details(_mbr(), name="os.img")
     _tap(app, "Burn to SD Card")
     assert app.screen == "fs-burn-verify"
     assert "fs-burn-detached" not in {hit["action"] for hit in app.hits}
-    assert "A similar filename.asc file was not found." in _shown(app)
-    assert "Continuing erases the SD card and writes this image." in _shown(app)
+    shown = _shown(app)
+    assert "A similar filename.asc file was not found." in shown
+    assert "How would you like to verify the GPG signature of this file?" in shown
+    assert "Continuing erases the SD card and writes this image." in shown
+    image = app.render()
+    question = next(item for item in app.texts if item["text"].startswith("How would you like"))
+    warning = next(item for item in app.texts if item["text"].startswith("Continuing erases"))
+    assert question["box"][3] < warning["box"][1]
+    assert _shows(image, question["box"], INK) and not _shows(image, question["box"], RED)
+    assert _shows(image, warning["box"], RED) and not _shows(image, warning["box"], INK)
+    skip = next(hit for hit in app.hits if hit["label"] == "Skip Verification")
+    assert skip["box"][3] <= HEIGHT
 
 
 def test_detached_signature_uses_the_gpg_date_and_a_failed_check_does_not_unmount():
