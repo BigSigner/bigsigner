@@ -657,9 +657,9 @@ class GpgUI:
             app._speed_dial(
                 frame,
                 (
-                    ("Load from File", "gpg-load-file", Icons.FILE),
-                    ("Scan QR Code", "gpg-scan-key", Icons.CAMERA),
-                    ("Load from Bitcoin Seed (BIP-85)", "gpg-load-seed", Icons.SEED),
+                    ("Load Key from File", "gpg-load-file", Icons.FILE),
+                    ("Load Key from QR Code", "gpg-scan-key", Icons.CAMERA),
+                    ("Derive Key from Bitcoin Seed (BIP-85)", "gpg-load-seed", Icons.SEED),
                 ),
             )
         app._plus(frame, "toggle-add", Icons.CLOSE if app.add_menu else Icons.PLUS)

@@ -159,11 +159,11 @@ def _review(source="file", good=True):
     _open_load(app)
     assert "gpg-date" not in app.back
     if source == "file":
-        _tap(app, "Load from File")
+        _tap(app, "Load Key from File")
         _tap(app, "SD Card")
         _tap(app, "key.asc")
     else:
-        _tap(app, "Scan QR Code")
+        _tap(app, "Load Key from QR Code")
         app.accept_qr(b"public\x00\xffkey")
     _settle(app)
     return app
@@ -205,7 +205,7 @@ def test_gpg_menu_is_below_file_system_and_all_three_routes_are_available():
     assert app.screen == "gpg" and app.add_menu
     app.render()
     assert {hit["label"] for hit in app.hits} >= {
-        "Load from File", "Scan QR Code", "Load from Bitcoin Seed (BIP-85)",
+        "Load Key from File", "Load Key from QR Code", "Derive Key from Bitcoin Seed (BIP-85)",
     }
     encrypt = next(hit for hit in app.hits if hit["label"] == "Encrypt")
     decrypt = next(hit for hit in app.hits if hit["label"] == "Decrypt")
@@ -1090,12 +1090,12 @@ def test_gpg_screens_save_screenshots(real_backend):
 
     bip = _app(fixture_date=False)
     record.click(bip, "plus")
-    record.click(bip, "Load from Bitcoin Seed (BIP-85)")
+    record.click(bip, "Derive Key from Bitcoin Seed (BIP-85)")
     record.shot(bip, "bip85-no-seed")
     added = bip.session.add_mnemonic(ABANDON.split())
     record.click(bip, "back")
     record.click(bip, "plus")
-    record.click(bip, "Load from Bitcoin Seed (BIP-85)")
+    record.click(bip, "Derive Key from Bitcoin Seed (BIP-85)")
     record.shot(bip, "bip85-seed")
     record.click(bip, "gpg-bip85-pick:" + added["fingerprint"].hex())
     record.shot(bip, "bip85-options")
@@ -1125,7 +1125,7 @@ def test_gpg_screens_save_screenshots(real_backend):
     record.shot(bip, "bip85-working")
     _settle(bip)
     record.shot(bip, "bip85-result")
-    record.click(app, "Scan QR Code")
+    record.click(app, "Load Key from QR Code")
     app.accept_qr(b"test key")
     record.shot(app, "working")
     _settle(app)
@@ -1333,13 +1333,13 @@ def test_bip85_load_asks_for_a_seed_and_imports_one_primary_key():
 
     app = _app()
     _open_load(app)
-    _tap(app, "Load from Bitcoin Seed (BIP-85)")
+    _tap(app, "Derive Key from Bitcoin Seed (BIP-85)")
     app.render()
     assert "Load a seed before deriving a GPG key." in " ".join(item["text"] for item in app.texts)
     added = app.session.add_mnemonic(ABANDON.split())
     _tap(app, "back")
     _open_load(app)
-    _tap(app, "Load from Bitcoin Seed (BIP-85)")
+    _tap(app, "Derive Key from Bitcoin Seed (BIP-85)")
     app.render()
     assert any(item["text"] == "Select Seed" for item in app.texts)
     assert added["fingerprint"].hex() in {item["text"] for item in app.texts}
