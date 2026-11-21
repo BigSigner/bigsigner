@@ -9,6 +9,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import socket
 import struct
 import subprocess
 import sys
@@ -21,6 +22,8 @@ CHECKSUM_LIMIT = 4_194_304
 PASSWORD_LIMIT = 255
 # Linux RNDADDENTROPY is _IOW('R', 0x03, int[2]). The size in the request is 8.
 _RNDADDENTROPY = (1 << 30) | (8 << 16) | (ord("R") << 8) | 3
+# Linux RNDRESEEDCRNG is _IO('R', 0x07). It has no argument.
+_RNDRESEEDCRNG = (ord("R") << 8) | 7
 _SUBKEY_ALGOS = {"ed25519", "cv25519", "rsa3072", "rsa4096"}
 _SUBKEY_USAGES = {"sign", "encr", "auth"}
 
@@ -66,6 +69,94 @@ def mix_kernel_entropy(digest: bytes) -> None:
         raise GpgError("The entropy could not be mixed into the Linux random number generator.") from exc
     finally:
         os.close(fd)
+
+
+def reseed_kernel_rng() -> None:
+    """Ask Linux to fold the input pool into the CRNG immediately.
+
+    ``RNDADDENTROPY`` mixes bytes into the input pool. ``getentropy``,
+    which Libgcrypt 1.11 uses, reads the CRNG. ``RNDRESEEDCRNG`` is what
+    makes that read include the bytes just added. Other kernels have no
+    such request, so this is a no-op away from Linux.
+    """
+    if sys.platform != "linux":
+        return
+    try:
+        fd = os.open("/dev/random", os.O_RDWR)
+    except OSError as exc:
+        raise GpgError("The kernel random number generator could not be reseeded.") from exc
+    try:
+        fcntl.ioctl(fd, _RNDRESEEDCRNG)
+    except OSError as exc:
+        raise GpgError("The kernel random number generator could not be reseeded.") from exc
+    finally:
+        os.close(fd)
+
+
+def _gpg_env(home: Path) -> dict:
+    return dict(os.environ, GNUPGHOME=str(home), LC_ALL="C", LANG="C", TZ="UTC")
+
+
+def _agent_socket(home: Path, env: dict) -> str:
+    try:
+        listed = subprocess.run(
+            ["gpgconf", "--homedir", str(home), "--list-dirs", "agent-socket"],
+            stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        raise GpgError("The GPG agent could not be stopped.") from exc
+    if listed.returncode != 0:
+        raise GpgError("The GPG agent could not be stopped.")
+    path = listed.stdout.decode("utf-8", "replace").strip()
+    if not path or "\n" in path or "\x00" in path:
+        raise GpgError("The GPG agent could not be stopped.")
+    return path
+
+
+def _agent_is_running(home: Path, env: dict) -> bool:
+    """True when this keyring's agent socket still accepts a connection.
+
+    ``gpg-connect-agent --no-autostart`` exits 0 even when no agent is
+    running, so the socket is the check. A missing socket means the agent
+    has ended. Connecting does not start a new agent.
+    """
+    path = _agent_socket(home, env)
+    if not os.path.exists(path):
+        return False
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(2)
+        sock.connect(path)
+    except OSError:
+        return False
+    else:
+        return True
+    finally:
+        sock.close()
+
+
+def stop_gpg_agent(home: Path) -> None:
+    """Stop the agent for this keyring and require that it has ended.
+
+    Libgcrypt fills its pool from the kernel once per process. GnuPG 2.4
+    keeps that pool inside gpg-agent, and the agent does not register a
+    seed file. A new agent, started by the next gpg command, calls
+    ``getentropy`` and therefore reads the reseeded CRNG. The gpg process
+    does the same on its first random draw, including the 32 bytes it reads
+    when ``random_seed`` already exists.
+    """
+    env = _gpg_env(home)
+    try:
+        killed = subprocess.run(
+            ["gpgconf", "--homedir", str(home), "--kill", "gpg-agent"],
+            stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        raise GpgError("The GPG agent could not be stopped.") from exc
+    if killed.returncode != 0:
+        raise GpgError("The GPG agent could not be stopped.")
+    if _agent_is_running(home, env):
+        raise GpgError("The GPG agent is still running.")
 
 
 def quick_add_arguments(fingerprint: str, algo: str, usage: str, expire: str) -> list[str]:
@@ -573,8 +664,13 @@ class GpgBackend:
         self.progress_done = done
         self.progress_total = max(total, 1)
 
-    def command(self, name, args, *, data=None, cwd=None, timestamp=None, checksums=False, agent=False, passphrase=None, progress=None):
+    def command(self, name, args, *, data=None, cwd=None, timestamp=None, checksums=False, agent=False, passphrase=None, progress=None, fresh_rng=False):
         home = self._home()
+        if fresh_rng:
+            # Immediately before gpg, so the process it starts reads the
+            # reseeded kernel. A failure here does not start that command.
+            reseed_kernel_rng()
+            stop_gpg_agent(home)
         if checksums:
             argv = ["sha256sum", *args]
         else:
@@ -585,11 +681,13 @@ class GpgBackend:
                 argv.append("--no-autostart")
             argv += ["--no-auto-key-retrieve", "--no-auto-key-import", "--auto-key-locate", "clear"]
             if timestamp is not None:
-                argv += ["--faked-system-time", str(timestamp)]
+                # Freeze the clock. Restarting gpg-agent takes long enough
+                # that an unfrozen faked clock would move past the typed second.
+                argv += ["--faked-system-time", f"{int(timestamp)}!"]
             if passphrase is not None:
                 argv += ["--pinentry-mode", "loopback", "--passphrase", passphrase]
             argv += args
-        env = dict(os.environ, GNUPGHOME=str(home), LC_ALL="C", LANG="C", TZ="UTC")
+        env = _gpg_env(home)
         if progress is not None and not checksums:
             return self._stream_command(name, argv, data, cwd, env, progress)
         try:
@@ -709,7 +807,7 @@ class GpgBackend:
         """Ask gpg-agent whether this secret keygrip is stored under a passphrase."""
         if not re.fullmatch(r"[0-9A-F]{40}", grip):
             return False
-        env = dict(os.environ, GNUPGHOME=str(self._home()), LC_ALL="C", LANG="C", TZ="UTC")
+        env = _gpg_env(self._home())
         try:
             result = subprocess.run(["gpg-connect-agent", f"keyinfo {grip}", "/bye"],
                                     stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=30)
@@ -741,9 +839,17 @@ class GpgBackend:
         return Outcome(ok, "" if ok else "The key could not be exported.", [result])
 
     def mix_entropy(self, digest: bytes) -> bool:
+        """Mix bytes into Linux, reseed the CRNG, and stop gpg-agent.
+
+        The GPG command that needs this randomness runs only after a later
+        reseed and a confirmed stop. Either failure is raised here, before
+        that command is reached.
+        """
         if not self.supported:
             raise GpgError("GPG commands are not available in the web emulator. Use the BigSigner device.")
         mix_kernel_entropy(digest)
+        reseed_kernel_rng()
+        stop_gpg_agent(self._home())
         return True
 
     def add_subkey(self, fingerprint: str, algo: str, usage: str, expire: str, timestamp: int):
@@ -758,6 +864,7 @@ class GpgBackend:
             timestamp=timestamp,
             agent=True,
             passphrase="",
+            fresh_rng=True,
         )
         if added.returncode:
             return Outcome(False, "The subkey could not be added.", [added])
@@ -849,7 +956,7 @@ class GpgBackend:
             args = ["--pinentry-mode", "loopback", "--passphrase-file", str(passphrase_file),
                     "--yes", "--armor", "--symmetric", "--cipher-algo", "AES256",
                     "--output", output_name, "--", path.name]
-            encrypted = self.command("Encrypt File", args, cwd=path.parent, agent=True)
+            encrypted = self.command("Encrypt File", args, cwd=path.parent, agent=True, fresh_rng=True)
         encrypted = _with_encrypted_name(encrypted, output_name)
         return Outcome(encrypted.returncode == 0, "" if encrypted.returncode == 0 else "The file could not be encrypted.", [encrypted])
 
@@ -908,7 +1015,7 @@ class GpgBackend:
             raise GpgError("The key fingerprint is not valid.")
         args = ["--yes", "--armor", "--detach-sign", "--digest-algo", "SHA256",
                 "--local-user", fingerprint + "!", "--output", output.name, "--", source.name]
-        return self.command("Sign File", args, cwd=source.parent, timestamp=timestamp, agent=True, passphrase="")
+        return self.command("Sign File", args, cwd=source.parent, timestamp=timestamp, agent=True, passphrase="", fresh_rng=True)
 
     def verify(self, relative, storage, timestamp, checksums=False, only=None):
         self._home()

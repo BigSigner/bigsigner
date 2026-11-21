@@ -16,7 +16,8 @@ from bigsigner.gpg import (
     CHECKSUM_NAME, CommandResult, GpgBackend, GpgError, check_manifest_paths, decrypted_filename,
     files_left_unchecked, pgp_encryption_kind,
     looks_like_sha256sums, manifest_filenames, manifest_for_name, mix_kernel_entropy, parse_keys, passphrase_required,
-    progress_amounts, quick_add_arguments, sha256_manifest, signature_is_deterministic, signature_ok,
+    progress_amounts, quick_add_arguments, reseed_kernel_rng, sha256_manifest, signature_is_deterministic, signature_ok,
+    stop_gpg_agent,
 )
 
 VECTORS = Path(__file__).parent / "vectors" / "gpg"
@@ -605,6 +606,112 @@ def test_camera_digest_is_mixed_without_claiming_256_bits(monkeypatch):
     assert seen["argument"] == struct.pack("ii32s", 0, 32, b"\xab" * 32)
     mix_kernel_entropy(b"\xcd" * 64)
     assert seen["argument"] == struct.pack("ii64s", 0, 64, b"\xcd" * 64)
+
+
+def test_reseed_issues_rndreseedcrng_on_linux(monkeypatch):
+    import sys
+
+    seen = {}
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "open", lambda path, _flags: 7)
+    monkeypatch.setattr(os, "close", lambda _fd: None)
+
+    def ioctl(_fd, request, *args):
+        seen["request"] = request
+        seen["args"] = args
+
+    monkeypatch.setattr("bigsigner.gpg.fcntl.ioctl", ioctl)
+    reseed_kernel_rng()
+    assert seen["request"] == (ord("R") << 8) | 7
+    assert seen["args"] == ()
+    monkeypatch.setattr("bigsigner.gpg.fcntl.ioctl", lambda *_args: (_ for _ in ()).throw(OSError("nope")))
+    with pytest.raises(GpgError, match="could not be reseeded"):
+        reseed_kernel_rng()
+
+
+def test_mix_entropy_adds_reseeds_and_stops_before_anything_else(tmp_path, monkeypatch):
+    steps = []
+    monkeypatch.setattr("bigsigner.gpg.mix_kernel_entropy", lambda digest: steps.append(("add", bytes(digest))))
+    monkeypatch.setattr("bigsigner.gpg.reseed_kernel_rng", lambda: steps.append("reseed"))
+    monkeypatch.setattr("bigsigner.gpg.stop_gpg_agent", lambda home: steps.append(("stop", home)))
+    backend = GpgBackend(tmp_path)
+    assert backend.mix_entropy(b"\xab" * 32) is True
+    assert steps == [("add", b"\xab" * 32), "reseed", ("stop", tmp_path)]
+
+    def fail_reseed():
+        raise GpgError("The kernel random number generator could not be reseeded.")
+
+    monkeypatch.setattr("bigsigner.gpg.reseed_kernel_rng", fail_reseed)
+    finished = len(steps)
+    with pytest.raises(GpgError, match="could not be reseeded"):
+        backend.mix_entropy(b"\xcd" * 64)
+    assert steps[finished:] == [("add", b"\xcd" * 64)]
+
+
+def test_stop_gpg_agent_rejects_a_socket_that_still_accepts_connections(tmp_path, monkeypatch):
+    import socket
+
+    # macOS refuses an AF_UNIX path longer than 104 bytes. pytest's tmp_path is longer.
+    sock_path = Path(tempfile.mkdtemp(prefix="bsa")) / "agent"
+
+    def run(argv, **_kwargs):
+        class Result:
+            returncode = 0
+            stdout = str(sock_path).encode() if argv[-1] == "agent-socket" else b""
+            stderr = b""
+        return Result()
+
+    monkeypatch.setattr("bigsigner.gpg.subprocess.run", run)
+    stop_gpg_agent(tmp_path)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(sock_path))
+    server.listen(1)
+    try:
+        with pytest.raises(GpgError, match="still running"):
+            stop_gpg_agent(tmp_path)
+    finally:
+        server.close()
+        shutil.rmtree(sock_path.parent, ignore_errors=True)
+
+
+def test_signing_does_not_start_gpg_when_the_reseed_fails(tmp_path, monkeypatch):
+    root = tmp_path / "sd"
+    root.mkdir()
+    (root / "note.txt").write_bytes(b"hi")
+    monkeypatch.setattr(sdcard, "native_path", lambda relative, storage="sd": root / relative)
+
+    def fail_reseed():
+        raise GpgError("The kernel random number generator could not be reseeded.")
+
+    monkeypatch.setattr("bigsigner.gpg.reseed_kernel_rng", fail_reseed)
+    monkeypatch.setattr("bigsigner.gpg.subprocess.run", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("gpg was started")))
+    with pytest.raises(GpgError, match="could not be reseeded"):
+        GpgBackend(tmp_path / "gpg").sign_file("A" * 40, "note.txt", "sd", 1)
+
+
+def test_aes_encryption_reseeds_and_stops_the_agent_before_gpg(tmp_path, monkeypatch):
+    root = tmp_path / "sd"
+    root.mkdir()
+    (root / "note.txt").write_bytes(b"hi")
+    monkeypatch.setattr(sdcard, "native_path", lambda relative, storage="sd": root / relative)
+    order = []
+    monkeypatch.setattr("bigsigner.gpg.reseed_kernel_rng", lambda: order.append("reseed"))
+    monkeypatch.setattr("bigsigner.gpg.stop_gpg_agent", lambda _home: order.append("stop"))
+
+    def run(argv, **_kwargs):
+        order.append(argv[0])
+
+        class Result:
+            returncode = 1
+            stdout = b""
+            stderr = b""
+
+        return Result()
+
+    monkeypatch.setattr("bigsigner.gpg.subprocess.run", run)
+    outcome = GpgBackend(tmp_path / "gpg").encrypt_symmetric("note.txt", "note.txt.enc.asc", "sd", "secret")
+    assert not outcome.ok
+    assert order[:3] == ["reseed", "stop", "gpg"]
 
 
 def test_keyinfo_passphrase_flag_is_only_p():
