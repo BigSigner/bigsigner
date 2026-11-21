@@ -1,8 +1,12 @@
 """BIP-85 RSA primary keys stay fixed when the certificate signature changes."""
 
-from pathlib import Path
+import builtins
+import importlib
+import os
+import random
 import shutil
 import tempfile
+from pathlib import Path
 
 import pytest
 from embit.bip32 import HDKey
@@ -51,6 +55,48 @@ def test_raw_entropy_is_64_bytes_from_the_bip85_entropy_application():
     assert raw_entropy(root, 1) != first
     with pytest.raises(ValueError):
         raw_entropy(root, 0x80000000)
+
+
+def test_the_prime_search_reads_only_the_bip85_stream(monkeypatch):
+    """The prime search and self-signature stay on the BIP-85 stream.
+
+    A generator that reads the operating system's random source has to mix
+    entropy into the kernel, reseed it, and stop the GPG agent before it
+    runs, the same way signing and AES256 encryption do.
+    """
+    root = _abandon()
+
+    def refused(*_args, **_kwargs):
+        raise AssertionError("The BIP-85 prime search read the operating system's random source.")
+
+    monkeypatch.setattr(os, "urandom", refused)
+    if hasattr(os, "getrandom"):
+        monkeypatch.setattr(os, "getrandom", refused)
+    real_open = os.open
+
+    def guarded_open(path, *args, **kwargs):
+        if os.fsdecode(path) in {"/dev/random", "/dev/urandom"}:
+            refused()
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", guarded_open)
+    real_builtin_open = builtins.open
+
+    def guarded_builtin(file, *args, **kwargs):
+        name = file if isinstance(file, (str, bytes)) else ""
+        if name and os.fsdecode(name) in {"/dev/random", "/dev/urandom"}:
+            refused()
+        return real_builtin_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", guarded_builtin)
+    monkeypatch.setattr(random.Random, "getrandbits", refused)
+    monkeypatch.setattr(random.Random, "randbytes", refused)
+    import bigsigner.bip85gpg as module
+    importlib.reload(module)
+    key = module.derive_rsa(root, 512, 0)
+    packets = module.secret_packets(key, "Ada Lovelace", "ada@example.invalid", signing=False)
+    assert key.n == _ABANDON_512
+    assert key.n.to_bytes((key.n.bit_length() + 7) // 8, "big") in packets
 
 
 def test_the_abandon_seed_recreates_one_rsa_modulus():
