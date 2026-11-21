@@ -644,6 +644,7 @@ def test_multisig_threshold_follows_the_selected_keys():
     assert any(hit["action"] == "ms-create" for hit in app.hits)
     _tap(app, "ms-create")
     assert app.notice == "A multisig needs at least two keys."
+    _tap(app, "Dismiss")
     _tap(app, "dropdown-multisig-m")
     app.render()
     assert {hit["label"] for hit in app.hits if hit["action"].startswith("dropdown-pick-multisig-m-")} == {

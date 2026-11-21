@@ -225,6 +225,7 @@ def test_a_watch_only_wallet_disables_message_signing():
     app.session.add_text(f"wpkh({expression(ABANDON, 'm/84h/0h/0h')})")
     app.screen = "wallet"
     app.wallet_index = 0
+    app.scroll["wallet"] = 10**9
     image = app.render()
     assert not any(hit["label"] == "Sign Message (BIP137)" for hit in app.hits)
     assert ADDRESS_SIGN_ONLY not in " ".join(item["text"] for item in app.texts)

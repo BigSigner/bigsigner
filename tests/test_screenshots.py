@@ -110,7 +110,9 @@ def test_duplicate_seed_warning_saves_screenshots():
     record.shot(app, "already-loaded")
     assert app.screen == "passphrase-ask"
     assert app.notice == "This seed is already loaded."
-    assert _has_color(record.image, (18, 36, 58))
+    assert app.notice_error
+    assert any(hit["action"] == "dismiss-notice" for hit in app.hits)
+    assert _has_color(record.image, RED)
 
 
 def test_delete_key_warnings_save_screenshots():
@@ -177,7 +179,9 @@ def test_camera_without_a_picture_saves_screenshots():
     record.click(app, "Capture")
     record.shot(app, "no-picture")
     assert app.notice == "The camera has not captured a picture yet."
-    assert _has_color(record.image, (18, 36, 58))
+    assert app.notice_error
+    assert any(hit["action"] == "dismiss-notice" for hit in app.hits)
+    assert _has_color(record.image, RED)
 
 
 def test_seed_qr_brightness_saves_screenshots():

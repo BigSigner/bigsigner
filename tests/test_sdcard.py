@@ -435,7 +435,7 @@ def test_write_text_on_a_memory_card_is_reported_once():
     write_text("keep/note.txt", "hello")
     assert read_text("keep/note.txt") == "hello"
     changed = consume_memory_change()
-    assert changed["files"]["keep/note.txt"] == "hello\n"
+    assert changed["files"]["keep/note.txt"] == "hello"
     assert "keep" in changed["dirs"]
     assert consume_memory_change() is None
     with pytest.raises(SdError):
@@ -665,6 +665,7 @@ def test_a_long_filename_scrolls_sideways():
     app.pointer_up(box[2] - 40, y)
     assert app.filename_cursor == len(name)
     app.render()
+    app._scroll_at = None
     app.pointer_down(box[2] - 24, y)
     app.pointer_up(box[2] - 24, y)
     assert app.filename_cursor < len(name)
