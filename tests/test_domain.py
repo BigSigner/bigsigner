@@ -144,7 +144,7 @@ def test_the_same_passphrase_keeps_its_number_until_no_seed_uses_it():
     assert session.passphrases[shared] == 1
     first_key = session.fingerprints[first["fingerprint"]].keys[0]
     assert session.seed_summary(first_key) == "abandon\u2026 + Passphrase1"
-    assert session.generated_from(first_key) == "12 words seed + passphrase1."
+    assert session.generated_from(first_key) == "12 Words Seed + Passphrase1"
     session.delete_key(first["fingerprint"], 0)
     assert session.passphrases[shared] == 1
     session.delete_key(second["fingerprint"], 0)
@@ -153,7 +153,7 @@ def test_the_same_passphrase_keeps_its_number_until_no_seed_uses_it():
     assert session.passphrases[_passphrase_id("shared")] == 2
     again_key = session.fingerprints[again["fingerprint"]].keys[0]
     assert "Passphrase2" in session.seed_summary(again_key)
-    assert session.generated_from(again_key) == "12 words seed + passphrase2."
+    assert session.generated_from(again_key) == "12 Words Seed + Passphrase2"
 
 
 def test_empty_passphrase_is_the_same_seed():
