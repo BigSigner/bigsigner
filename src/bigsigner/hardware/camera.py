@@ -13,7 +13,6 @@ import threading
 from PIL import Image
 
 
-VIEWFINDER = (12, 14, 18)
 CAPTURE_SIZE = (640, 480)
 
 
@@ -23,7 +22,6 @@ class LiveCamera:
     def __init__(self):
         self._camera = None
         self.failed = False
-        self.reported = False
         self.last_qr = None
 
     def frame(self):

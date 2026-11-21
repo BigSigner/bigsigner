@@ -5,7 +5,6 @@ HARDENED = 0x80000000
 SINGLESIG_NATIVE = "singlesig_native"
 SINGLESIG_TAPROOT = "singlesig_taproot"
 MULTISIG_NATIVE = "multisig_native"
-TAPROOT_MULTISIG = "taproot_multisig"
 
 
 class PathError(ValueError):

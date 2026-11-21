@@ -817,10 +817,6 @@ def test_seed_screen_labels_banner_and_wallet_buttons():
                 rows.append(y)
         return rows
 
-        showing = toast_rows(image)
-        assert len(showing) > 20
-        assert max(showing) - min(showing) < 90
-
     def button_color(action):
         box = next(hit["box"] for hit in app.hits if hit["action"] == action)
         return image.getpixel((box[0] + 24, (box[1] + box[3]) // 2))[:3]

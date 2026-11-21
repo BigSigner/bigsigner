@@ -204,7 +204,6 @@ def _with_camera(app: App, camera: LiveCamera):
     if box is None:
         camera.close()
         camera.failed = False
-        camera.reported = False
         camera.last_qr = None
         app.camera_unavailable = False
         return image

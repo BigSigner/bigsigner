@@ -189,10 +189,6 @@ def is_ascii(payload: bytes) -> bool:
     return True
 
 
-def sequence_text(sequence: int) -> str:
-    return f"0x{int(sequence):08X}"
-
-
 # Paths both mempool.space and blockstream.info publish. Neither site has regtest.
 EXPLORER_NETWORKS = (
     ("testnet", "Testnet"),

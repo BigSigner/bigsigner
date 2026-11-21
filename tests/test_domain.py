@@ -1,6 +1,5 @@
 import pytest
 
-from bigsigner.nicknames import normalize_nickname
 from bigsigner.parse import ParseError, parse_key_expression, parse_wallet
 from bigsigner.session import Session, SessionError, _passphrase_id
 from embit import bip32, bip39
@@ -41,13 +40,6 @@ def test_the_longest_fingerprint_name_fits():
     assert max(len(word) for word in COLORS) <= 9
     assert max(len(word) for word in ANIMALS) <= 10
     draw = ImageDraw.Draw(Image.new("RGB", (WIDTH, 40)))
-
-    def fits(size: int, limit: int):
-        name = _widest_animal_name(draw, size)
-        assert len(name) <= 33
-        face = font(size)
-        assert draw.textlength(name, font=face) <= limit
-        assert wrap(draw, name, face, limit) == [name]
 
     def fits_line(size: int, line: str, limit: int):
         face = font(size)
@@ -93,47 +85,6 @@ def _widest_name_line(draw, size: int, which: int) -> str:
     return f"{max(ANIMALS, key=length)} {suffix}"
 
 
-def _widest_animal_name(draw, size: int) -> str:
-    """The reachable fingerprint name with the greatest pixel width at this size."""
-    from bigsigner.names import ADJECTIVES, ANIMALS, COLORS, animal_name
-    from bigsigner.ui.canvas import font
-
-    face = font(size)
-
-    def length(text: str) -> float:
-        return draw.textlength(text, font=face)
-
-    adjective_widths = [length(word) for word in ADJECTIVES]
-    color_widths = [length(word) for word in COLORS]
-    animal_widths = [length(word) for word in ANIMALS]
-    space = length(" ")
-    suffix = max(
-        (left + right for left in "0123456789ABCDEF" for right in "0123456789ABCDEF"),
-        key=length,
-    )
-    suffix_width = length(suffix)
-    widest_adjective = max(adjective_widths)
-    best = -1.0
-    best_name = ""
-    max_q = 0xFFFFFF // len(ADJECTIVES)
-    for quotient in range(max_q + 1):
-        color_index = quotient % len(COLORS)
-        animal_index = (quotient // len(COLORS)) % len(ANIMALS)
-        if quotient < max_q:
-            adjective_index = adjective_widths.index(widest_adjective)
-            adjective_width = widest_adjective
-        else:
-            last = 0xFFFFFF - quotient * len(ADJECTIVES)
-            adjective_index = max(range(last + 1), key=adjective_widths.__getitem__)
-            adjective_width = adjective_widths[adjective_index]
-        total = adjective_width + color_widths[color_index] + animal_widths[animal_index] + 3 * space + suffix_width
-        if total > best:
-            best = total
-            value = quotient * len(ADJECTIVES) + adjective_index
-            best_name = animal_name(value.to_bytes(3, "big") + bytes.fromhex(suffix))
-    return best_name
-
-
 def test_every_24_bit_prefix_has_its_own_name():
     from bigsigner.names import ADJECTIVES, ANIMALS, COLORS, animal_name
 
@@ -153,12 +104,6 @@ def test_unknown_seed_nickname_ends_with_uppercase_hex():
 
     assert animal_name(bytes.fromhex("00000024")).endswith(" 24")
     assert animal_name(bytes.fromhex("010203c9")).endswith(" C9")
-
-
-def test_nickname_collapses_punctuation_and_case():
-    assert normalize_nickname("Hello World") == normalize_nickname("Hello  World")
-    assert normalize_nickname("Hello World") == normalize_nickname("Hello World__")
-    assert normalize_nickname("Hello-World") == normalize_nickname("hello world")
 
 
 def test_seed_nickname_and_duplicate():
@@ -324,15 +269,8 @@ def test_testnet_vpub_requires_coin_type_1():
     session = Session()
     session.set_network("test")
     root = root_of(ABANDON)
-    public = root.derive("m/84h/1h/0h").to_public()
-    from bigsigner.slip132 import display_form
-
-    canonical = public.to_string().replace("xpub", "tpub") if False else None
-    # Derive a real testnet-looking key by rewriting version bytes.
     from bigsigner.slip132 import to_canonical, display_form as show
 
-    main_form = root.derive("m/84h/0h/0h").to_public().to_string()
-    # The path coin type is what the setting checks; use a testnet key at m/84h/1h/0h.
     test_key = root.derive("m/84h/1h/0h").to_public()
     tpub = to_canonical(test_key.to_string(), "test")
     vpub = show(tpub, "test", "singlesig_native")

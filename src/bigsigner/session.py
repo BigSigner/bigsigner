@@ -802,13 +802,6 @@ class Session:
                 return True
         return False
 
-    def _wallet_has_any_account(self, wallet) -> bool:
-        return all(
-            self._can_use_account(fingerprint, wallet.role, wallet.accounts[fingerprint])
-            or self._any_account(fingerprint, wallet.role)
-            for fingerprint in wallet.fingerprints
-        )
-
     def _lowest_account(self, fingerprint, role) -> int:
         if self._seed_for(fingerprint) is not None:
             return 0
@@ -823,20 +816,6 @@ class Session:
         if self._seed_for(fingerprint) is not None:
             return True
         return any(getattr(key, "role", None) == role for key in self._xpubs(fingerprint))
-
-    def _wallets_lost_by_removing(self, key):
-        lost = []
-        for wallet in self.wallets:
-            if key.fingerprint not in wallet.fingerprints:
-                continue
-            remaining = [
-                item
-                for item in self.fingerprints[key.fingerprint].keys
-                if item is not key and (item.has_seed or getattr(item, "role", None) == wallet.role)
-            ]
-            if not remaining:
-                lost.append(wallet)
-        return lost
 
 
 def _keys_cover_role(keys, role: str) -> bool:

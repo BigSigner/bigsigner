@@ -874,11 +874,6 @@ def _has_our_signature(scope, pubkey, taproot: bool) -> bool:
     return any(item == sec for item in witness.items)
 
 
-def _outputs(session, wallet, psbt: PSBT):
-    for index in range(len(psbt.outputs)):
-        _check_output(session, wallet, psbt, index)
-
-
 def output_scope(psbt: PSBT, index: int, output_info=None):
     """Fill missing participant origins without overriding PSBT-supplied claims.
 

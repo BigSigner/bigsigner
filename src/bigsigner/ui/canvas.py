@@ -18,7 +18,6 @@ PAPER = (246, 247, 249)
 WHITE = (255, 255, 255)
 NAVY = (18, 36, 58)
 BLUE = (24, 92, 184)
-LIGHT_BLUE = (58, 146, 216)
 RED = (168, 36, 42)
 WARNING = (138, 96, 0)
 GREEN = (20, 110, 78)
@@ -93,7 +92,6 @@ class Icons:
     COINS = "\uf51e"  # Font Awesome coins
     EYE = "\uf06e"  # Font Awesome eye, for a key expression that is not a seed
     SEED = "\uf4d8"  # Font Awesome seedling
-    SCAN = "\ue900"
     KEY = "\ue901"
     BACK = "\ue904"
     CHECKBOX = "\ue906"

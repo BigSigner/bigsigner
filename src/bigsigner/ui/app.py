@@ -19,7 +19,7 @@ from ..entropy import mnemonic_from_camera, mnemonic_from_coins, mnemonic_from_d
 from ..rpc import split_line
 from ..parse import MAX_MULTISIG_KEYS, KeyQrVerdict, ParseError, verify_key_qr
 from ..paths import HARDENED, MULTISIG_NATIVE, SINGLESIG_NATIVE, SINGLESIG_TAPROOT, coin_type, format_path
-from ..psbt_check import check_loaded_psbt, iter_check_loaded_psbt, psbt_yaml
+from ..psbt_check import check_loaded_psbt, iter_check_loaded_psbt
 from ..psbt_load import TOO_LARGE, UNREADABLE, SpecterParts, explain_not_psbt, is_binary_psbt, psbt_bytes, psbt_text
 from ..psbt_qr import psbt_qr_parts
 from ..address_search import AddressSearch, MAX_INDEX
@@ -370,7 +370,6 @@ class App:
         self._wallet_account_visit = None
         self._wallet_key_target = None
         self._account_warning_action = None
-        self.draft = ""
         self.menu = False
         self.add_menu = False
         self.hits = []
@@ -467,11 +466,7 @@ class App:
         self.seed_grid_max = 0
         self.seed_grid_stick = True
         self.seed_grid_box = None
-        self.address_query = ""
-        self.sd_files = {}
         self.slip_labels = False
-        self.show_secret = False
-        self.show_passphrase = False
         self.passphrase_text = ""
         self.passphrase_cursor = 0
         self.passphrase_mode = "lower"
@@ -497,7 +492,6 @@ class App:
         self.scan_kind = "key"
         self.qr_sequence = QrSequence()
         self.psbt_parts = SpecterParts()
-        self.psbt_yaml_text = ""
         self.psbt_error = ""
         self.psbt_progress_text = ""
         self.psbt_progress_done = 0
@@ -625,7 +619,6 @@ class App:
             "about": self._about,
             "licenses": self._licenses,
             "license": self._license,
-            "editor": self._editor,
             "seed": self._seed,
             "seed-review": self._seed_review,
             "passphrase-ask": self._passphrase_ask,
@@ -1270,26 +1263,6 @@ class App:
         self.qr_sequence.reset()
         self.go("scan")
 
-    def _act_add_seed(self):
-        self.seed_words = []
-        self.word_prefix = ""
-        self.word_cursor = 0
-        self.seed_length = 24
-        self.seed_grid_stick = True
-        self.go("seed")
-
-    def _act_add_text(self):
-        self.draft = ""
-        self.go("editor")
-
-    def _act_seed_undo(self):
-        if self.word_cursor > 0:
-            self._seed_key("backspace")
-        elif self.seed_words:
-            self.seed_words.pop()
-            self.word_prefix = ""
-            self.word_cursor = 0
-
     def _act_passphrase_yes(self):
         self.passphrase_text = ""
         self.passphrase_cursor = 0
@@ -1344,12 +1317,6 @@ class App:
 
     def _act_brightness_up(self):
         self.qr_brightness = min(QR_BRIGHTNESS_MAX, self.qr_brightness + 1)
-
-    def _act_review_sample(self):
-        self.set_error("Load a PSBT from the editor.")
-        self.draft = ""
-        self.go("editor")
-        self.screen_after_editor = "psbt"
 
     def _act_addresses(self):
         """Show Loading… on the wallet. The next render does the heavy open."""
@@ -1473,10 +1440,6 @@ class App:
         "external-verify": _act_external_verify,
         "wallet-import-continue": lambda self: self._finish_wallet_import(),
         "back": lambda self: self.back_one(),
-        "add-seed": _act_add_seed,
-        "add-text": _act_add_text,
-        "seed-undo": _act_seed_undo,
-        "save-text": lambda self: self._save_text(),
         "derive-menu": lambda self: self._open_derive_menu(),
         "derive-bip85": lambda self: self._open_bip85(),
         "bip85-dec": lambda self: self._step_bip85_index(-1),
@@ -1539,7 +1502,6 @@ class App:
         "input-explorer-prev": lambda self: self._step_input_explorer(-1),
         "psbt-op-next": lambda self: self._step_psbt_op(1),
         "psbt-op-prev": lambda self: self._step_psbt_op(-1),
-        "review-sample": _act_review_sample,
         "addresses": _act_addresses,
         "address-receive": _act_address_receive,
         "address-change": _act_address_change,
@@ -1710,8 +1672,6 @@ class App:
             self.selected_fp = bytes.fromhex(hex_fp)
             self.selected_key_index = int(index_text) if separator else 0
             self.slip_labels = False
-            self.show_secret = False
-            self.show_passphrase = False
             self.go("key")
         elif action.startswith("open-wallet-"):
             self.wallet_index = int(action[12:])
@@ -3043,14 +3003,6 @@ class App:
                         y += len(lines) * (NAME_ON_CARD + 8)
         return y + _CARD_PAD
 
-    def _labeled_mono(self, frame: Frame, y: int, label: str, value: str, size: int = 22, fill=INK) -> int:
-        label_face = font(size)
-        value_face = font(size, mono=True)
-        frame.draw.text((MARGIN, y), label, font=label_face, fill=fill)
-        x = MARGIN + frame.draw.textlength(label, font=label_face)
-        frame.draw.text((x, y), value, font=value_face, fill=fill)
-        return y + size + 8
-
     def _stored_key(self):
         """The fingerprint record and the key opened from its card."""
         record = None if self.selected_fp is None else self.session.fingerprints.get(self.selected_fp)
@@ -3323,8 +3275,6 @@ class App:
             return
         self.selected_fp = added["fingerprint"]
         self.selected_key_index = 0
-        self.show_secret = False
-        self.show_passphrase = False
         self.slip_labels = False
         message = "BIP85 child seed was added successfully."
         if "External keys derived from this seed were removed." in added["message"]:
@@ -4231,8 +4181,6 @@ class App:
         self.selected_fp = fingerprint
         self.selected_key_index = index
         self.slip_labels = False
-        self.show_secret = False
-        self.show_passphrase = False
         self.go("key")
 
     def _warn_before_account_change(self, action: str) -> bool:
@@ -5189,11 +5137,6 @@ class App:
             y += line_h
         frame.header("License", "back")
 
-    def _editor(self, frame: Frame):
-        frame.header("Enter text", "back")
-        frame.draw.rounded_rectangle((MARGIN, HEADER + 20, WIDTH - MARGIN, HEADER + 220), radius=12, fill=WHITE, outline=LINE)
-        frame.text(self.draft or "Descriptor, key expression, or seed words", MARGIN + 12, HEADER + 36, size=TITLE_SIZE, mono=True)
-
     def _seed(self, frame: Frame):
         if len(self.seed_words) < self.seed_length:
             self.keyboard_top = self._seed_keyboard_top()
@@ -5960,8 +5903,6 @@ class App:
         self.back = ["keys"]
         self.scroll["key"] = 0
         self.screen = "key"
-        self.show_secret = False
-        self.show_passphrase = False
         self._ask_seed_wallet()
 
     def _ask_seed_wallet(self) -> None:
@@ -6870,14 +6811,6 @@ class App:
         lines = wrap(frame.draw, value, face, WIDTH - 2 * MARGIN) or [""]
         return len(lines) * (size + 8)
 
-    def _draw_wrapped(self, frame: Frame, value: str, y: int, size: int, mono: bool = False) -> int:
-        face = font(size, mono=mono)
-        for line in wrap(frame.draw, value, face, WIDTH - 2 * MARGIN) or [""]:
-            if y >= HEADER:
-                frame.draw.text((MARGIN, y), line, font=face, fill=INK)
-            y += size + 8
-        return y
-
     def _draw_fixed(self, frame: Frame, value: str, y: int, size: int, fill=INK) -> int:
         """Draw `value` in monospace, 22 characters to a line, dropping nothing."""
         face = font(size, mono=True)
@@ -7042,19 +6975,6 @@ class App:
         self.word_prefix = ""
         self.word_cursor = 0
         self.seed_grid_stick = True
-
-    def _save_text(self):
-        if not self.draft.strip():
-            self.set_error("Enter a descriptor, key expression, or seed words.")
-            return
-        try:
-            added = self.session.add_text(self.draft)
-        except SessionError as exc:
-            self.set_error(str(exc))
-            return
-        self.set_notice(added["message"])
-        self.screen = "wallets" if self.session.wallets else "keys"
-        self.menu = False
 
     def _seed_wallet_index(self, role: str):
         if self.selected_fp is None:
@@ -7716,7 +7636,6 @@ class App:
         )
         self._psbt_heights = {}
         self._psbt_sheet = None
-        self.psbt_yaml_text = psbt_yaml(checked)
         self.psbt_outputs_open = True
         self.psbt_inputs_open = self.psbt_view["inputs_open"]
         self.psbt_change_open = bool(self.psbt_view["change_open"])
@@ -9062,10 +8981,3 @@ def load_psbt(app: App, raw: str):
     app.review = review_psbt(app.session, app.wallet_index, raw)
     app.psbt_text = raw
     app.screen = "review"
-
-
-def sign_loaded(app: App, fingerprint: bytes):
-    if app.review is None:
-        raise ReviewError("Load a transaction first.")
-    sign_with(app.session, app.wallet_index, app.review["psbt"], fingerprint)
-    app.set_notice("A signature was added successfully.")

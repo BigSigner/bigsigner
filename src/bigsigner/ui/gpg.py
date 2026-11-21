@@ -92,7 +92,6 @@ class GpgUI:
         self.expire_clock = dict(year=2027, month=6, day=15, hour=0)
         self.sign_clock = dict(year=2026, month=6, day=15, hour=0, minute=0)
         self.sign_fingerprint = ""
-        self.sign_algorithm = ""
         self.sign_relative = ""
         self.sign_storage = "sd"
         self.sign_folder = False
@@ -338,13 +337,13 @@ class GpgUI:
         elif action == "gpg-sign":
             key = self.selected
             if key is not None:
-                self._begin_sign(key.fingerprint, key.algorithm, bool(key.secret_available), key.needs_passphrase)
+                self._begin_sign(key.fingerprint, bool(key.secret_available), key.needs_passphrase)
         elif action.startswith("gpg-sign-subkey:"):
             key = self.selected
             index = int(action.split(":", 1)[1])
             if key is not None and 0 <= index < len(key.subkeys):
                 sub = key.subkeys[index]
-                self._begin_sign(sub.get("fingerprint", ""), sub.get("algorithm", ""), bool(sub.get("secret")), bool(sub.get("needs_passphrase")))
+                self._begin_sign(sub.get("fingerprint", ""), bool(sub.get("secret")), bool(sub.get("needs_passphrase")))
         elif action == "gpg-sign-file":
             app._open_sd("gpg-sign-file")
         elif action == "gpg-sign-folder":
@@ -1578,11 +1577,10 @@ class GpgUI:
             return ("Sign File", action, False, SIGN_PASSPHRASE_NOTE)
         return ("Sign File", action, True, "")
 
-    def _begin_sign(self, fingerprint, algorithm, secret, needs_passphrase=False):
+    def _begin_sign(self, fingerprint, secret, needs_passphrase=False):
         if not secret or not fingerprint or needs_passphrase:
             return
         self.sign_fingerprint = fingerprint
-        self.sign_algorithm = algorithm
         app = self.app
         app.camera_frames = []
         app.camera_final = b""

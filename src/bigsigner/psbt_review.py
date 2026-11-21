@@ -5,8 +5,7 @@ from embit.psbt import PSBT, PSBTError
 from embit.script import Script
 from embit.transaction import SIGHASH, Transaction, TransactionInput, TransactionOutput, Witness
 
-from .paths import HARDENED, classify_path, format_path, parse_path, path_network_mismatch
-from .session import SessionError, _account_path, _seed_root
+from .session import SessionError, _seed_root
 
 LOCKTIME_THRESHOLD = 500_000_000
 SEQUENCE_FINAL = 0xFFFFFFFF
@@ -139,67 +138,6 @@ def _derivations(scope) -> list[tuple[bytes, list[int]]]:
     return found
 
 
-def _locate(session, wallet, derivations, script, accounts=None, required=True):
-    by_fingerprint = {}
-    for fingerprint, path in derivations:
-        if fingerprint in wallet.fingerprints:
-            by_fingerprint.setdefault(fingerprint, []).append(path)
-    if len(by_fingerprint) != len(wallet.fingerprints):
-        if required:
-            raise ReviewError("An input does not belong to the selected wallet.")
-        return None
-    branches = set()
-    indexes = set()
-    found_accounts = {}
-    for fingerprint in wallet.fingerprints:
-        paths = by_fingerprint[fingerprint]
-        if len(paths) != 1:
-            raise ReviewError("An input has more than one derivation for the same key.")
-        path = paths[0]
-        expected_prefix = _account_path(session.network, wallet.role, 0)[:-1]
-        # The account is the hardened step at the account position, not a fixed 0.
-        parsed = _split_wallet_path(path, wallet.role, session.network)
-        branches.add(parsed["branch"])
-        indexes.add(parsed["index"])
-        found_accounts[fingerprint] = parsed["account"]
-        del expected_prefix
-    if len(branches) != 1 or len(indexes) != 1:
-        raise ReviewError(
-            "A multisig input mixes receive and change, or mixes address indexes."
-        )
-    branch = branches.pop()
-    index = indexes.pop()
-    if accounts is not None and found_accounts != accounts:
-        return None
-    trial = dict(wallet.accounts)
-    trial.update(found_accounts)
-    derived = _script_at(session, wallet, trial, branch, index)
-    if derived != script:
-        raise ReviewError("An input's script does not match the derived wallet script.")
-    return {"accounts": found_accounts, "branch": branch, "index": index}
-
-
-def _split_wallet_path(path: list[int], role: str, network: str) -> dict:
-    if role == "multisig_native":
-        if len(path) != 6:
-            raise ReviewError("An input derivation does not include the address index.")
-        account_path, branch, index = path[:4], path[4], path[5]
-    else:
-        if len(path) != 5:
-            raise ReviewError("An input derivation does not include the address index.")
-        account_path, branch, index = path[:3], path[3], path[4]
-    mismatch = path_network_mismatch(path, network, address=True)
-    if mismatch:
-        raise ReviewError(mismatch)
-    try:
-        parsed_role, account = classify_path(account_path, network)
-    except Exception as exc:
-        raise ReviewError("An input uses a derivation path this wallet does not use.") from exc
-    if parsed_role != role or branch > 1 or index & HARDENED or branch & HARDENED:
-        raise ReviewError("An input uses a derivation path this wallet does not use.")
-    return {"account": account, "branch": branch, "index": index}
-
-
 def _one_account_tuple(wallet, inputs: list[dict]) -> dict:
     tuples = [tuple(sorted(item["accounts"].items())) for item in inputs]
     if len(set(tuples)) != 1:
@@ -325,12 +263,6 @@ def _net(network: str):
     if network == "regtest":
         return NETWORKS["regtest"]
     return NETWORKS["test"]
-
-
-def apply_accounts(session, wallet_index: int, accounts: dict):
-    wallet = session._wallet(wallet_index)
-    for fingerprint, account in accounts.items():
-        session.set_account(wallet_index, fingerprint, account)
 
 
 def sign_with(session, wallet_index: int, psbt: PSBT, fingerprint: bytes):
