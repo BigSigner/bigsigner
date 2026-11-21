@@ -25,6 +25,7 @@ SIGN_NOTE = "Signing a file requires this key's private key."
 SIGN_PASSPHRASE_NOTE = "Signing a file requires a key with no passphrase."
 SIGN_TIME_NOTE = "This time is written on the signature. The air-gapped device has no reliable clock."
 BIP85_EXPIRE_NOTE = "This date is written on the certificate. It does not change the RSA private key."
+BIP85_WAIT_NOTE = "This can take over a minute."
 ENTROPY_INDEX_NOTE = (
     "Choose a unique index that will not be used for other purposes. "
     "A good index could be the number of seconds since 1970-01-01."
@@ -769,7 +770,9 @@ class GpgUI:
                   "bip85": "Creating a GPG Key…", "encrypt-list": "Listing GPG Keys…",
                   "encrypt": "Encrypting File…", "decrypt-inspect": "Reading Encrypted File…",
                   "decrypt": "Decrypting File…"}
-        frame.text(labels.get(self.job_kind, "Working…"), MARGIN, HEADER + 40, size=BODY_SIZE)
+        y = frame.text(labels.get(self.job_kind, "Working…"), MARGIN, HEADER + 40, size=BODY_SIZE)
+        if self.job_kind == "bip85":
+            frame.text(BIP85_WAIT_NOTE, MARGIN, y + 8, size=28, fill=MUTED)
         self.work_shown = True
 
     def _verify_progress(self, frame):

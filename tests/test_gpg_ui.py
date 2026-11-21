@@ -1378,6 +1378,11 @@ def test_bip85_load_asks_for_a_seed_and_imports_one_primary_key():
     _tap(app, "Set Expiration")
     assert app.gpg.bip85_expires == dict(year=2026, month=6, day=15)
     _tap(app, "Create Key")
+    assert app.screen == "gpg-working"
+    app.render()
+    texts = [item["text"] for item in app.texts]
+    assert "Creating a GPG Key…" in texts
+    assert "This can take over a minute." in texts
     _settle(app)
     kind, data, _timestamp = app.gpg.backend.calls[-1]
     assert kind == "import"
