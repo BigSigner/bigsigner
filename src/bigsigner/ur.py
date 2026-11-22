@@ -17,6 +17,7 @@ from embit.ec import PublicKey
 from embit.networks import NETWORKS
 
 from .paths import HARDENED, MULTISIG_NATIVE, SINGLESIG_TAPROOT, format_index
+from .qr import PLAIN_QR_MAX
 from .session import SessionError, _public_for
 
 # 256 four-letter words, concatenated. Minimal form keeps the first and last letter.
@@ -47,6 +48,59 @@ _COIN_INFO = 305
 
 def descriptor_ur(session, wallet_index: int) -> str:
     """Lowercase ``ur:crypto-output/...`` for one wallet. The QR uppercases it."""
+    return encode_ur("crypto-output", _descriptor_cbor(session, wallet_index))
+
+
+def descriptor_ur_parts(session, wallet_index: int) -> list[str]:
+    """One crypto-output UR, or fountain parts when that UR is longer than one code.
+
+    Each part stays within ``PLAIN_QR_MAX`` characters, the size a camera can
+    read from this panel. Parts 1 through N are the simple fountain fragments.
+    """
+    cbor = _descriptor_cbor(session, wallet_index)
+    single = encode_ur("crypto-output", cbor)
+    if len(single) <= PLAIN_QR_MAX:
+        return [single]
+    return fountain_parts("crypto-output", cbor, PLAIN_QR_MAX)
+
+
+def fountain_parts(type_name: str, message: bytes, max_chars: int) -> list[str]:
+    """Fountain parts of one UR message, each no longer than ``max_chars``."""
+    checksum = zlib.crc32(message) & 0xFFFFFFFF
+    best = 1
+    low = 1
+    high = len(message)
+    while low <= high:
+        width = (low + high) // 2
+        parts = _fountain_at(type_name, message, width, checksum)
+        if all(len(part) <= max_chars for part in parts):
+            best = width
+            low = width + 1
+        else:
+            high = width - 1
+    return _fountain_at(type_name, message, best, checksum)
+
+
+def _fountain_at(type_name: str, message: bytes, width: int, checksum: int) -> list[str]:
+    count = max(1, (len(message) + width - 1) // width)
+    padded = message + (b"\x00" * (count * width - len(message)))
+    parts = []
+    for index in range(count):
+        chunk = padded[index * width : (index + 1) * width]
+        body = _array(
+            [
+                _uint(index + 1),
+                _uint(count),
+                _uint(len(message)),
+                _uint(checksum),
+                _bstr(chunk),
+            ]
+        )
+        parts.append(f"ur:{type_name}/{index + 1}-{count}/{encode_minimal(body)}")
+    return parts
+
+
+def _descriptor_cbor(session, wallet_index: int) -> bytes:
     wallet = session.wallets[wallet_index]
     keys = [
         _public_for(session, fingerprint, wallet.role, wallet.accounts[fingerprint])
@@ -54,7 +108,7 @@ def descriptor_ur(session, wallet_index: int) -> str:
     ]
     if wallet.role == MULTISIG_NATIVE:
         keys = sorted(keys, key=lambda key: key.xpub.derive("m/0/0").sec())
-    return encode_ur("crypto-output", _crypto_output(keys, wallet.role, wallet.threshold, session.network))
+    return _crypto_output(keys, wallet.role, wallet.threshold, session.network)
 
 
 def encode_ur(type_name: str, cbor: bytes) -> str:

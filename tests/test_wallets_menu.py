@@ -84,6 +84,7 @@ def test_show_descriptor_opens_a_qr_with_the_text_below_it():
     app.render()
     assert not any(hit["action"] == "zoom-in" for hit in app.hits)
     assert any(hit["action"] == "qr-form-next" for hit in app.hits)
+    assert not any(hit["action"] == "qr-part-next" for hit in app.hits)
     assert any(hit["action"] == "brightness-up" for hit in app.hits)
     assert app.qr_scroll_max > 0
     assert app._qr_payload().startswith("UR:CRYPTO-OUTPUT/")
@@ -161,6 +162,37 @@ def test_a_long_descriptor_has_no_plain_qr():
             ink_y.append(y)
     assert muted_y
     assert not ink_y or min(muted_y) < min(ink_y)
+
+
+def test_a_long_descriptor_ur_steps_through_its_parts():
+    from bigsigner.qr import PLAIN_QR_MAX
+    from test_qr_transport import _NINE
+
+    app = App()
+    app.session.set_network("test")
+    app.session.add_text(_NINE)
+    app.screen = "wallet"
+    app.wallet_index = 0
+    app.notice = ""
+    app._act("show-descriptor")
+    app.qr_hint_until = 0
+    app.render()
+    count = len(app._descriptor_ur_parts())
+    assert count > 1
+    assert any(mark["text"] == f"1 of {count}" for mark in app.texts)
+    first = app._qr_payload()
+    assert first.startswith("UR:CRYPTO-OUTPUT/1-")
+    assert len(first) <= PLAIN_QR_MAX
+    assert all(len(part) <= PLAIN_QR_MAX for part in app._descriptor_ur_parts())
+    part_row = next(hit for hit in app.hits if hit["action"] == "qr-part-next")["box"][1]
+    brightness = next(hit for hit in app.hits if hit["action"] == "brightness-up")["box"][1]
+    format_row = next(hit for hit in app.hits if hit["action"] == "qr-form-next")["box"][1]
+    assert part_row < brightness < format_row
+    app._act("qr-part-next")
+    app.render()
+    assert any(mark["text"] == f"2 of {count}" for mark in app.texts)
+    assert app._qr_payload().startswith("UR:CRYPTO-OUTPUT/2-")
+    assert app._qr_payload() != first
 
 
 def test_scrolling_the_descriptor_reuses_one_picture():

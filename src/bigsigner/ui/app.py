@@ -57,7 +57,7 @@ from ..sdcard import (
 from ..licenses import NOTICES
 from ..seedqr import compact_bytes
 from ..slip132 import display_form, label_of
-from ..ur import descriptor_ur
+from ..ur import descriptor_ur_parts
 from .psbt_screen import (
     _section_chevron,
     _wrap_name,
@@ -409,6 +409,9 @@ class App:
         self.seed_format = 0
         self.qr_brightness = QR_BRIGHTNESS_DEFAULT
         self.descriptor_format = 0
+        self.descriptor_ur_part = 0
+        self._descriptor_ur_key = None
+        self._descriptor_ur_parts_cache = []
         self.review = None
         self.psbt_checked = None
         self.psbt_accounts = None
@@ -1501,6 +1504,8 @@ class App:
         "seed-format-prev": lambda self: self._step_seed_format(-1),
         "qr-form-next": lambda self: self._step_qr_format(1),
         "qr-form-prev": lambda self: self._step_qr_format(-1),
+        "qr-part-next": lambda self: self._step_descriptor_part(1),
+        "qr-part-prev": lambda self: self._step_descriptor_part(-1),
         "zoom-close": _act_zoom_close,
         "brightness-down": _act_brightness_down,
         "brightness-up": _act_brightness_up,
@@ -7220,6 +7225,7 @@ class App:
         self.qr_text = self.session.descriptor_text(self.wallet_index)
         self.qr_kind = "descriptor"
         self.descriptor_format = 0
+        self.descriptor_ur_part = 0
         self.qr_scroll = 0
         self.qr_zoom = None
         self.qr_hint_until = time.monotonic() + QR_HINT_HOLD
@@ -7260,12 +7266,36 @@ class App:
             return
         self._step_key_qr(delta)
 
+    def _step_descriptor_part(self, delta: int):
+        parts = self._descriptor_ur_parts()
+        if len(parts) < 2:
+            return
+        self.descriptor_ur_part = (self.descriptor_ur_part + delta) % len(parts)
+        self.qr_scroll = 0
+        self.qr_zoom = None
+
+    def _descriptor_ur_parts(self) -> list[str]:
+        if self.wallet_index >= len(self.session.wallets):
+            return []
+        text = self.session.descriptor_text(self.wallet_index)
+        key = (self.wallet_index, text)
+        if self._descriptor_ur_key != key:
+            self._descriptor_ur_parts_cache = [
+                part.upper() for part in descriptor_ur_parts(self.session, self.wallet_index)
+            ]
+            self._descriptor_ur_key = key
+            self.descriptor_ur_part = 0
+        return self._descriptor_ur_parts_cache
+
     def _descriptor_qr_payload(self) -> str:
         text = self.session.descriptor_text(self.wallet_index)
         self.qr_text = text
         if DESCRIPTOR_FORMATS[self.descriptor_format] == "plain":
             return text
-        return descriptor_ur(self.session, self.wallet_index).upper()
+        parts = self._descriptor_ur_parts()
+        if not parts:
+            return ""
+        return parts[self.descriptor_ur_part % len(parts)]
 
     def _step_key_qr(self, delta: int):
         count = len(self._key_qr_formats())
@@ -7402,6 +7432,8 @@ class App:
             title = "QR & content"
             show_zoom = True
             unavailable = False
+            part_count = 1
+            part_index = 0
         else:
             if self.wallet_index >= len(self.session.wallets):
                 return None
@@ -7415,14 +7447,23 @@ class App:
             unavailable = (
                 DESCRIPTOR_FORMATS[self.descriptor_format] == "plain" and len(payload) > PLAIN_QR_MAX
             )
+            part_count = 1
+            part_index = 0
+            if DESCRIPTOR_FORMATS[self.descriptor_format] == "ur":
+                part_count = max(1, len(self._descriptor_ur_parts()))
+                part_index = self.descriptor_ur_part % part_count
         if show_zoom:
             zoom_y = HEIGHT - 88 - 12 - 64 if format_name else HEIGHT - 100
             bright_y = zoom_y - 12 - 52
         else:
             zoom_y = 0
             bright_y = HEIGHT - 88 - 12 - 52
+        part_y = 0
         view_top = HEADER + 8
         view_bottom = bright_y - 4
+        if part_count > 1:
+            part_y = bright_y - 12 - 52
+            view_bottom = part_y - 4
         view_h = view_bottom - view_top
         line_h = TITLE_SIZE + 8
         text_gap = 4
@@ -7449,6 +7490,9 @@ class App:
             text_gap=text_gap,
             tail=tail,
             unavailable=unavailable,
+            part_count=part_count,
+            part_index=part_index,
+            part_y=part_y,
         )
 
     def _qr_strip_identity(self, layout):
@@ -7484,6 +7528,14 @@ class App:
             else (0, layout.view_top, WIDTH, layout.view_bottom)
         )
         self._brightness_control(frame, layout.bright_y)
+        if layout.part_count > 1:
+            self._choice_control(
+                frame,
+                layout.part_y,
+                f"{layout.part_index + 1} of {layout.part_count}",
+                "qr-part-prev",
+                "qr-part-next",
+            )
         if layout.show_zoom:
             frame.button(layout.zoom_y, "Zoom In", "zoom-in")
         if layout.format_name:

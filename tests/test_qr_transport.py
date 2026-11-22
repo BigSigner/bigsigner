@@ -10,7 +10,7 @@ from bigsigner.fountain import FountainDecoder, part_from_cbor
 from bigsigner.scan import QrSequence
 from bigsigner.session import Session
 from bigsigner.ui.app import App
-from bigsigner.ur import descriptor_ur
+from bigsigner.ur import descriptor_ur, descriptor_ur_parts
 from test_domain import ABANDON, expression
 
 # The first twenty fountain parts of a 256-byte UR, from URKit's encoder test.
@@ -73,6 +73,47 @@ def test_a_ur_round_trip_is_the_same_descriptor():
     sequence = QrSequence()
     decoded = sequence.take(text, "main", "QR code", "descriptor")
     assert decoded == session.descriptor_text(0)
+    assert descriptor_ur_parts(session, 0) == [descriptor_ur(session, 0)]
+
+
+# The 1-of-9 testnet descriptor from the dense UR screenshot.
+_NINE = (
+    "wsh(sortedmulti(1,"
+    "[78263ede/48h/1h/0h/2h]tpubDE1AWwEksQP8dKV7JfdFskcRYS6QTDC1BdMxB4N5zYLhM8b7Tv7U6TfdeKD6YHMpLukUBwsMh1TrCqiGgcFxGG3QTgpmzzG9puM7SmFHPeR/<0;1>/*,"
+    "[42c649e1/48h/1h/1h/2h]tpubDFTvq7adqjwbgrqRpJBapZa47wMmaEaDBAp9hseHF2GFjnHA2c8EAVcxmkdE21sZc823NbGxUFpN6H5BEy7f8kSdwg14fGkrmPD17qfds5S/<0;1>/*,"
+    "[c0773863/48h/1h/0h/2h]tpubDEV7XYEWoxkvLvNW7sewZVAUQ23iErF2FvuGcBQLeCBBysEVhhajevWNjxnGowQar3JTKYL6gch9Epk4XeJ5B2ggsdSrQCq19sAMiwCG8DN/<0;1>/*,"
+    "[a63dbf9c/48h/1h/0h/2h]tpubDFkzQBxAozrkKHVfJjrEQkwcYGXs4G5rSv1yCLkmrXtw72rirsqqEEL8ZGYRtaE1nWy6dYbPC8wgaFyXicoToufYCMqGdorCB1G4UNJmGuJ/<0;1>/*,"
+    "[91586180/48h/1h/0h/2h]tpubDExY1akD4ceV7sFxYchbG9eMmeJUdoMPdEiUfceVH3z3e9tnvLb5ZtgyWcKhW7XpoijMovRh4K642odxa5JLqtkXNom3nFrTGVREJrp2RG9/<0;1>/*,"
+    "[73c5da0a/48h/1h/0h/2h]tpubDFH9dgzveyD8zTbPUFuLrGmCydNvxehyNdUXKJAQN8x4aZ4j6UZqGfnqFrD4NqyaTVGKbvEW54tsvPTK2UoSbCC1PJY8iCNiwTL3RWZEheQ/<0;1>/*,"
+    "[55670d62/48h/1h/0h/2h]tpubDEacMKeWtXRyUP2VFNGSRa8QPfgP4ax6E4q2kPitt4uFfypUmmVYbfigbojGPbjTt89dXrtxvATjH1SuPVVVTPTXdfw53gGoqCVyZP3gsW7/<0;1>/*,"
+    "[b30afc03/48h/1h/0h/2h]tpubDFCWTtxg3rmCEML5GnuERA6VzSgfsPSEvTnJzzdDALuLWxQM8eNssp1ZDLyREsDtPnBu8JdPBtfdSNzwcQKdKBfMcV35MGDCrTLJDxic6x3/<0;1>/*,"
+    "[82992891/48h/1h/0h/2h]tpubDEebXU7BC9Rv2qf3iMXFge7ZZvFnmAqCFqiuhAEE4DJZHydPvPiU6F89waVyFKvcoXa8EfcJF1ugewdcbh9WsEsywgE3e2Gromoz9BcLb5U/<0;1>/*"
+    "))#s66wt5vz"
+)
+
+
+def test_a_long_descriptor_ur_splits_into_scannable_parts():
+    from bigsigner.parse import parse_wallet
+    from bigsigner.qr import PLAIN_QR_MAX
+
+    session = Session()
+    session.set_network("test")
+    session.add_text(_NINE)
+    parts = descriptor_ur_parts(session, 0)
+    assert len(parts) > 1
+    assert all(len(part) <= PLAIN_QR_MAX for part in parts)
+    assert all(part.startswith("ur:crypto-output/") for part in parts)
+    sequence = QrSequence()
+    decoded = None
+    for part in parts:
+        decoded = sequence.take(part.upper(), "test", "QR code", "descriptor")
+    assert decoded
+    original = parse_wallet(session.descriptor_text(0), "test")
+    rebuilt = parse_wallet(decoded, "test")
+    assert rebuilt.threshold == original.threshold == 1
+    assert sorted((key.fingerprint, key.account) for key in rebuilt.keys) == sorted(
+        (key.fingerprint, key.account) for key in original.keys
+    )
 
 
 def test_scanning_a_ur_opens_the_wallet_flow():
