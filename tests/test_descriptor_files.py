@@ -1,4 +1,4 @@
-"""Specter Desktop JSON, Specter DIY addwallet commands, and Bitcoin Core descriptor files."""
+"""Specter Desktop JSON, Specter DIY addwallet commands, multisig setup files, and Bitcoin Core descriptor files."""
 
 import json
 
@@ -6,10 +6,11 @@ import pytest
 
 from bigsigner.descriptor_files import (
     descriptor_from_bitcoin_core,
+    descriptor_from_multisig_setup,
     descriptor_from_specter_desktop,
     descriptor_from_specter_diy,
 )
-from bigsigner.parse import ParseError
+from bigsigner.parse import ParseError, parse_wallet
 from bigsigner.scan import classify_content
 from bigsigner.sdcard import mount_memory, unmount_memory
 from bigsigner.ui.app import App
@@ -94,6 +95,74 @@ def test_a_specter_diy_command_keeps_the_descriptor_and_drops_the_name():
     assert descriptor_from_specter_diy(f"Addwallet Cold&{COMBINED}") is None
     assert descriptor_from_specter_diy("addwallet Cold&") is None
     assert classify_content(f"addwallet {COMBINED}", "test").kind == "unknown"
+
+
+def _multisig_setup(header, *, mark="'", policy="2 of 2", script="P2WSH", derivation_label="Derivation"):
+    return (
+        f"{header}\n#\n"
+        "Name: Account #1\n"
+        f"Policy: {policy}\n"
+        f"Format: {script}\n\n"
+        f"{derivation_label}: m/48{mark}/1{mark}/1{mark}/2{mark}\n"
+        "42C649E1: tpubDFTvq7adqjwbgrqRpJBapZa47wMmaEaDBAp9hseHF2GFjnHA2c8EAVcxmkdE21sZc823NbGxUFpN6H5BEy7f8kSdwg14fGkrmPD17qfds5S\n\n"
+        f"{derivation_label}: m/48{mark}/1{mark}/2{mark}/2{mark}\n"
+        "73C5DA0A: tpubDEPGZXGPF2v3uNGTWHteRSQnZdEFfMvh6Dcp3DykkBE48hTA6pe3Es6nWH5dAThPyvqmZGmZqQhTw5kxqgR5uJW6Ei2VWyAAN92yLcYBvzV\n"
+    )
+
+
+def test_coldcard_bluewallet_and_keystone_multisig_files_are_one_descriptor():
+    headers = (
+        "# Coldcard Multisig setup file (created by Sparrow)",
+        "# BlueWallet Vault Multisig setup file (created by Sparrow)",
+        "# Keystone Multisig setup file (created by Sparrow)",
+    )
+    descriptors = [descriptor_from_multisig_setup(_multisig_setup(header)) for header in headers]
+    assert descriptors[0] == descriptors[1] == descriptors[2]
+    hardened = descriptor_from_multisig_setup(_multisig_setup(headers[0], mark="h"))
+    named = descriptor_from_multisig_setup(_multisig_setup(headers[0]).replace("Account #1", "Other name"))
+    legacy = descriptor_from_multisig_setup(_multisig_setup(headers[0], derivation_label="# derivation"))
+    folded = descriptor_from_multisig_setup(_multisig_setup(headers[0]).replace("Policy:", "policy:").replace("Format: P2WSH", "format: p2wsh"))
+    for text in (descriptors[0], hardened, named, legacy, folded):
+        parsed = parse_wallet(text, "test")
+        assert parsed.threshold == 2
+        assert [key.fingerprint.hex() for key in parsed.keys] == ["42c649e1", "73c5da0a"]
+        assert [key.account for key in parsed.keys] == [1, 2]
+        assert [key.branch_note for key in parsed.keys] == ["both", "both"]
+    assert descriptor_from_multisig_setup("Name: Account #1\n") is None
+    assert classify_content(_multisig_setup(headers[0]), "test").kind == "descriptor"
+
+
+def test_a_multisig_setup_file_refuses_another_format_or_a_policy_that_does_not_match():
+    header = "# Coldcard Multisig setup file (created by Sparrow)"
+    with pytest.raises(ParseError, match="does not use P2WSH"):
+        descriptor_from_multisig_setup(_multisig_setup(header, script="P2SH"))
+    with pytest.raises(ParseError, match="policy of 2 of 3, but contains 2 keys"):
+        descriptor_from_multisig_setup(_multisig_setup(header, policy="2 of 3"))
+    repeated = _multisig_setup(header) + "Policy: 2 of 2\n"
+    with pytest.raises(ParseError, match="policy could not be read"):
+        descriptor_from_multisig_setup(repeated)
+    early = _multisig_setup(header).replace(
+        "Derivation: m/48'/1'/1'/2'\n42C649E1:",
+        "42C649E1:",
+        1,
+    )
+    with pytest.raises(ParseError, match="key before its derivation"):
+        descriptor_from_multisig_setup(early)
+    with pytest.raises(Exception, match="does not use P2WSH"):
+        classify_content(_multisig_setup(header, script="P2WSH-P2SH"), "test")
+
+
+def test_a_multisig_setup_file_loads_the_wallet():
+    app = App()
+    app.session.set_network("test")
+    app.screen = "scan"
+    app.scan_kind = "descriptor"
+    app.accept_qr(_multisig_setup("# Keystone Multisig setup file (created by Sparrow)"))
+    assert app.screen == "external-review"
+    keys = app.wallet_plan["parsed"].keys
+    assert [key.fingerprint.hex() for key in keys] == ["42c649e1", "73c5da0a"]
+    assert [key.account for key in keys] == [1, 2]
+    assert app.wallet_plan["parsed"].threshold == 2
 
 
 def test_a_specter_diy_command_loads_the_descriptor():

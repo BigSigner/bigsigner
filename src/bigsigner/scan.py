@@ -6,6 +6,7 @@ from .bbqr import BbqrError, join_bbqr, split_bbqr, text_from_bbqr
 from .bsms import descriptor_from_bsms
 from .descriptor_files import (
     descriptor_from_bitcoin_core,
+    descriptor_from_multisig_setup,
     descriptor_from_specter_desktop,
     descriptor_from_specter_diy,
 )
@@ -83,6 +84,12 @@ def classify_content(text: str, network: str) -> ParsedContent:
     diy = descriptor_from_specter_diy(raw)
     if diy is not None:
         return ParsedContent("descriptor", diy)
+    try:
+        setup = descriptor_from_multisig_setup(raw)
+    except ParseError as exc:
+        raise SessionError(str(exc)) from exc
+    if setup is not None:
+        return ParsedContent("descriptor", setup)
     try:
         core = descriptor_from_bitcoin_core(raw)
     except ParseError as exc:

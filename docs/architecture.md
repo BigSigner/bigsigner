@@ -34,7 +34,7 @@ Wallets are descriptors built from those keys. Changing the network drops wallet
 | `paths.py` | The three supported derivation templates and the network coin type. `path_network_mismatch` names both networks only after validating the rest of the account or address path; import, PSBT, and message-signing checks preserve that explanation. |
 | `slip132.py` | `zpub`, `Zpub`, `vpub`, and `Vpub`, converted to `xpub` or `tpub` before comparison. |
 | `bsms.py` | A BSMS 1.0 file, reduced to its descriptor. |
-| `descriptor_files.py` | A Specter Desktop JSON export, a Specter DIY addwallet command, or a Bitcoin Core descriptor file, reduced to its descriptor. |
+| `descriptor_files.py` | A Specter Desktop JSON export, a Specter DIY addwallet command, a Coldcard, BlueWallet, or Keystone multisig setup file, or a Bitcoin Core descriptor file, reduced to its descriptor. |
 | `scan.py` | One scanned or loaded string: mnemonic, SeedQR, key expression, or descriptor. |
 | `seedqr.py` | Standard and compact SeedQR. |
 | `entropy.py` | Dice, coin, and camera entropy, following SeedSigner. |
@@ -94,7 +94,7 @@ A match stays on Address Search with `psbt-found`. The pending hit holds an `out
 
 A seed key opens Derive Key (`derive`) for one of the three supported paths. The screen derives the extended key in memory with `_public_for` and does not store it. Single-signature derivations can create or open the wallet at the selected account. Multisig derivation only shows the key. Derive a BIP85 Child Seed opens `bip85`. `session.bip85_mnemonic` asks embit for the English mnemonic at `m/83696968h/39h/0h/{12 or 24}h/{index}h`. The child is stored with `add_mnemonic`, and the back stack is replaced with Bitcoin Keys.
 
-`scan.classify_content` names a QR payload or an SD card file: an address, a seed, a compact seed, a numeric seed, a BSMS file, a wallet descriptor, a Specter Desktop JSON export, a Specter DIY addwallet command, a Bitcoin Core descriptor file, a key expression, or a transaction. The Specter and Bitcoin Core files are reduced to the descriptor they contain. The screen that asked for one kind refuses the others by that name.
+`scan.classify_content` names a QR payload or an SD card file: an address, a seed, a compact seed, a numeric seed, a BSMS file, a wallet descriptor, a Specter Desktop JSON export, a Specter DIY addwallet command, a Coldcard, BlueWallet, or Keystone multisig setup file, a Bitcoin Core descriptor file, a key expression, or a transaction. The Specter, multisig setup, and Bitcoin Core files are reduced to the descriptor they contain. The screen that asked for one kind refuses the others by that name.
 
 Load External Key is two screens, `external-review` and `external-details`. Verify QR Code on the details screen opens `scan` with kind `verify-key`, then `external-verify`. A failed QR or SD import uses `load-error`. While a PSBT is checked, `psbt-progress` shows status text and a bar with no title. The panel sets `flush_display` so those frames appear before the check returns. The browser sets `defer_psbt_progress` so each `delay` 0 frame advances the check and paints the bar (mid-tick worker paints never show). A PSBT that fails a check uses `psbt-error`. A file that is not a PSBT stays a popup. The license list is `licenses`, and one notice is `license`.
 
