@@ -109,6 +109,8 @@ const enqueue = fn => fn();
     if payload.startswith(b"UR:"):
         assert app.screen == "fs-qr-warning"
         _tap(app, "OK")
+    if app.screen == "fs-base64":
+        _tap(app, "Keep Original Data")
     assert app.screen == ("fs-binary" if binary else "fs-edit")
     _tap(app, "Save")
     name = "file.bin" if binary else "file.txt"
@@ -131,6 +133,55 @@ const enqueue = fn => fn();
         assert key_scan.load_error and "empty" not in key_scan.load_error
         if payload == base64.b64decode("aaaaaaaaaaaaaaaa"):
             assert key_scan.load_error == "That QR code is not a seed, key expression or wallet descriptor."
+
+
+def test_browser_detector_supplies_text_when_jsqr_misses_the_code():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to exercise browser QR decoding")
+    page = Path("web/index.html").read_text(encoding="utf-8")
+    scanner = "async function watchQr(" + page.split("async function watchQr(", 1)[1].split("async function syncCamera(", 1)[0]
+    script = r'''
+const assert = require("node:assert/strict");
+let mode = "miss";
+const jsQR = () => mode === "bytes" ? {binaryData: [97, 97, 97, 97, 10]} : null;
+class BarcodeDetector {
+  detect() { return Promise.resolve([{rawValue: this.raw}]); }
+}
+BarcodeDetector.prototype.raw = "aaaa\n";
+const video = {srcObject: {}, readyState: 4, videoWidth: 32, videoHeight: 32};
+const context = {
+  drawImage() {},
+  getImageData: () => ({data: new Uint8ClampedArray(32 * 32 * 4).fill(255), width: 32, height: 32}),
+};
+const document = {createElement: () => ({getContext: () => context})};
+const status = {textContent: ""};
+const showStatus = text => {status.textContent = text;};
+let qrBusy = false, qrWarned = false, qrCanvas = null, qrDetector = null, lastQr = "", screenName = "scan";
+const sent = [];
+const sendTick = body => sent.push(body);
+const enqueue = fn => fn();
+''' + scanner + r'''
+(async () => {
+  await watchQr();
+  assert.deepEqual(sent, [{kind: "tap", qr: "aaaa\n"}]);
+  await watchQr();
+  assert.equal(sent.length, 1, "The same visible text should only be sent once");
+  lastQr = "";
+  mode = "bytes";
+  await watchQr();
+  assert.equal(sent[1].qr_encoding, "hex");
+  assert.equal(sent[1].qr, "616161610a");
+  lastQr = "";
+  mode = "miss";
+  BarcodeDetector.prototype.raw = "";
+  await watchQr();
+  assert.equal(sent.length, 2, "An empty text result must not replace binary content");
+  assert.equal(status.textContent, "");
+})().catch(error => { console.error(error); process.exitCode = 1; });
+'''
+    result = subprocess.run([node, "-"], input=script, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_an_old_worker_cannot_silently_turn_a_binary_qr_into_empty_text():

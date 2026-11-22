@@ -1,6 +1,8 @@
 """File System screens, using the same storage and keyboard as imports/exports."""
 
 from pathlib import Path
+import base64
+import binascii
 import hashlib
 import re
 import sys
@@ -26,11 +28,29 @@ class _Ready:
 
 OPEN_LIMIT = 50_000
 SEQUENCE_NOTE = "Scanning content spread over a sequence of QR codes is not supported. Only a single QR code was captured. Its raw content will be used."
+SCAN_NOTE = "Non-textual data may be unscannable. Encode it in base64 and decode it after scanning."
+BASE64_NOTE = "This content is encoded in base64."
 SD_DELETE_NOTE = "Deleted content on SD cards may still be restored. Wipe the SD card thoroughly before using it in a device connected to the internet. Deleting a file does not securely erase its contents."
+_BASE64_BODY = re.compile(rb"[A-Za-z0-9+/]+={0,2}\Z")
 
 
 def is_text(data):
     return sdcard.ascii_text(data)
+
+
+def decoded_base64(data: bytes) -> bytes | None:
+    """The decoded bytes of one base64 value, or None when data is not that.
+
+    Spaces are rejected. One newline at the end is allowed. The alphabet is
+    the standard base64 alphabet, including padding.
+    """
+    body = data[:-1] if data.endswith(b"\n") else data
+    if not body or _BASE64_BODY.fullmatch(body) is None or len(body) % 4:
+        return None
+    try:
+        return base64.b64decode(body, validate=True)
+    except (ValueError, binascii.Error):
+        return None
 
 
 class FileSystemUI:
@@ -42,6 +62,7 @@ class FileSystemUI:
         self.sd_missing = False
         self.is_new = False
         self.data = b""
+        self.base64_decoded = b""
         self.name_mode = "create"
         self.transfer = "move"
         self.destination_storage = "sd"
@@ -95,6 +116,7 @@ class FileSystemUI:
             "fs-move": self.move_browser,
             "fs-delete": self.delete_warning,
             "fs-qr-warning": self.qr_warning,
+            "fs-base64": self.base64_choice,
             "fs-qr-guide": self.guide,
             "fs-burn-verify": self.burn_verify,
             "fs-burn-checksums": self.burn_checksums,
@@ -238,6 +260,10 @@ class FileSystemUI:
             elif action == "fs-qr-ok":
                 app.back_one()
                 self.open_data()
+            elif action == "fs-base64-keep":
+                self._leave_base64(self.data)
+            elif action == "fs-base64-decode":
+                self._leave_base64(self.base64_decoded)
         except (sdcard.SdError, UnicodeEncodeError) as exc:
             app.set_error(str(exc) if isinstance(exc, sdcard.SdError) else "Only ASCII text can be saved in this editor.")
         finally:
@@ -335,6 +361,18 @@ class FileSystemUI:
         if re.match(r"^(?:ur:|b\$|p\d+of\d+\b|\d+[/:-]\d+\s|\d+of\d+\s)", prefix.lstrip(), re.I):
             app.go("fs-qr-warning")
             return
+        decoded = decoded_base64(data)
+        if decoded is not None:
+            self.base64_decoded = decoded
+            app.go("fs-base64")
+            return
+        self.open_data()
+
+    def _leave_base64(self, data: bytes):
+        if self.app.screen != "fs-base64":
+            return
+        self.data = data
+        self.app.back_one()
         self.open_data()
 
     def before_back(self):
@@ -1160,7 +1198,14 @@ class FileSystemUI:
     def new_source(self, frame):
         frame.header("New File", "back")
         y = frame.button(HEADER + 24, "Manual Entry", "fs-manual")
-        frame.button(y, "Scan QR Code", "fs-scan", icon=Icons.CAMERA, awesome=True)
+        y = frame.button(y, "Scan QR Code", "fs-scan", icon=Icons.CAMERA, awesome=True)
+        frame.text(SCAN_NOTE, MARGIN, y, size=28, fill=MUTED)
+
+    def base64_choice(self, frame):
+        frame.header("New File", "back")
+        y = frame.text(BASE64_NOTE, MARGIN, HEADER + 24, size=BODY_SIZE)
+        y = frame.button(y + 12, "Keep Original Data", "fs-base64-keep")
+        frame.button(y, "Decode Base64", "fs-base64-decode")
 
     def edit(self, frame):
         app = self.app

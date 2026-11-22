@@ -304,6 +304,7 @@ let lastQr = "";
 let qrBusy = false;
 let qrWarned = false;
 let qrCanvas = null;
+let qrDetector = null;
 panel.style.pointerEvents = "none";
 renderSd();
 
@@ -900,7 +901,7 @@ async function watchQr() {
   if (qrBusy || screenName !== "scan" || !video.srcObject) return;
   qrBusy = true;
   try {
-    if (typeof jsQR !== "function") {
+    if (typeof jsQR !== "function" && typeof BarcodeDetector !== "function") {
       if (!qrWarned) {
         qrWarned = true;
         showStatus("The QR decoder is missing. Run python -m bigsigner.bundle and reload.");
@@ -909,22 +910,40 @@ async function watchQr() {
       return;
     }
     if (!video.videoWidth || !video.videoHeight || video.readyState < 2) return;
-    if (!qrCanvas) qrCanvas = document.createElement("canvas");
-    const scale = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight));
-    qrCanvas.width = Math.round(video.videoWidth * scale);
-    qrCanvas.height = Math.round(video.videoHeight * scale);
-    const context = qrCanvas.getContext("2d", {willReadFrequently: true});
-    context.drawImage(video, 0, 0, qrCanvas.width, qrCanvas.height);
-    const pixels = context.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
-    const code = jsQR(pixels.data, pixels.width, pixels.height);
-    if (!code || !code.binaryData.length) {
-      lastQr = "";
+    let raw = "";
+    if (typeof jsQR === "function") {
+      if (!qrCanvas) qrCanvas = document.createElement("canvas");
+      const scale = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight));
+      qrCanvas.width = Math.round(video.videoWidth * scale);
+      qrCanvas.height = Math.round(video.videoHeight * scale);
+      const context = qrCanvas.getContext("2d", {willReadFrequently: true});
+      context.drawImage(video, 0, 0, qrCanvas.width, qrCanvas.height);
+      const pixels = context.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
+      const code = jsQR(pixels.data, pixels.width, pixels.height);
+      if (code && code.binaryData && code.binaryData.length) {
+        raw = Array.from(code.binaryData, byte => byte.toString(16).padStart(2, "0")).join("");
+      }
+    }
+    if (raw) {
+      if (raw === lastQr) return;
+      lastQr = raw;
+      enqueue(() => sendTick({kind: "tap", qr: raw, qr_encoding: "hex"}));
       return;
     }
-    const raw = Array.from(code.binaryData, byte => byte.toString(16).padStart(2, "0")).join("");
-    if (raw === lastQr) return;
-    lastQr = raw;
-    enqueue(() => sendTick({kind: "tap", qr: raw, qr_encoding: "hex"}));
+    // jsQR misses many codes in a camera picture. The browser detector still
+    // reads their text. It has no raw bytes, so an empty result is not sent.
+    if (typeof BarcodeDetector === "function") {
+      if (!qrDetector) qrDetector = new BarcodeDetector({formats: ["qr_code"]});
+      const found = await qrDetector.detect(video);
+      const text = found.length ? (found[0].rawValue || "") : "";
+      if (text) {
+        if (text === lastQr) return;
+        lastQr = text;
+        enqueue(() => sendTick({kind: "tap", qr: text}));
+        return;
+      }
+    }
+    lastQr = "";
   } catch (err) {
     if (!qrWarned) {
       qrWarned = true;

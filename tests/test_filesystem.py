@@ -14,7 +14,7 @@ from bigsigner import file_qr, sdcard
 from bigsigner.diskimage import BurnResult
 from bigsigner.gpg import GpgError, Outcome
 from bigsigner.ui.app import App, QR_BRIGHTNESS_DEFAULT
-from bigsigner.ui.canvas import BLUE, HEADER, HEIGHT, INK, MARGIN, RED, WIDTH
+from bigsigner.ui.canvas import BLUE, HEADER, HEIGHT, INK, MARGIN, MUTED, PAPER, RED, WIDTH
 from bigsigner.ui.filesystem import OPEN_LIMIT, SD_DELETE_NOTE, SEQUENCE_NOTE, is_text
 from test_sdcard import _tap as _tap_hit
 
@@ -703,6 +703,74 @@ def test_sequence_prefix_warns_then_continues_with_its_raw_content(prefix):
     assert app.filename == name
     _tap(app, "Save")
     assert sdcard.read_bytes(name) == (prefix if isinstance(prefix, bytes) else prefix.encode("utf-8"))
+
+
+def test_new_file_explains_that_non_textual_qr_data_may_not_scan():
+    app = _browser()
+    _tap(app, "plus")
+    _tap(app, "New File")
+    image = app.render()
+    scan = next(hit for hit in app.hits if hit["label"] == "Scan QR Code")
+    notes = [item for item in app.texts if "unscannable" in item["text"] or "base64" in item["text"]]
+    assert notes
+    assert notes[0]["box"][1] >= scan["box"][3]
+    assert all(item["box"][2] <= WIDTH - MARGIN for item in notes)
+    def apart(left, right):
+        return sum((left[i] - right[i]) ** 2 for i in range(3))
+
+    painted = False
+    for item in notes:
+        left, top, right, bottom = item["box"]
+        for y in range(top, bottom):
+            for x in range(left, right):
+                pixel = image.getpixel((x, y))[:3]
+                if pixel == PAPER:
+                    continue
+                assert apart(pixel, MUTED) < apart(pixel, INK)
+                painted = True
+    assert painted
+
+
+def test_a_base64_qr_can_be_kept_or_decoded_as_text_or_binary():
+    app = _browser()
+    _new_qr(app, "aaaa\n")
+    assert app.screen == "fs-base64"
+    assert "encoded in base64" in " ".join(item["text"] for item in app.texts)
+    app.back_one()
+    assert app.screen == "fs-new-source"
+    assert sdcard.list_folder("") == []
+
+    kept = _browser()
+    _new_qr(kept, "aaaa\n")
+    _tap(kept, "Keep Original Data")
+    assert kept.screen == "fs-edit"
+    assert kept.fs.editor.text == "aaaa\n"
+    kept.back_one()
+    assert kept.screen == "fs-new-source"
+
+    binary = _browser()
+    _new_qr(binary, "aaaa\n")
+    _tap(binary, "Decode Base64")
+    assert binary.screen == "fs-binary"
+    assert binary.fs.data == b"\x69\xa6\x9a"
+    binary.back_one()
+    assert binary.screen == "fs-new-source"
+
+    text = _browser()
+    _new_qr(text, "aGVsbG8=\n")
+    _tap(text, "Decode Base64")
+    assert text.screen == "fs-edit"
+    assert text.fs.editor.text == "hello"
+
+    plain = _browser()
+    _new_qr(plain, "hello world\n")
+    assert plain.screen == "fs-edit"
+    wrapped = _browser()
+    _new_qr(wrapped, "YQ==\nYQ==")
+    assert wrapped.screen == "fs-edit"
+    spaced = _browser()
+    _new_qr(spaced, "YQ== YQ==")
+    assert spaced.screen == "fs-edit"
 
 
 def test_filesystem_screens_save_screenshots():
