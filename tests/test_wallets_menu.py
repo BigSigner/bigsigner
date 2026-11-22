@@ -706,6 +706,38 @@ def _two_seed_multisig():
     return app
 
 
+def test_a_nonzero_multisig_account_shows_a_backup_note():
+    from bigsigner.ui.app import ACCOUNT_NONZERO_NOTE
+    from bigsigner.ui.canvas import WARNING
+
+    app = _two_seed_multisig()
+    wallet = app.session.wallets[0]
+    fingerprint = wallet.fingerprints[0]
+    app.render()
+    assert "Non-zero account index" not in " ".join(item["text"] for item in app.texts)
+    app.session.set_account(0, fingerprint, 1)
+    image = app.render()
+    note = next(item for item in app.texts if item["text"].startswith("Non-zero"))
+    account = next(hit for hit in app.hits if hit["action"] == f"account-edit-{fingerprint.hex()}")
+    assert note["box"][1] >= account["box"][3]
+    assert ACCOUNT_NONZERO_NOTE in " ".join(item["text"] for item in app.texts)
+    assert sum(item["text"].startswith("Non-zero") for item in app.texts) == 1
+    assert any(
+        image.getpixel((x, y))[:3] == WARNING
+        for y in range(note["box"][1], note["box"][3])
+        for x in range(note["box"][0], min(note["box"][2], WIDTH))
+    )
+    single = App()
+    added = single.session.add_mnemonic(ABANDON.split())
+    single.selected_fp = added["fingerprint"]
+    single.screen = "key"
+    single._act("derive-native")
+    single._act("derive-wallet")
+    single.session.set_account(0, added["fingerprint"], 1)
+    single.render()
+    assert "Non-zero account index" not in " ".join(item["text"] for item in single.texts)
+
+
 def test_a_multisig_account_change_warns_once():
     from bigsigner.ui.app import ACCOUNT_INDEX_WARNING
 

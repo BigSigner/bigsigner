@@ -265,6 +265,8 @@ ACCOUNT_INDEX_WARNING = (
     "Changing the account index of a multisig wallet is an advanced feature. "
     "Losing the exact sequence of account indexes you used might make it impossible to recover the funds."
 )
+ACCOUNT_NONZERO_NOTE = "Non-zero account index - make sure you have a backup."
+ACCOUNT_NONZERO_NOTE_SIZE = 24
 
 
 def _network_warning(network: str) -> str:
@@ -4155,7 +4157,21 @@ class App:
                     y += field[3] - (y - offset) + 16
                 else:
                     y += 64 + 16
+        if wallet.multisig and wallet.accounts[fingerprint] != 0:
+            y = self._nonzero_account_note(frame, y, paint, offset, left, right)
         return y + pad
+
+    def _nonzero_account_note(self, frame: Frame, y: int, paint: bool, offset: int, left: int, right: int) -> int:
+        size = ACCOUNT_NONZERO_NOTE_SIZE
+        face = font(size)
+        lines = wrap(frame.draw, ACCOUNT_NONZERO_NOTE, face, right - left) or [""]
+        shown = y - offset
+        for line in lines:
+            if paint and HEADER <= shown < HEIGHT:
+                frame.draw.text((left, shown), line, font=face, fill=WARNING)
+                frame.mark(line, frame.draw.textbbox((left, shown), line, font=face))
+            shown += size + 8
+        return y + len(lines) * (size + 8)
 
     def _ask_wallet_key(self, fingerprint: bytes):
         if self.wallet_index >= len(self.session.wallets):
