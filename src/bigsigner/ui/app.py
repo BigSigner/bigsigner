@@ -59,6 +59,7 @@ from ..seedqr import compact_bytes
 from ..slip132 import display_form, label_of
 from ..ur import descriptor_ur
 from .psbt_screen import (
+    _section_chevron,
     _wrap_name,
     paint_export_format,
     paint_input_qr,
@@ -325,13 +326,17 @@ def _kind_count(count: int, singular: str) -> str:
 
 # The extended key on Load External Key is broken after this many characters.
 KEY_LINE_CHARS = 22
-KEY_FORMAT_NOTE = (
-    "Different wallets may display the key expression in different formats. "
-    "Some show the derivation path (the part in the [] brackets) separately. "
-    "Some show the derivation path starting with m/ instead of the 8-character fingerprint prefix. "
-    "Some use the ' notation after the elements in the derivation path instead of the h notation. "
-    "It is ok if the fingerprint is not displayed, as long as the wallet does not show a different fingerprint."
-)
+KEY_FORMAT_PROMPT = "Don't see the exact fingerprint?"
+
+
+def key_format_note(fingerprint: str) -> str:
+    return (
+        "Different wallets may display the key expression in different formats. "
+        "Some show the derivation path (the part in the [] brackets) separately. "
+        "Some show the derivation path starting with m/ instead of the 8-character fingerprint prefix. "
+        "Some use the apostrophe (') notation after the numbers in the derivation path instead of the \"h\" letter. "
+        f"It is ok if the fingerprint ({fingerprint}) is not displayed, as long as the wallet does not show a different fingerprint and does show the same xpub/zpub/Zpub value."
+    )
 KEY_SCAN_NOTE = (
     "Some hardware wallets don't show the key expression as text but only as a QR code. "
     "You can use the scanner above to verify them."
@@ -588,6 +593,7 @@ class App:
         self.singlesig_selected = None
         self.pending_external = None
         self.external_format = "xpub"
+        self.external_note_open = False
         self.key_qr = None
         self.load_error = ""
         self.load_error_home = "keys"
@@ -1258,6 +1264,7 @@ class App:
         if self.pending_external is None:
             return
         self.open_dropdown = None
+        self.external_note_open = False
         self.scroll["external-details"] = 0
         self.go("external-details")
 
@@ -1449,6 +1456,7 @@ class App:
         "dismiss-notice": lambda self: self.set_notice(""),
         "external-known": lambda self: self._continue_loaded_multisig(),
         "external-next": _act_external_next,
+        "external-toggle-note": lambda self: self._toggle_external_note(),
         "external-continue": _act_external_continue,
         "external-verify": _act_external_verify,
         "wallet-import-continue": lambda self: self._finish_wallet_import(),
@@ -6554,6 +6562,7 @@ class App:
             return
         self.wallet_plan_pos += 1
         self.external_format = "xpub"
+        self.external_note_open = False
         self.open_dropdown = None
         if self.wallet_plan_pos < len(plan["new_keys"]):
             self.pending_external = plan["new_keys"][self.wallet_plan_pos]
@@ -6799,12 +6808,13 @@ class App:
         y += 64 + 16
         y += len(_fixed_lines(preview)) * (detail + 8)
         y += 16
-        y += self._text_height(frame, KEY_FORMAT_NOTE, detail)
+        y += self._format_prompt_height(frame)
+        if self.external_note_open:
+            y += 8 + self._text_height(frame, key_format_note(key.fingerprint.hex()), detail)
         y += 16
-        y += frame.button_height("Verify QR Code") + 12
-        y += 8
+        y += frame.button_height("Verify QR Code") + 8
         y += self._text_height(frame, KEY_SCAN_NOTE, detail)
-        y += 16
+        y += 28
         y += frame.button_height("Continue")
         content_end = y + 24
         offset = self._scroll_offset("external-details", content_end, clearance=12)
@@ -6815,11 +6825,12 @@ class App:
         y = frame.text("Format:", MARGIN, y + 8, size=detail, fill=MUTED)
         field = self._dropdown_field(frame, y + 8, "external-format", self._external_format_label(key))
         y = self._draw_fixed(frame, preview, field[3] + 16, detail)
-        y += 16
-        y = frame.text(KEY_FORMAT_NOTE, MARGIN, y, size=detail, fill=MUTED)
+        y = self._format_prompt(frame, y + 16)
+        if self.external_note_open:
+            y = frame.text(key_format_note(key.fingerprint.hex()), MARGIN, y + 8, size=detail, fill=MUTED)
         y = frame.button(y + 16, "Verify QR Code", "external-verify")
-        y = frame.text(KEY_SCAN_NOTE, MARGIN, y + 8, size=detail)
-        frame.button(y + 16, "Continue", "external-continue")
+        y = frame.text(KEY_SCAN_NOTE, MARGIN, y - 4, size=detail)
+        frame.button(y + 28, "Continue", "external-continue")
         frame.header("Load External Key", "back")
         if self.open_dropdown == "external-format":
             self._dropdown_menu(
@@ -6829,6 +6840,36 @@ class App:
                 self._external_format_options(key),
                 self.external_format,
             )
+
+    def _toggle_external_note(self):
+        self.external_note_open = not self.external_note_open
+
+    def _format_prompt_width(self) -> int:
+        return WIDTH - MARGIN - (MARGIN + 40)
+
+    def _format_prompt_lines(self, frame: Frame) -> list[str]:
+        face = font(TITLE_SIZE)
+        return wrap(frame.draw, KEY_FORMAT_PROMPT, face, self._format_prompt_width()) or [""]
+
+    def _format_prompt_height(self, frame: Frame) -> int:
+        return len(self._format_prompt_lines(frame)) * (TITLE_SIZE + 8)
+
+    def _format_prompt(self, frame: Frame, y: int) -> int:
+        face = font(TITLE_SIZE)
+        lines = self._format_prompt_lines(frame)
+        line_h = TITLE_SIZE + 8
+        height = line_h * len(lines)
+        if y < HEIGHT and y + height > HEADER:
+            _left, ink_top, _right, ink_bottom = frame.draw.textbbox((0, 0), lines[0], font=face)
+            _section_chevron(frame, self.external_note_open, MARGIN + 16, y + (ink_top + ink_bottom - 1) / 2)
+            text_y = y
+            for line in lines:
+                if HEADER <= text_y < HEIGHT:
+                    frame.draw.text((MARGIN + 40, text_y), line, font=face, fill=INK)
+                    frame.mark(line, frame.draw.textbbox((MARGIN + 40, text_y), line, font=face))
+                text_y += line_h
+            frame.hit((MARGIN, y, WIDTH - MARGIN, y + height), "external-toggle-note", KEY_FORMAT_PROMPT)
+        return y + height
 
     def _centered_text(self, frame: Frame, value: str, y: int, size: int, fill) -> int:
         face = font(size)

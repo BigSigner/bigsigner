@@ -148,9 +148,29 @@ def test_external_details_centers_the_heading_and_greys_the_labels():
     assert first["box"][0] >= MARGIN
     assert first["box"][2] <= WIDTH - MARGIN
     label = next(item for item in app.texts if item["text"] == "Format:")
-    comment = next(item for item in app.texts if item["text"].startswith("Different"))
     assert _ink(image, label["box"]) == MUTED
+    assert not any(item["text"].startswith("Different") for item in app.texts)
+    fingerprint = app.pending_external.fingerprint.hex()
+    app._act("external-toggle-note")
+    app.render()
+    assert any(hit["label"] == "Don't see the exact fingerprint?" for hit in app.hits)
+    app.scroll["external-details"] = 500
+    image = app.render()
+    comment = next(item for item in app.texts if item["text"].startswith("Different"))
     assert _ink(image, comment["box"]) == MUTED
+    app.scroll["external-details"] = 650
+    app.render()
+    note = " ".join(item["text"] for item in app.texts)
+    assert "apostrophe (') notation after the numbers" in note
+    assert 'instead of the "h" letter.' in note
+    assert f"fingerprint ({fingerprint})" in note
+    app.scroll["external-details"] = 900
+    app.render()
+    note = " ".join(item["text"] for item in app.texts)
+    assert "same xpub/zpub/Zpub value." in note
+    app._act("external-toggle-note")
+    app.render()
+    assert not any(item["text"].startswith("Different") for item in app.texts)
 
     account = _open_details(expression(ABANDON, "m/84h/0h/7h"))
     record = ScreenRecord(_folder("test_external_key_nondefault_account_saves_screenshots"))
