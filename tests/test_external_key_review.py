@@ -153,7 +153,7 @@ def test_external_details_centers_the_heading_and_greys_the_labels():
     fingerprint = app.pending_external.fingerprint.hex()
     app._act("external-toggle-note")
     app.render()
-    assert any(hit["label"] == "Don't see the exact fingerprint?" for hit in app.hits)
+    assert any(hit["label"] == "Don't see the exact expression?" for hit in app.hits)
     app.scroll["external-details"] = 500
     image = app.render()
     comment = next(item for item in app.texts if item["text"].startswith("Different"))

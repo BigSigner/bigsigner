@@ -327,14 +327,14 @@ def _kind_count(count: int, singular: str) -> str:
 
 # The extended key on Load External Key is broken after this many characters.
 KEY_LINE_CHARS = 22
-KEY_FORMAT_PROMPT = "Don't see the exact fingerprint?"
+KEY_FORMAT_PROMPT = "Don't see the exact expression?"
 
 
 def key_format_note(fingerprint: str) -> str:
     return (
         "Different wallets may display the key expression in different formats. "
         "Some show the derivation path (the part in the [] brackets) separately. "
-        "Some show the derivation path starting with m/ instead of the 8-character fingerprint prefix. "
+        "Some show the derivation path starting with m/ instead of the 8-character fingerprint prefix ({fingerprint}). "
         "Some use the apostrophe (') notation after the numbers in the derivation path instead of the \"h\" letter. "
         f"It is ok if the fingerprint ({fingerprint}) is not displayed, as long as the wallet does not show a different fingerprint and does show the same xpub/zpub/Zpub value."
     )
