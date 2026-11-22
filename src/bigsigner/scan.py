@@ -4,7 +4,11 @@ from embit.bip39 import WORDLIST
 
 from .bbqr import BbqrError, join_bbqr, split_bbqr, text_from_bbqr
 from .bsms import descriptor_from_bsms
-from .descriptor_files import descriptor_from_bitcoin_core, descriptor_from_specter
+from .descriptor_files import (
+    descriptor_from_bitcoin_core,
+    descriptor_from_specter_desktop,
+    descriptor_from_specter_diy,
+)
 from .fountain import FountainDecoder, FountainError, part_from_cbor
 from .parse import ParseError, _normalize_expression
 from .paths import format_path
@@ -73,9 +77,12 @@ def classify_content(text: str, network: str) -> ParsedContent:
         except Exception as exc:
             raise SessionError("The seed checksum is not valid.") from exc
         return ParsedContent("numeric-seed", mnemonic)
-    specter = descriptor_from_specter(raw)
+    specter = descriptor_from_specter_desktop(raw)
     if specter is not None:
         return ParsedContent("descriptor", specter)
+    diy = descriptor_from_specter_diy(raw)
+    if diy is not None:
+        return ParsedContent("descriptor", diy)
     try:
         core = descriptor_from_bitcoin_core(raw)
     except ParseError as exc:

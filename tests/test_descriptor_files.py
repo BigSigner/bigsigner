@@ -1,10 +1,14 @@
-"""Specter-DIY JSON exports and Bitcoin Core descriptor files."""
+"""Specter Desktop JSON, Specter DIY addwallet commands, and Bitcoin Core descriptor files."""
 
 import json
 
 import pytest
 
-from bigsigner.descriptor_files import descriptor_from_bitcoin_core, descriptor_from_specter
+from bigsigner.descriptor_files import (
+    descriptor_from_bitcoin_core,
+    descriptor_from_specter_desktop,
+    descriptor_from_specter_diy,
+)
 from bigsigner.parse import ParseError
 from bigsigner.scan import classify_content
 from bigsigner.sdcard import mount_memory, unmount_memory
@@ -42,8 +46,8 @@ def _tap(app, label):
     raise AssertionError(label)
 
 
-def test_a_specter_object_is_the_descriptor_string():
-    assert descriptor_from_specter(_specter(COMBINED)) == COMBINED
+def test_a_specter_desktop_object_is_the_descriptor_string():
+    assert descriptor_from_specter_desktop(_specter(COMBINED)) == COMBINED
     pretty = """
     {
       "descriptor": "wpkh([aa/84h/0h/0h]xpub/<0;1>/*)",
@@ -51,22 +55,58 @@ def test_a_specter_object_is_the_descriptor_string():
       "label": "Cold"
     }
     """
-    assert descriptor_from_specter(pretty) == "wpkh([aa/84h/0h/0h]xpub/<0;1>/*)"
+    assert descriptor_from_specter_desktop(pretty) == "wpkh([aa/84h/0h/0h]xpub/<0;1>/*)"
     assert classify_content(_specter(COMBINED), "test").text == COMBINED
     assert classify_content(_specter(COMBINED), "test").kind == "descriptor"
 
 
 def test_specter_json_that_is_not_the_export_is_left_alone():
-    assert descriptor_from_specter(_specter(COMBINED, devices=[])) is None
-    assert descriptor_from_specter(json.dumps({"label": "Test", "descriptor": COMBINED})) is None
-    assert descriptor_from_specter(json.dumps({
+    assert descriptor_from_specter_desktop(_specter(COMBINED, devices=[])) is None
+    assert descriptor_from_specter_desktop(json.dumps({"label": "Test", "descriptor": COMBINED})) is None
+    assert descriptor_from_specter_desktop(json.dumps({
         "label": "Test",
         "blockheight": 1,
         "descriptor": ["not", "a", "string"],
     })) is None
-    assert descriptor_from_specter("{not json") is None
-    assert descriptor_from_specter(COMBINED) is None
+    assert descriptor_from_specter_desktop("{not json") is None
+    assert descriptor_from_specter_desktop(COMBINED) is None
     assert classify_content(_specter(COMBINED, devices=[]), "main").kind == "unknown"
+
+
+DIY = (
+    "addwallet 2-of-2 Abandon,Example account-indexes 1,2&"
+    "wsh(sortedmulti(2,"
+    "[42c649e1/48h/1h/1h/2h]tpubDFTvq7adqjwbgrqRpJBapZa47wMmaEaDBAp9hseHF2GFjnHA2c8EAVcxmkdE21sZc823NbGxUFpN6H5BEy7f8kSdwg14fGkrmPD17qfds5S,"
+    "[73c5da0a/48h/1h/2h/2h]tpubDEPGZXGPF2v3uNGTWHteRSQnZdEFfMvh6Dcp3DykkBE48hTA6pe3Es6nWH5dAThPyvqmZGmZqQhTw5kxqgR5uJW6Ei2VWyAAN92yLcYBvzV))"
+)
+DIY_DESCRIPTOR = DIY.split("&", 1)[1]
+
+
+def test_a_specter_diy_command_keeps_the_descriptor_and_drops_the_name():
+    assert descriptor_from_specter_diy(DIY) == DIY_DESCRIPTOR
+    assert descriptor_from_specter_diy(f"addwallet A & B&{COMBINED}") == COMBINED
+    assert descriptor_from_specter_diy(f"\naddwallet\tCold&{COMBINED}\n") == COMBINED
+    parsed = classify_content(DIY, "test")
+    assert parsed.kind == "descriptor"
+    assert parsed.text == DIY_DESCRIPTOR
+    assert descriptor_from_specter_diy(f"addwallet {COMBINED}") is None
+    assert descriptor_from_specter_diy(f"addwalletname&{COMBINED}") is None
+    assert descriptor_from_specter_diy(f"Addwallet Cold&{COMBINED}") is None
+    assert descriptor_from_specter_diy("addwallet Cold&") is None
+    assert classify_content(f"addwallet {COMBINED}", "test").kind == "unknown"
+
+
+def test_a_specter_diy_command_loads_the_descriptor():
+    app = App()
+    app.session.set_network("test")
+    app.screen = "scan"
+    app.scan_kind = "descriptor"
+    app.accept_qr(DIY)
+    assert app.screen == "external-review"
+    keys = app.wallet_plan["parsed"].keys
+    assert [key.fingerprint.hex() for key in keys] == ["42c649e1", "73c5da0a"]
+    assert [key.account for key in keys] == [1, 2]
+    assert app.wallet_plan["parsed"].threshold == 2
 
 
 def test_a_bitcoin_core_file_keeps_the_combined_descriptor():

@@ -1,8 +1,9 @@
 """Wallet files that wrap one output descriptor.
 
-embit reads a single descriptor string. It does not detect a Specter-DIY JSON
-export or a Bitcoin Core descriptor file. Those are unwrapped here. The
-descriptor inside is what the rest of the app parses.
+embit reads a single descriptor string. It does not detect a Specter Desktop
+JSON export, a Specter DIY addwallet command, or a Bitcoin Core descriptor
+file. Those are unwrapped here. The descriptor inside is what the rest of the
+app parses.
 """
 
 import json
@@ -12,11 +13,12 @@ from .parse import split_checksum
 _SPECTER_KEYS = frozenset({"label", "blockheight", "descriptor"})
 
 
-def descriptor_from_specter(text: str) -> str | None:
-    """The descriptor string from a Specter-DIY wallet export, or None.
+def descriptor_from_specter_desktop(text: str) -> str | None:
+    """The descriptor string from a Specter Desktop wallet export, or None.
 
     The export is a JSON object whose keys are exactly ``label``,
     ``blockheight``, and ``descriptor``. ``descriptor`` has to be a string.
+    Sparrow writes this file from its Specter Desktop exporter.
     """
     raw = _text(text)
     if not raw.startswith("{"):
@@ -31,6 +33,25 @@ def descriptor_from_specter(text: str) -> str | None:
     if not isinstance(descriptor, str):
         return None
     return descriptor.strip()
+
+
+def descriptor_from_specter_diy(text: str) -> str | None:
+    """The descriptor from a Specter DIY ``addwallet`` command, or None.
+
+    The command is ``addwallet``, a space, a wallet name, ``&``, and the
+    descriptor. The name is ignored. The descriptor is the text after the
+    last ``&``, so the name may contain ``&``. A checksum may be absent.
+    """
+    raw = _text(text)
+    if len(raw) <= len("addwallet") or not raw.startswith("addwallet") or not raw[len("addwallet")].isspace():
+        return None
+    rest = raw[len("addwallet") :].lstrip()
+    if "&" not in rest:
+        return None
+    descriptor = rest.rsplit("&", 1)[1].strip()
+    if not descriptor:
+        return None
+    return descriptor
 
 
 def descriptor_from_bitcoin_core(text: str) -> str | None:
