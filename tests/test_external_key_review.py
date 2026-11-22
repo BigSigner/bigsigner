@@ -83,6 +83,8 @@ def test_external_key_review_saves_screenshots():
     continue_top = next(hit["box"][1] for hit in app.hits if hit["action"] == "external-continue")
     assert verify_top < continue_top < 800
     assert any(hit["label"] == "Verify QR Code" for hit in app.hits)
+    assert any(hit["label"] == "Confirm Key" for hit in app.hits)
+    assert not any(hit["label"] == "Skip All" for hit in app.hits)
     record.click(app, "dropdown-external-format")
     record.shot(app, "format-menu")
     assert any(hit["label"] == "zpub (SLIP-132)" for hit in app.hits)

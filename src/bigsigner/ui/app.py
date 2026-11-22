@@ -1468,6 +1468,7 @@ class App:
         "external-next": _act_external_next,
         "external-toggle-note": lambda self: self._toggle_external_note(),
         "external-continue": _act_external_continue,
+        "external-skip": lambda self: self._ask_to_skip_keys(),
         "external-verify": _act_external_verify,
         "wallet-import-continue": lambda self: self._finish_wallet_import(),
         "back": lambda self: self.back_one(),
@@ -6336,6 +6337,11 @@ class App:
             return MESSAGE_MORE
         if self.confirm == "psbt-found" and self.psbt_search_hit:
             return self._found_address_message()
+        if self.confirm == "skip-keys":
+            return (
+                "Skip the verification only if you have verified this wallet descriptor in the past, "
+                "and you are sure the wallet descriptor has not been altered."
+            )
         return "Delete this key?"
 
     def _found_address_message(self) -> str:
@@ -6409,7 +6415,9 @@ class App:
         if self.confirm == "seed-warning":
             yes = "OK"
         self._dialog_button(frame, cancel, no, "confirm-no", (132, 138, 148))
-        color = RED if self.confirm in ("delete-key", "delete-wallet", "replace-file", "fs-delete", "fs-burn-skip", "gpg-delete") else BLUE
+        color = RED if self.confirm in (
+            "delete-key", "delete-wallet", "replace-file", "fs-delete", "fs-burn-skip", "gpg-delete", "skip-keys",
+        ) else BLUE
         self._dialog_button(frame, confirm, yes, "confirm-yes", color)
 
     def _dialog_button(self, frame: Frame, box, text: str, action: str, color):
@@ -6472,6 +6480,8 @@ class App:
             self.gpg.start_encrypt()
         elif kind == "gpg-delete":
             self.gpg.delete_selected()
+        elif kind == "skip-keys":
+            self._skip_remaining_keys()
 
     def _descriptor_choice_message(self) -> str:
         if self.descriptor_choice and self.descriptor_choice.get("multisig"):
@@ -6586,6 +6596,24 @@ class App:
             self.screen = "wallet-import-note"
             return
         self._finish_wallet_import()
+
+    def _can_skip_remaining_keys(self) -> bool:
+        """A wallet descriptor with more than four key expressions can skip the rest."""
+        plan = self.wallet_plan
+        return plan is not None and len(plan["parsed"].keys) > 4
+
+    def _ask_to_skip_keys(self):
+        if self.screen != "external-details" or not self._can_skip_remaining_keys():
+            return
+        self.confirm = "skip-keys"
+
+    def _skip_remaining_keys(self):
+        """Accept this key and every later key, as Confirm Key would on each screen."""
+        plan = self.wallet_plan
+        if plan is None or not plan["new_keys"]:
+            return
+        self.wallet_plan_pos = len(plan["new_keys"]) - 1
+        self._advance_wallet_import()
 
     def _finish_wallet_import(self):
         plan = self.wallet_plan
@@ -6825,7 +6853,9 @@ class App:
         y += frame.button_height("Verify QR Code") + 8
         y += self._text_height(frame, KEY_SCAN_NOTE, detail)
         y += 28
-        y += frame.button_height("Continue")
+        y += frame.button_height("Confirm Key")
+        if self._can_skip_remaining_keys():
+            y += 12 + frame.button_height("Skip All")
         content_end = y + 24
         offset = self._scroll_offset("external-details", content_end, clearance=12)
         y = HEADER + 16 - offset
@@ -6840,7 +6870,9 @@ class App:
             y = frame.text(key_format_note(key.fingerprint.hex()), MARGIN, y + 8, size=detail, fill=MUTED)
         y = frame.button(y + 16, "Verify QR Code", "external-verify")
         y = frame.text(KEY_SCAN_NOTE, MARGIN, y - 4, size=detail)
-        frame.button(y + 28, "Continue", "external-continue")
+        y = frame.button(y + 28, "Confirm Key", "external-continue")
+        if self._can_skip_remaining_keys():
+            frame.button(y, "Skip All", "external-skip")
         frame.header("Load External Key", "back")
         if self.open_dropdown == "external-format":
             self._dropdown_menu(

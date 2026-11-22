@@ -35,6 +35,6 @@ Otherwise it opens Load External Key. The first screen shows a centered red Warn
 
 That screen first asks you to verify the extended public key on the other hardware wallet. A grey Format: label sits above a menu of the canonical extended key, the SLIP-132 form when this path has one, or the full key expression, and the chosen key is shown under the menu. Below that it asks you to verify the backed-up details: the type, the account, and the derivation path. Account 0 is marked default. Any other account is shown in red as non-default.
 
-Continue is at the bottom of the second page. Scroll to it. Only that Continue stores the key and opens its External Key screen. Back from the details returns to the warning. Back from the warning leaves the key unloaded.
+Confirm Key is at the bottom of the second page. Scroll to it. Only that Confirm Key stores the key and opens its External Key screen. Back from the details returns to the warning. Back from the warning leaves the key unloaded.
 
 On the External Key screen, Show Full Details is followed by Export to File, then the button that creates or opens the singlesig wallet, then Delete Key. Export to File asks for Key Expression, the canonical extended key, or the SLIP-132 form when this path has one. Choose SD Card or Temporary FS, then browse its files. The export browser keeps a single Used / Total and Free space line above the directory name. Choosing a file replaces it after a confirmation. New File asks for a name and writes that file.

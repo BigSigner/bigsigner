@@ -284,11 +284,11 @@ def test_multisig_wallet_import_verifies_each_new_key_saves_screenshots():
     assert app.screen == "external-details"
     assert app.pending_external.fingerprint == root_of(ABANDON).my_fingerprint
     record.shot(app, "first-key")
-    record.click(app, "Continue")
+    record.click(app, "Confirm Key")
     assert app.screen == "external-details"
     assert app.pending_external.fingerprint == root_of(LEGAL).my_fingerprint
     record.shot(app, "second-key")
-    record.click(app, "Continue")
+    record.click(app, "Confirm Key")
     assert app.screen == "wallet"
     assert app.back == ["wallets"]
     assert len(app.session.wallets) == 1
@@ -522,3 +522,53 @@ def test_a_known_singlesig_key_is_named_before_the_wallet_is_created():
     assert external.back == ["wallets"]
     assert len(external.session.wallets) == 1
     assert len(external.session.fingerprints) == 1
+
+
+def test_skip_all_accepts_every_remaining_key_after_a_red_confirm():
+    from embit.bip39 import mnemonic_from_bytes
+
+    from bigsigner.ui.canvas import RED
+
+    def phrases(count):
+        return [mnemonic_from_bytes(bytes([number]) + b"\x3c" * 15) for number in range(count)]
+
+    def descriptor(count):
+        keys = [expression(phrase, "m/48h/0h/0h/2h") for phrase in phrases(count)]
+        return _multisig(*keys, threshold=2)
+
+    four = App()
+    four._start_wallet_import(descriptor(4))
+    four._act("external-next")
+    four.render()
+    assert four.screen == "external-details"
+    assert any(hit["label"] == "Confirm Key" for hit in four.hits)
+    assert not any(hit["label"] == "Skip All" for hit in four.hits)
+
+    app = App()
+    app._start_wallet_import(descriptor(5))
+    app._act("external-next")
+    app.render()
+    confirm = next(hit for hit in app.hits if hit["label"] == "Confirm Key")
+    skip = next(hit for hit in app.hits if hit["label"] == "Skip All")
+    assert confirm["box"][3] <= skip["box"][1]
+    app._act("external-continue")
+    assert app.screen == "external-details"
+    assert app.wallet_plan_pos == 1
+    app._act("external-skip")
+    image = app.render()
+    assert "verified this wallet descriptor in the past" in " ".join(item["text"] for item in app.texts)
+    button = next(hit for hit in app.hits if hit["action"] == "confirm-yes")
+    assert button["label"] == "Confirm"
+    x = button["box"][0] + 16
+    y = (button["box"][1] + button["box"][3]) // 2
+    assert image.getpixel((x, y))[:3] == RED
+    app._act("confirm-no")
+    assert app.confirm is None
+    assert app.screen == "external-details"
+    assert app.wallet_plan_pos == 1
+    assert app.session.wallets == []
+    app._act("external-skip")
+    app._act("confirm-yes")
+    assert app.screen == "wallet"
+    assert len(app.session.wallets) == 1
+    assert len(app.session.wallets[0].fingerprints) == 5
