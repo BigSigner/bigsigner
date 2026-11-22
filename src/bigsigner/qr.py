@@ -15,6 +15,9 @@ import ctypes.util
 BORDER = 2
 # Version 40, error correction L, with one byte-mode segment.
 MAX_BYTE_PAYLOAD = 2953
+# One plain-text QR kept large enough to scan on this panel. The encoder can
+# hold MAX_BYTE_PAYLOAD bytes, and that code is too dense to read here.
+PLAIN_QR_MAX = 600
 _QR_ECLEVEL_L = 0
 _QR_MODE_8 = 2
 _LIBRARY = None

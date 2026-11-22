@@ -25,7 +25,7 @@ from ..psbt_qr import psbt_qr_parts
 from ..address_search import AddressSearch, MAX_INDEX
 from ..psbt_view import account_line, describe_psbt, place_line
 from ..psbt_review import ReviewError, review_psbt, sign_with
-from ..qr import qr_matrix
+from ..qr import PLAIN_QR_MAX, qr_matrix
 from ..session import (
     ADDRESS_RANGE,
     Session,
@@ -296,6 +296,7 @@ SEED_FORMATS = ("words", "compact", "text")
 SEED_FORMAT_NAMES = ("Words", "Compact SeedQR", "Text QR")
 DESCRIPTOR_FORMATS = ("ur", "plain")
 DESCRIPTOR_FORMAT_NAMES = ("UR", "Plain QR")
+PLAIN_QR_UNAVAILABLE = "Plain QR is unavailable. This descriptor is too long for one QR code."
 MULTISIG_DESCRIPTOR_NOTE = (
     "A Native-Segwit multisig descriptor can list its key expressions in any order. "
     "The checksum changes with that order."
@@ -7316,10 +7317,16 @@ class App:
             lines = _wrap_indented(scratch, visible, face, WIDTH - 2 * MARGIN)
         note_face = font(TITLE_SIZE)
         note_lines = wrap(scratch, layout.note, note_face, WIDTH - 2 * MARGIN) if layout.note else []
+        unavailable_lines = (
+            wrap(scratch, PLAIN_QR_UNAVAILABLE, note_face, WIDTH - 2 * MARGIN) if layout.unavailable else []
+        )
         note_gap = 16 if note_lines else 0
+        qr_block = 0 if layout.unavailable else layout.qr_size + layout.text_gap
+        unavailable_gap = layout.text_gap if unavailable_lines else 0
         content_h = (
-            layout.qr_size
-            + layout.text_gap
+            qr_block
+            + layout.line_h * len(unavailable_lines)
+            + unavailable_gap
             + layout.line_h * len(lines)
             + note_gap
             + layout.line_h * len(note_lines)
@@ -7327,12 +7334,19 @@ class App:
         )
         height = max(content_h, layout.view_h)
         strip = Image.new("RGB", (WIDTH, height), layout.light)
-        code = _qr_image(layout.payload, layout.qr_size, layout.light)
-        strip.paste(code, ((WIDTH - layout.qr_size) // 2, 0))
+        text_y = 0
+        if not layout.unavailable:
+            code = _qr_image(layout.payload, layout.qr_size, layout.light)
+            strip.paste(code, ((WIDTH - layout.qr_size) // 2, 0))
+            text_y = layout.qr_size + layout.text_gap
         draw = ImageDraw.Draw(strip)
-        text_y = layout.qr_size + layout.text_gap
         self.qr_line_marks = []
-        self.qr_strip_size = layout.qr_size
+        self.qr_strip_size = 0 if layout.unavailable else layout.qr_size
+        for line in unavailable_lines:
+            self.qr_line_marks.append({"text": line, "y": text_y, "h": layout.line_h})
+            draw.text((MARGIN, text_y), line, font=note_face, fill=MUTED)
+            text_y += layout.line_h
+        text_y += unavailable_gap
         for line in lines:
             self.qr_line_marks.append({"text": line, "y": text_y, "h": layout.line_h})
             draw.text((MARGIN, text_y), line, font=face, fill=INK)
@@ -7387,6 +7401,7 @@ class App:
             note = None
             title = "QR & content"
             show_zoom = True
+            unavailable = False
         else:
             if self.wallet_index >= len(self.session.wallets):
                 return None
@@ -7397,6 +7412,9 @@ class App:
             format_name = DESCRIPTOR_FORMAT_NAMES[self.descriptor_format]
             title = "Descriptor"
             show_zoom = False
+            unavailable = (
+                DESCRIPTOR_FORMATS[self.descriptor_format] == "plain" and len(payload) > PLAIN_QR_MAX
+            )
         if show_zoom:
             zoom_y = HEIGHT - 88 - 12 - 64 if format_name else HEIGHT - 100
             bright_y = zoom_y - 12 - 52
@@ -7430,10 +7448,11 @@ class App:
             line_h=line_h,
             text_gap=text_gap,
             tail=tail,
+            unavailable=unavailable,
         )
 
     def _qr_strip_identity(self, layout):
-        return (layout.payload, layout.shown, layout.note, layout.light, layout.qr_size, layout.tail)
+        return (layout.payload, layout.shown, layout.note, layout.light, layout.qr_size, layout.tail, layout.unavailable)
 
     def _qr_strip_matches(self, layout) -> bool:
         return self._qr_strip is not None and self._qr_strip_key == self._qr_strip_identity(layout)

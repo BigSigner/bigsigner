@@ -129,6 +129,40 @@ def test_a_multisig_descriptor_ends_with_a_grey_order_note():
     assert min(muted) > max(ink)
 
 
+def test_a_long_descriptor_has_no_plain_qr():
+    from bigsigner.qr import PLAIN_QR_MAX
+    from bigsigner.ui.app import PLAIN_QR_UNAVAILABLE
+    from bigsigner.ui.canvas import INK
+
+    app = App()
+    added = [app.session.add_mnemonic(ABANDON, passphrase=str(number)) for number in range(5)]
+    app.multisig_m = 5
+    app.multisig_selected = {item["fingerprint"] for item in added}
+    app._create_selected_multisig()
+    app.notice = ""
+    descriptor = app.session.descriptor_text(app.wallet_index)
+    assert len(descriptor) > PLAIN_QR_MAX
+    app._act("show-descriptor")
+    app.descriptor_format = 1
+    app.qr_hint_until = 0
+    app.render()
+    assert app._qr_payload() == descriptor
+    assert PLAIN_QR_UNAVAILABLE in " ".join(mark["text"] for mark in app.qr_line_marks)
+    assert any(mark["text"] == "Plain QR" for mark in app.texts)
+    strip = app._qr_strip
+    pixels = strip.load()
+    muted_y = []
+    ink_y = []
+    for y in range(min(strip.height, 80)):
+        row = {pixels[x, y][:3] for x in range(MARGIN, WIDTH - MARGIN)}
+        if MUTED in row:
+            muted_y.append(y)
+        if INK in row:
+            ink_y.append(y)
+    assert muted_y
+    assert not ink_y or min(muted_y) < min(ink_y)
+
+
 def test_scrolling_the_descriptor_reuses_one_picture():
     from embit.descriptor.checksum import checksum
 
