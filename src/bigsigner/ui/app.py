@@ -412,6 +412,9 @@ class App:
         self.descriptor_ur_part = 0
         self._descriptor_ur_key = None
         self._descriptor_ur_parts_cache = []
+        self._descriptor_qr_images = {}
+        self._descriptor_qr_at = None
+        self._qr_strip_part = None
         self.review = None
         self.psbt_checked = None
         self.psbt_accounts = None
@@ -721,6 +724,8 @@ class App:
             delays.append(max(0, self.qr_hint_until - time.monotonic()))
         if self.screen == "psbt-qr" and len(self._psbt_qr_parts_cache) > 1:
             delays.append(0.5)
+        if self._descriptor_ur_animates():
+            delays.append(0.5)
         if self.address_search_pending is not None and self.address_search_shown:
             delays.append(0.05)
         if self.psbt_search_active():
@@ -771,6 +776,7 @@ class App:
         self._advance_boot()
         self._advance_address_search()
         self._advance_psbt_qr()
+        self._advance_descriptor_qr()
         self._advance_addresses_open()
         self._advance_psbt_check()
         self._advance_psbt_signing()
@@ -1504,8 +1510,6 @@ class App:
         "seed-format-prev": lambda self: self._step_seed_format(-1),
         "qr-form-next": lambda self: self._step_qr_format(1),
         "qr-form-prev": lambda self: self._step_qr_format(-1),
-        "qr-part-next": lambda self: self._step_descriptor_part(1),
-        "qr-part-prev": lambda self: self._step_descriptor_part(-1),
         "zoom-close": _act_zoom_close,
         "brightness-down": _act_brightness_down,
         "brightness-up": _act_brightness_up,
@@ -7226,6 +7230,7 @@ class App:
         self.qr_kind = "descriptor"
         self.descriptor_format = 0
         self.descriptor_ur_part = 0
+        self._descriptor_qr_at = None
         self.qr_scroll = 0
         self.qr_zoom = None
         self.qr_hint_until = time.monotonic() + QR_HINT_HOLD
@@ -7261,18 +7266,50 @@ class App:
     def _step_qr_format(self, delta: int):
         if self.qr_kind == "descriptor":
             self.descriptor_format = (self.descriptor_format + delta) % len(DESCRIPTOR_FORMATS)
+            self.descriptor_ur_part = 0
+            self._descriptor_qr_at = None
             self.qr_scroll = 0
             self.qr_zoom = None
             return
         self._step_key_qr(delta)
 
-    def _step_descriptor_part(self, delta: int):
-        parts = self._descriptor_ur_parts()
-        if len(parts) < 2:
+    def _descriptor_ur_animates(self) -> bool:
+        return (
+            self.screen == "qr"
+            and self.qr_kind == "descriptor"
+            and self.qr_zoom is None
+            and DESCRIPTOR_FORMATS[self.descriptor_format] == "ur"
+            and len(self._descriptor_ur_parts_cache) > 1
+        )
+
+    def _descriptor_qr_paused(self) -> bool:
+        """The sequence holds still while the scroll hint is up or the page is moving."""
+        if self.qr_hint_until is not None and time.monotonic() < self.qr_hint_until:
+            return True
+        return self._scroll_at is not None and time.monotonic() - self._scroll_at < SCROLL_QUIET
+
+    def _advance_descriptor_qr(self):
+        parts = self._descriptor_ur_parts_cache
+        if not self._descriptor_ur_animates() or len(parts) < 2:
             return
-        self.descriptor_ur_part = (self.descriptor_ur_part + delta) % len(parts)
-        self.qr_scroll = 0
-        self.qr_zoom = None
+        now = time.monotonic()
+        if self._descriptor_qr_paused():
+            self._descriptor_qr_at = now
+            return
+        if self._descriptor_qr_at is None:
+            self._descriptor_qr_at = now
+            return
+        if now - self._descriptor_qr_at >= 0.5:
+            self.descriptor_ur_part = (self.descriptor_ur_part + 1) % len(parts)
+            self._descriptor_qr_at = now
+
+    def _descriptor_qr_picture(self, payload: str, size: int, light) -> Image.Image:
+        key = (payload, size)
+        image = self._descriptor_qr_images.get(key)
+        if image is None:
+            image = _qr_image(payload, size, light)
+            self._descriptor_qr_images[key] = image
+        return image
 
     def _descriptor_ur_parts(self) -> list[str]:
         if self.wallet_index >= len(self.session.wallets):
@@ -7285,6 +7322,8 @@ class App:
             ]
             self._descriptor_ur_key = key
             self.descriptor_ur_part = 0
+            self._descriptor_qr_images = {}
+            self._descriptor_qr_at = None
         return self._descriptor_ur_parts_cache
 
     def _descriptor_qr_payload(self) -> str:
@@ -7366,7 +7405,10 @@ class App:
         strip = Image.new("RGB", (WIDTH, height), layout.light)
         text_y = 0
         if not layout.unavailable:
-            code = _qr_image(layout.payload, layout.qr_size, layout.light)
+            if layout.part_count > 1:
+                code = self._descriptor_qr_picture(layout.payload, layout.qr_size, layout.light)
+            else:
+                code = _qr_image(layout.payload, layout.qr_size, layout.light)
             strip.paste(code, ((WIDTH - layout.qr_size) // 2, 0))
             text_y = layout.qr_size + layout.text_gap
         draw = ImageDraw.Draw(strip)
@@ -7388,6 +7430,7 @@ class App:
                 text_y += layout.line_h
         self._qr_strip = strip
         self._qr_strip_key = self._qr_strip_identity(layout)
+        self._qr_strip_part = layout.payload
         self.qr_scroll_max = max(0, content_h - layout.view_h)
         self.qr_scroll = max(0, min(self.qr_scroll, self.qr_scroll_max))
 
@@ -7433,7 +7476,6 @@ class App:
             show_zoom = True
             unavailable = False
             part_count = 1
-            part_index = 0
         else:
             if self.wallet_index >= len(self.session.wallets):
                 return None
@@ -7448,22 +7490,16 @@ class App:
                 DESCRIPTOR_FORMATS[self.descriptor_format] == "plain" and len(payload) > PLAIN_QR_MAX
             )
             part_count = 1
-            part_index = 0
             if DESCRIPTOR_FORMATS[self.descriptor_format] == "ur":
                 part_count = max(1, len(self._descriptor_ur_parts()))
-                part_index = self.descriptor_ur_part % part_count
         if show_zoom:
             zoom_y = HEIGHT - 88 - 12 - 64 if format_name else HEIGHT - 100
             bright_y = zoom_y - 12 - 52
         else:
             zoom_y = 0
             bright_y = HEIGHT - 88 - 12 - 52
-        part_y = 0
         view_top = HEADER + 8
         view_bottom = bright_y - 4
-        if part_count > 1:
-            part_y = bright_y - 12 - 52
-            view_bottom = part_y - 4
         view_h = view_bottom - view_top
         line_h = TITLE_SIZE + 8
         text_gap = 4
@@ -7491,12 +7527,21 @@ class App:
             tail=tail,
             unavailable=unavailable,
             part_count=part_count,
-            part_index=part_index,
-            part_y=part_y,
         )
 
     def _qr_strip_identity(self, layout):
-        return (layout.payload, layout.shown, layout.note, layout.light, layout.qr_size, layout.tail, layout.unavailable)
+        # The animated parts share one text picture. Only the code at the top changes.
+        payload = None if layout.part_count > 1 else layout.payload
+        return (
+            payload,
+            layout.shown,
+            layout.note,
+            layout.light,
+            layout.qr_size,
+            layout.tail,
+            layout.unavailable,
+            layout.part_count,
+        )
 
     def _qr_strip_matches(self, layout) -> bool:
         return self._qr_strip is not None and self._qr_strip_key == self._qr_strip_identity(layout)
@@ -7519,6 +7564,7 @@ class App:
         elif body == "loading":
             frame.text("Preparing the QR code.", MARGIN, layout.view_top + 48, size=TITLE_SIZE)
         elif self._qr_strip is not None:
+            self._show_cached_descriptor_qr(layout)
             top = self.qr_scroll
             window = self._qr_strip.crop((0, top, WIDTH, top + layout.view_h))
             frame.image.paste(window, (0, layout.view_top))
@@ -7528,18 +7574,19 @@ class App:
             else (0, layout.view_top, WIDTH, layout.view_bottom)
         )
         self._brightness_control(frame, layout.bright_y)
-        if layout.part_count > 1:
-            self._choice_control(
-                frame,
-                layout.part_y,
-                f"{layout.part_index + 1} of {layout.part_count}",
-                "qr-part-prev",
-                "qr-part-next",
-            )
         if layout.show_zoom:
             frame.button(layout.zoom_y, "Zoom In", "zoom-in")
         if layout.format_name:
             self._format_switcher(frame, layout.format_name, "qr-form-prev", "qr-form-next")
+
+    def _show_cached_descriptor_qr(self, layout):
+        if layout.part_count <= 1 or layout.unavailable or self._qr_strip is None:
+            return
+        if self._qr_strip_part == layout.payload:
+            return
+        image = self._descriptor_qr_picture(layout.payload, layout.qr_size, layout.light)
+        self._qr_strip.paste(image, ((WIDTH - layout.qr_size) // 2, 0))
+        self._qr_strip_part = layout.payload
 
     def _draw_scroll_hint(self, frame: Frame, top: int, bottom: int):
         face = font(36)

@@ -164,7 +164,9 @@ def test_a_long_descriptor_has_no_plain_qr():
     assert not ink_y or min(muted_y) < min(ink_y)
 
 
-def test_a_long_descriptor_ur_steps_through_its_parts():
+def test_a_long_descriptor_ur_cycles_its_cached_parts():
+    import time
+
     from bigsigner.qr import PLAIN_QR_MAX
     from test_qr_transport import _NINE
 
@@ -176,23 +178,47 @@ def test_a_long_descriptor_ur_steps_through_its_parts():
     app.notice = ""
     app._act("show-descriptor")
     app.qr_hint_until = 0
-    app.render()
-    count = len(app._descriptor_ur_parts())
+    first_image = app.render()
+    parts = app._descriptor_ur_parts()
+    count = len(parts)
     assert count > 1
-    assert any(mark["text"] == f"1 of {count}" for mark in app.texts)
+    assert not any(hit["action"] in ("qr-part-next", "qr-part-prev") for hit in app.hits)
+    assert not any(mark["text"].endswith(f"of {count}") for mark in app.texts)
     first = app._qr_payload()
     assert first.startswith("UR:CRYPTO-OUTPUT/1-")
     assert len(first) <= PLAIN_QR_MAX
-    assert all(len(part) <= PLAIN_QR_MAX for part in app._descriptor_ur_parts())
-    part_row = next(hit for hit in app.hits if hit["action"] == "qr-part-next")["box"][1]
+    assert all(len(part) <= PLAIN_QR_MAX for part in parts)
     brightness = next(hit for hit in app.hits if hit["action"] == "brightness-up")["box"][1]
     format_row = next(hit for hit in app.hits if hit["action"] == "qr-form-next")["box"][1]
-    assert part_row < brightness < format_row
-    app._act("qr-part-next")
-    app.render()
-    assert any(mark["text"] == f"2 of {count}" for mark in app.texts)
+    assert brightness < format_row
+    layout = app._qr_scroll_layout()
+    box = (20, layout.view_top, WIDTH - 20, layout.view_top + layout.qr_size)
+
+    def code_bytes(image):
+        return image.crop(box).tobytes()
+
+    app._scroll_at = time.monotonic()
+    app._descriptor_qr_at = time.monotonic() - 1
+    held = app.render()
+    assert app.descriptor_ur_part == 0
+    assert code_bytes(held) == code_bytes(first_image)
+    app._scroll_at = time.monotonic() - 1
+    app._descriptor_qr_at = time.monotonic() - 0.5
+    second = app.render()
     assert app._qr_payload().startswith("UR:CRYPTO-OUTPUT/2-")
-    assert app._qr_payload() != first
+    assert code_bytes(second) != code_bytes(first_image)
+    size = layout.qr_size
+    for index in range(count):
+        app.descriptor_ur_part = index
+        app._descriptor_qr_at = time.monotonic()
+        app.render()
+    cached = [app._descriptor_qr_images[(part, size)] for part in parts]
+    assert len(app._descriptor_qr_images) == count
+    for index in range(count):
+        app.descriptor_ur_part = index
+        app._descriptor_qr_at = time.monotonic()
+        app.render()
+        assert app._descriptor_qr_images[(parts[index], size)] is cached[index]
 
 
 def test_scrolling_the_descriptor_reuses_one_picture():
