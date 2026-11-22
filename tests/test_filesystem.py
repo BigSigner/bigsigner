@@ -711,7 +711,7 @@ def test_new_file_explains_that_non_textual_qr_data_may_not_scan():
     _tap(app, "New File")
     image = app.render()
     scan = next(hit for hit in app.hits if hit["label"] == "Scan QR Code")
-    notes = [item for item in app.texts if "unscannable" in item["text"] or "base64" in item["text"]]
+    notes = [item for item in app.texts if "different content" in item["text"] or "base64" in item["text"]]
     assert notes
     assert notes[0]["box"][1] >= scan["box"][3]
     assert all(item["box"][2] <= WIDTH - MARGIN for item in notes)

@@ -28,7 +28,7 @@ class _Ready:
 
 OPEN_LIMIT = 50_000
 SEQUENCE_NOTE = "Scanning content spread over a sequence of QR codes is not supported. Only a single QR code was captured. Its raw content will be used."
-SCAN_NOTE = "Non-textual data may be unscannable. Encode it in base64 and decode it after scanning."
+SCAN_NOTE = "Non-textual data may not scan, or may come back as different content. Encode it in base64 and decode it after scanning."
 BASE64_NOTE = "This content is encoded in base64."
 SD_DELETE_NOTE = "Deleted content on SD cards may still be restored. Wipe the SD card thoroughly before using it in a device connected to the internet. Deleting a file does not securely erase its contents."
 _BASE64_BODY = re.compile(rb"[A-Za-z0-9+/]+={0,2}\Z")
