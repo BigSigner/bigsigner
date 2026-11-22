@@ -1187,10 +1187,31 @@ def test_settings_picks_a_network_from_the_dropdown():
     app._act("dropdown-network")
     app.render()
     app._act("dropdown-pick-network-regtest")
-    assert app.session.network == "regtest"
+    assert app.session.network == "main"
+    assert app.confirm == "network-warning"
     assert app.open_dropdown is None
+    app.render()
+    text = " ".join(item["text"] for item in app.texts)
+    assert "regtest, a network intended for developers" in text
+    assert "You will not receive or send real Bitcoin." in text
+    assert {hit["label"] for hit in app.hits} >= {"Cancel", "Confirm"}
+    app._act("confirm-no")
+    assert app.session.network == "main"
+    assert app.confirm is None
+    app._act("dropdown-network")
+    app._act("dropdown-pick-network-test")
+    app.render()
+    assert "testnet, a network intended for developers" in " ".join(item["text"] for item in app.texts)
+    app._act("confirm-yes")
+    assert app.session.network == "test"
+    assert app.confirm is None
+    app._act("dropdown-network")
+    app._act("dropdown-pick-network-regtest")
+    assert app.confirm is None
+    assert app.session.network == "regtest"
     app._act("dropdown-network")
     app._act("dropdown-pick-network-main")
+    assert app.confirm is None
     assert app.session.network == "main"
 
 

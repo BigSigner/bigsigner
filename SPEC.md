@@ -504,7 +504,7 @@ Make a research of the various formats, and let the user switch between them.
 
 ### Settings screen
 
-A Network label with a dropdown for mainnet, testnet, and regtest. Choosing another network removes existing wallets and xpub keys, because their derivation paths are not valid on the new network. Seeds stay in memory.
+A Network label with a dropdown for mainnet, testnet, and regtest. Choosing testnet or regtest while the network is mainnet opens a confirmation. It says that network is intended for developers and that the user will not receive or send real Bitcoin. Cancel leaves the network unchanged. Confirm switches. Choosing another network removes existing wallets and xpub keys, because their derivation paths are not valid on the new network. Seeds stay in memory.
 
 Let's discuss what general settings are available on SeedSigner & Specter-DIY. I don't want the user to switch from BTC units to sats. amounts should always be shown with 8 digits after the decimal point.
 

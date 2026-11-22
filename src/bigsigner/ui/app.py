@@ -265,6 +265,14 @@ ACCOUNT_INDEX_WARNING = (
     "Changing the account index of a multisig wallet is an advanced feature. "
     "Losing the exact sequence of account indexes you used might make it impossible to recover the funds."
 )
+
+
+def _network_warning(network: str) -> str:
+    name = {"test": "testnet", "regtest": "regtest"}.get(network, network)
+    return (
+        f"You are switching to {name}, a network intended for developers. "
+        "You will not receive or send real Bitcoin."
+    )
 # A click is a press that never becomes a move. Either edge is enough
 # to make it a scroll, as LVGL's scroll limit does, so there is no radius.
 # Once the finger has left the box it stays a scroll, including a fast flick
@@ -487,6 +495,7 @@ class App:
         self.message_from_address = False
         self.message_return_back = []
         self.confirm = None
+        self._pending_network = None
         self.entropy_words = 24
         self.open_dropdown = None
         self.scan_kind = "key"
@@ -1292,6 +1301,8 @@ class App:
         kind = self.confirm
         self.confirm = None
         self._account_warning_action = None
+        if kind == "network-warning":
+            self._pending_network = None
         if kind == "seed-warning":
             self._pending_seed_warning = None
             self._seed_warning_message = ""
@@ -1615,7 +1626,11 @@ class App:
             elif name == "multisig-m":
                 self.multisig_m = int(key)
             elif name == "network" and key != self.session.network:
-                self.set_notice(self.session.set_network(key))
+                if self.session.network == "main" and key != "main":
+                    self._pending_network = key
+                    self.confirm = "network-warning"
+                else:
+                    self.set_notice(self.session.set_network(key))
             elif name.startswith("acct-"):
                 self._pick_account(bytes.fromhex(name[len("acct-") :]), int(key))
             elif name == "external-format":
@@ -6281,6 +6296,8 @@ class App:
             return "Go to Seed Key?" if self._wallet_key_target[2] else "Go to External Key?"
         if self.confirm == "account-warning":
             return ACCOUNT_INDEX_WARNING
+        if self.confirm == "network-warning":
+            return _network_warning(self._pending_network or "")
         if self.confirm == "message-more":
             return MESSAGE_MORE
         if self.confirm == "psbt-found" and self.psbt_search_hit:
@@ -6333,6 +6350,7 @@ class App:
         y = text_top
         for line in lines:
             frame.draw.text((44, y), line, font=face, fill=INK)
+            frame.mark(line, frame.draw.textbbox((44, y), line, font=face))
             y += line_h
         self._confirm_buttons(frame, box)
 
@@ -6405,6 +6423,11 @@ class App:
             self._open_wallet_key()
         elif kind == "account-warning":
             self._accept_account_warning()
+        elif kind == "network-warning":
+            network = self._pending_network
+            self._pending_network = None
+            if network and network != self.session.network:
+                self.set_notice(self.session.set_network(network))
         elif kind == "replace-file":
             self._write_export()
         elif kind == "gpg-sign-subfolders":
