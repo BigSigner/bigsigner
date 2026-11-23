@@ -148,9 +148,9 @@ def test_two_new_multisig_keys_are_verified_in_order():
     app.accept_qr(_multisig(first, second))
     assert app.screen == "external-review"
     assert app._wallet_key_warning().startswith("You are about to load 2 external keys for a multisig wallet.")
-    assert app._wallet_key_warning().endswith("extended public keys (xpubs) are indeed theirs.")
+    assert app._wallet_key_warning().endswith("one of the following:")
     app.render()
-    assert any(hit["label"] == "Show Extended Public Key Details" for hit in app.hits)
+    assert any(hit["label"] == "Verify New External Keys (xpubs)" for hit in app.hits)
     assert app.pending_external.fingerprint == root_of(ABANDON).my_fingerprint
     app._act("external-next")
     assert app.screen == "external-details"
@@ -188,7 +188,7 @@ def test_a_multisig_import_counts_keys_that_are_already_known():
     )
     assert app._wallet_key_warning().startswith("You are about to load 1 external key for a multisig wallet.")
     app.render()
-    assert any(hit["label"] == "Show Extended Public Key Details" for hit in app.hits)
+    assert any(hit["label"] == "Verify New External Key (xpub)" for hit in app.hits)
     draw = ImageDraw.Draw(Image.new("RGB", (WIDTH, 40)))
     _left, _top, right, _bottom = draw.textbbox((84, 28), "Load MultiSig Wallet", font=font(TITLE_SIZE))
     assert right <= WIDTH - 16
@@ -277,10 +277,10 @@ def test_multisig_wallet_import_verifies_each_new_key_saves_screenshots():
     record.click(app, "SD Card")
     record.click(app, "wallet.txt")
     assert app.screen == "external-review"
-    assert app._wallet_key_warning().endswith("extended public keys (xpubs) are indeed theirs.")
+    assert app._wallet_key_warning().endswith("one of the following:")
     assert app.session.wallets == []
     record.shot(app, "warning")
-    record.click(app, "Show Extended Public Key Details")
+    record.click(app, "Verify New External Keys (xpubs)")
     assert app.screen == "external-details"
     assert app.pending_external.fingerprint == root_of(ABANDON).my_fingerprint
     record.shot(app, "first-key")
@@ -524,10 +524,8 @@ def test_a_known_singlesig_key_is_named_before_the_wallet_is_created():
     assert len(external.session.fingerprints) == 1
 
 
-def test_skip_all_accepts_every_remaining_key_after_a_red_confirm():
+def test_a_wallet_import_confirms_every_new_key_without_skip_all():
     from embit.bip39 import mnemonic_from_bytes
-
-    from bigsigner.ui.canvas import RED
 
     def phrases(count):
         return [mnemonic_from_bytes(bytes([number]) + b"\x3c" * 15) for number in range(count)]
@@ -538,6 +536,8 @@ def test_skip_all_accepts_every_remaining_key_after_a_red_confirm():
 
     four = App()
     four._start_wallet_import(descriptor(4))
+    four.render()
+    assert any(hit["label"] == "Verify New External Keys (xpubs)" for hit in four.hits)
     four._act("external-next")
     four.render()
     assert four.screen == "external-details"
@@ -546,29 +546,127 @@ def test_skip_all_accepts_every_remaining_key_after_a_red_confirm():
 
     app = App()
     app._start_wallet_import(descriptor(5))
-    app._act("external-next")
     app.render()
-    confirm = next(hit for hit in app.hits if hit["label"] == "Confirm Key")
-    skip = next(hit for hit in app.hits if hit["label"] == "Skip All")
-    assert confirm["box"][3] <= skip["box"][1]
-    app._act("external-continue")
-    assert app.screen == "external-details"
-    assert app.wallet_plan_pos == 1
-    app._act("external-skip")
-    image = app.render()
-    assert "verified this wallet descriptor in the past" in " ".join(item["text"] for item in app.texts)
-    button = next(hit for hit in app.hits if hit["action"] == "confirm-yes")
-    assert button["label"] == "Confirm"
-    x = button["box"][0] + 16
-    y = (button["box"][1] + button["box"][3]) // 2
-    assert image.getpixel((x, y))[:3] == RED
-    app._act("confirm-no")
-    assert app.confirm is None
-    assert app.screen == "external-details"
-    assert app.wallet_plan_pos == 1
-    assert app.session.wallets == []
-    app._act("external-skip")
-    app._act("confirm-yes")
+    assert not any(hit["label"] == "Skip All" for hit in app.hits)
+    app._act("external-next")
+    for _index in range(5):
+        app.render()
+        assert app.screen == "external-details"
+        assert not any(hit["label"] == "Skip All" for hit in app.hits)
+        app._act("external-continue")
     assert app.screen == "wallet"
     assert len(app.session.wallets) == 1
     assert len(app.session.wallets[0].fingerprints) == 5
+
+
+def test_verify_first_receive_address_matches_the_loaded_wallet():
+    from bigsigner.ui.app import _address_rows
+    from bigsigner.ui.canvas import HEIGHT, INK, MUTED, RED, Frame
+
+    first = expression(ABANDON, "m/48h/0h/0h/2h")
+    second = expression(LEGAL, "m/48h/0h/1h/2h")
+    app = App()
+    app._start_wallet_import(_multisig(first, second, threshold=2))
+    app.render()
+    labels = [hit["label"] for hit in app.hits]
+    assert "Verify the First Receive Address" in labels
+    assert "Verify New External Keys (xpubs)" in labels
+    assert "Show Extended Public Key Details" not in labels
+    receive = next(hit for hit in app.hits if hit["action"] == "verify-receive")
+    keys = next(hit for hit in app.hits if hit["action"] == "external-next")
+    assert receive["box"][3] <= keys["box"][1]
+    assert HEIGHT - keys["box"][3] == 110 - Frame().button_height("OK")
+    warning_bottom = max(item["box"][3] for item in app.texts if item["text"] != "Load MultiSig Wallet")
+    assert warning_bottom <= receive["box"][1]
+
+    app._act("verify-receive")
+    image = app.render()
+    assert app.screen == "receive-check"
+    text = " ".join(item["text"] for item in app.texts)
+    assert "Verify on all 2 hardware wallets" in text
+    assert "exactly 2-of-2" in text
+    assert "their first Receive Address is:" in text
+    assert any(
+        hit["label"] == "Confirmed On 2 Hardware Wallets" and hit["action"] == "receive-continue"
+        for hit in app.hits
+    )
+    address = app._first_receive_address()
+    assert address.startswith("bc1")
+    groups = [group for row in _address_rows(address) for group in row]
+    assert all(any(item["text"] == group for item in app.texts) for group in groups)
+    assert "".join(groups).replace(" ", "") == address
+    continue_top = next(hit["box"][1] for hit in app.hits if hit["action"] == "receive-continue")
+    address_bottom = max(item["box"][3] for item in app.texts if item["text"] in groups)
+    assert address_bottom <= continue_top
+    def colors(group):
+        box = next(item["box"] for item in app.texts if item["text"] == group)
+        crop = image.crop(tuple(box))
+        return {pixel[:3] for pixel in crop.getdata()}
+
+    assert INK in colors(groups[0])
+    assert MUTED not in colors(groups[0])
+    assert MUTED in colors(groups[1])
+    assert INK not in colors(groups[1])
+    app.back_one()
+    assert app.screen == "external-review"
+    assert app.session.wallets == []
+    app._act("verify-receive")
+    app._act("receive-continue")
+    assert app.screen == "wallet"
+    assert app.session.addresses(0, 0, 0, 1) == [address]
+
+    native = App()
+    native._start_wallet_import(_single(expression(ABANDON, "m/84h/0h/0h")))
+    choice = native.render()
+    button = next(hit["box"] for hit in native.hits if hit["action"] == "verify-receive")
+    assert RED not in {pixel[:3] for pixel in choice.crop(button).getdata()}
+    last = next(item for item in native.texts if item["text"].endswith("following:"))
+    assert last["box"][3] <= button[1]
+    native._act("verify-receive")
+    native.render()
+    assert any(hit["label"] == "Confirmed" and hit["action"] == "receive-continue" for hit in native.hits)
+    native_text = " ".join(item["text"] for item in native.texts)
+    assert "Verify the first receive address on the other hardware wallet:" in native_text
+    assert "multisig" not in native_text
+    native_address = native._first_receive_address()
+    native._act("receive-continue")
+    assert native.session.addresses(0, 0, 0, 1) == [native_address]
+
+    taproot = App()
+    taproot._start_wallet_import(_single(expression(ABANDON, "m/86h/0h/0h"), kind="tr"))
+    taproot._act("verify-receive")
+    taproot.render()
+    taproot_text = " ".join(item["text"] for item in taproot.texts)
+    assert "this is a singlesig wallet, not a multisig wallet, and its first Receive Address is:" in taproot_text
+    taproot_address = taproot._first_receive_address()
+    assert taproot_address.startswith("bc1p")
+    taproot._act("receive-continue")
+    assert taproot.session.addresses(0, 0, 0, 1) == [taproot_address]
+
+    known = App()
+    known.session.add_mnemonic(ABANDON.split())
+    known._start_wallet_import(_multisig(first, second))
+    covered = known.render()
+    known_button = next(hit["box"] for hit in known.hits if hit["action"] == "verify-receive")
+    assert RED not in {pixel[:3] for pixel in covered.crop(known_button).getdata()}
+    assert known.scroll_max["external-review"] == 0
+    ending = next(item for item in known.texts if item["text"].endswith("following:"))
+    assert ending["box"][3] <= known_button[1]
+    known._act("verify-receive")
+    known.back_one()
+    assert known.screen == "external-review"
+    assert known.session.wallets == []
+    known._act("verify-receive")
+    known._act("receive-continue")
+    assert known.screen == "wallet"
+    assert len(known.session.wallets) == 1
+
+    loaded = App()
+    loaded.session.add_text(_multisig(first, expression(LEGAL, "m/48h/0h/0h/2h")))
+    loaded._start_wallet_import(
+        _multisig(expression(ABANDON, "m/48h/0h/9h/2h"), expression(LEGAL, "m/48h/0h/4h/2h"))
+    )
+    loaded._act("verify-receive")
+    loaded._act("receive-continue")
+    assert loaded.screen == "wallet-import-note"
+    assert len(loaded.session.wallets) == 1

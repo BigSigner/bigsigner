@@ -199,8 +199,7 @@ def test_multisig_external_key_format_saves_screenshots():
     assert app._external_preview(app.pending_external).startswith(f"[{fingerprint}/48h/0h/0h/2h]Zpub")
     assert app._lone_key_warning() == (
         "You are about to load an external key for a multisig wallet. "
-        "Your co-signer must verify on their hardware wallet that the following "
-        "extended public key (xpub) is indeed theirs."
+        "Your co-signer must verify on their hardware wallet one of the following:"
     )
 
 

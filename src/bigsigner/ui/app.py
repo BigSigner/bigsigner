@@ -12,6 +12,9 @@ from functools import lru_cache
 from pathlib import Path
 
 from embit.bip39 import WORDLIST
+from embit.descriptor import Descriptor
+from embit.descriptor.checksum import checksum
+from embit.networks import NETWORKS
 from PIL import Image, ImageDraw
 
 from .. import __version__
@@ -688,6 +691,7 @@ class App:
             "descriptor-choice": self._descriptor_choice,
             "wallet-import-note": self._wallet_import_note,
             "external-review": self._external_warning,
+            "receive-check": self._receive_check,
             "external-details": self._external_details,
             "external-verify": self._external_verify,
             "entropy": self._entropy,
@@ -1465,10 +1469,11 @@ class App:
         "psbt-error-ok": lambda self: self._close_psbt_error(),
         "dismiss-notice": lambda self: self.set_notice(""),
         "external-known": lambda self: self._continue_loaded_multisig(),
+        "verify-receive": lambda self: self._open_receive_check(),
+        "receive-continue": lambda self: self._accept_receive_address(),
         "external-next": _act_external_next,
         "external-toggle-note": lambda self: self._toggle_external_note(),
         "external-continue": _act_external_continue,
-        "external-skip": lambda self: self._ask_to_skip_keys(),
         "external-verify": _act_external_verify,
         "wallet-import-continue": lambda self: self._finish_wallet_import(),
         "back": lambda self: self.back_one(),
@@ -6337,11 +6342,6 @@ class App:
             return MESSAGE_MORE
         if self.confirm == "psbt-found" and self.psbt_search_hit:
             return self._found_address_message()
-        if self.confirm == "skip-keys":
-            return (
-                "Skip the verification only if you have verified this wallet descriptor in the past, "
-                "and you are sure the wallet descriptor has not been altered."
-            )
         return "Delete this key?"
 
     def _found_address_message(self) -> str:
@@ -6416,7 +6416,7 @@ class App:
             yes = "OK"
         self._dialog_button(frame, cancel, no, "confirm-no", (132, 138, 148))
         color = RED if self.confirm in (
-            "delete-key", "delete-wallet", "replace-file", "fs-delete", "fs-burn-skip", "gpg-delete", "skip-keys",
+            "delete-key", "delete-wallet", "replace-file", "fs-delete", "fs-burn-skip", "gpg-delete",
         ) else BLUE
         self._dialog_button(frame, confirm, yes, "confirm-yes", color)
 
@@ -6480,8 +6480,6 @@ class App:
             self.gpg.start_encrypt()
         elif kind == "gpg-delete":
             self.gpg.delete_selected()
-        elif kind == "skip-keys":
-            self._skip_remaining_keys()
 
     def _descriptor_choice_message(self) -> str:
         if self.descriptor_choice and self.descriptor_choice.get("multisig"):
@@ -6596,24 +6594,6 @@ class App:
             self.screen = "wallet-import-note"
             return
         self._finish_wallet_import()
-
-    def _can_skip_remaining_keys(self) -> bool:
-        """A wallet descriptor with more than four key expressions can skip the rest."""
-        plan = self.wallet_plan
-        return plan is not None and len(plan["parsed"].keys) > 4
-
-    def _ask_to_skip_keys(self):
-        if self.screen != "external-details" or not self._can_skip_remaining_keys():
-            return
-        self.confirm = "skip-keys"
-
-    def _skip_remaining_keys(self):
-        """Accept this key and every later key, as Confirm Key would on each screen."""
-        plan = self.wallet_plan
-        if plan is None or not plan["new_keys"]:
-            return
-        self.wallet_plan_pos = len(plan["new_keys"]) - 1
-        self._advance_wallet_import()
 
     def _finish_wallet_import(self):
         plan = self.wallet_plan
@@ -6746,13 +6726,11 @@ class App:
             if new == 1:
                 return (
                     "You are about to load 1 external key for a multisig wallet. "
-                    "Your co-signer must verify on their hardware wallet that the following "
-                    "extended public key (xpub) is indeed theirs."
+                    "Your co-signer must verify on their hardware wallet one of the following:"
                 )
             return (
                 f"You are about to load {new} external keys for a multisig wallet. "
-                "Your co-signers must verify on their hardware wallets that the following "
-                "extended public keys (xpubs) are indeed theirs."
+                "Your co-signers must verify on their hardware wallets one of the following:"
             )
         return self._lone_key_warning()
 
@@ -6762,13 +6740,12 @@ class App:
         if key is not None and getattr(key, "role", None) == MULTISIG_NATIVE:
             return (
                 "You are about to load an external key for a multisig wallet. "
-                "Your co-signer must verify on their hardware wallet that the following "
-                "extended public key (xpub) is indeed theirs."
+                "Your co-signer must verify on their hardware wallet one of the following:"
             )
         return (
             "You are about to load an external key for a singlesig wallet. "
             "Before sending any funds to the wallet addresses, the wallet owner must verify "
-            "on their hardware wallet that the following extended public key is indeed theirs."
+            "on their hardware wallet one of the following:"
         )
 
     def _external_details_title(self) -> str:
@@ -6799,32 +6776,178 @@ class App:
             "back",
         )
 
-        def pin(text, action):
-            # HEIGHT - 110 is the top of a one-line button. A taller label keeps that button's bottom gap.
-            gap = 110 - frame.button_height("OK")
-            frame.button(HEIGHT - frame.button_height(text) - gap, text, action)
-
         if known_singlesig:
             frame.text(self._known_keys_sentence(), MARGIN, HEADER + 16, size=TITLE_SIZE)
-            pin("Continue", "external-known")
+            self._pin_buttons(frame, [("Continue", "external-known")])
             return
         if not multisig:
+            if self._new_key_choices():
+                self._draw_new_key_warning(frame, known=False)
+                return
             self._centered_text(frame, "Warning", HEADER + 28, 34, RED)
             message = self._wallet_key_warning() or self._lone_key_warning()
             frame.text(message, MARGIN, HEADER + 88, size=TITLE_SIZE, fill=RED)
-            pin("Show Extended Public Key Details", "external-next")
+            self._review_buttons(frame)
             return
         known, total = self._multisig_key_counts()
         y = HEADER + 16
-        if known:
+        if known and known >= total:
             y = frame.text(self._known_keys_sentence(), MARGIN, y, size=TITLE_SIZE)
             y += 16
         if known < total:
+            if self._new_key_choices():
+                self._draw_new_key_warning(frame, known=bool(known))
+                return
+            if known:
+                y = frame.text(self._known_keys_sentence(), MARGIN, y, size=TITLE_SIZE)
+                y += 16
             y = self._centered_text(frame, "Warning", y, 34, RED)
             frame.text(self._wallet_key_warning(), MARGIN, y, size=TITLE_SIZE, fill=RED)
-            pin("Show Extended Public Key Details", "external-next")
+            self._review_buttons(frame)
             return
-        pin("Continue", "external-known")
+        self._pin_buttons(frame, [("Continue", "external-known")])
+
+    def _choice_buttons(self):
+        return [
+            ("Verify the First Receive Address", "verify-receive"),
+            (self._verify_keys_label(), "external-next"),
+        ]
+
+    def _draw_new_key_warning(self, frame: Frame, known: bool):
+        """The warning stays above the two choices. Those buttons stay at the bottom."""
+        button_top = min(top for top, _label, _action in self._button_stack(frame, self._choice_buttons()))
+        limit = button_top - 8
+        message = self._wallet_key_warning() or self._lone_key_warning()
+        sentence = self._known_keys_sentence() if known else ""
+
+        def lines(value: str) -> int:
+            return len(wrap(frame.draw, value, font(TITLE_SIZE), WIDTH - 2 * MARGIN) or [""])
+
+        def span(step: int, gap: int) -> int:
+            y = HEADER + 16 if known else HEADER + 28
+            if known:
+                y += lines(sentence) * step + gap
+            y += 34 + 8
+            y += lines(message) * step
+            return y
+
+        step = TITLE_SIZE + 8
+        gap = 16
+        if span(step, gap) > limit:
+            step = TITLE_SIZE + 4
+            gap = 8
+        frame.clip_bottom = limit
+        offset = self._scroll_offset("external-review", span(step, gap), clearance=HEIGHT - button_top + 8)
+        y = (HEADER + 16 if known else HEADER + 28) - offset
+        if known:
+            y = self._wrapped_text(frame, sentence, MARGIN, y, TITLE_SIZE, INK, step) + gap
+        if HEADER <= y < frame.clip_bottom:
+            self._centered_text(frame, "Warning", y, 34, RED)
+        y += 34 + 8
+        self._wrapped_text(frame, message, MARGIN, y, TITLE_SIZE, RED, step)
+        frame.clip_bottom = HEIGHT
+        self._pin_buttons(frame, self._choice_buttons())
+        self._still_boxes.append((0, 0, WIDTH, HEADER))
+        self._still_boxes.append((0, button_top, WIDTH, HEIGHT))
+
+    def _wrapped_text(self, frame: Frame, value: str, x: int, y: int, size: int, fill, step: int) -> int:
+        face = font(size)
+        for line in wrap(frame.draw, value, face, WIDTH - x - MARGIN) or [""]:
+            if y < frame.clip_bottom and y + size > getattr(frame, "clip_top", HEADER):
+                frame.draw.text((x, y), line, font=face, fill=fill)
+                frame.mark(line, frame.draw.textbbox((x, y), line, font=face))
+            y += step
+        return y
+
+    def _new_key_choices(self) -> bool:
+        plan = self.wallet_plan
+        return plan is not None and bool(plan["new_keys"])
+
+    def _verify_keys_label(self) -> str:
+        count = len(self.wallet_plan["new_keys"])
+        if count == 1:
+            return "Verify New External Key (xpub)"
+        return "Verify New External Keys (xpubs)"
+
+    def _review_buttons(self, frame: Frame):
+        self._pin_buttons(frame, [("Show Extended Public Key Details", "external-next")])
+
+    def _button_stack(self, frame: Frame, buttons):
+        """Tops from the lowest button upward. The lowest keeps a one-line button's bottom gap."""
+        gap = 12
+        bottom_gap = 110 - frame.button_height("OK")
+        y = HEIGHT - bottom_gap
+        placed = []
+        for label, action in reversed(buttons):
+            y -= frame.button_height(label)
+            placed.append((y, label, action))
+            y -= gap
+        return placed
+
+    def _pin_buttons(self, frame: Frame, buttons):
+        for top, label, action in self._button_stack(frame, buttons):
+            frame.button(top, label, action)
+
+    def _open_receive_check(self):
+        if self.wallet_plan is None:
+            return
+        self.scroll["receive-check"] = 0
+        self.go("receive-check")
+
+    def _accept_receive_address(self):
+        """Continue from the address check the way the last Confirm Key continues."""
+        plan = self.wallet_plan
+        if plan is None or self.screen != "receive-check":
+            return
+        self.wallet_plan_pos = len(plan["new_keys"]) - 1
+        self._advance_wallet_import()
+
+    def _receive_verify_intro(self) -> str:
+        parsed = self.wallet_plan["parsed"]
+        count = len(parsed.keys)
+        if parsed.multisig:
+            return (
+                f"Verify on all {count} hardware wallets that they participate "
+                f"in a multisig of exactly {parsed.threshold}-of-{count}, and their first Receive Address is:"
+            )
+        if parsed.role == SINGLESIG_TAPROOT:
+            return (
+                "Verify on the other hardware wallet that this is a singlesig wallet, "
+                "not a multisig wallet, and its first Receive Address is:"
+            )
+        return "Verify the first receive address on the other hardware wallet:"
+
+    def _receive_confirm_label(self) -> str:
+        parsed = self.wallet_plan["parsed"]
+        if parsed.multisig:
+            return f"Confirmed On {len(parsed.keys)} Hardware Wallets"
+        return "Confirmed"
+
+    def _first_receive_address(self) -> str:
+        parsed = self.wallet_plan["parsed"]
+        parts = []
+        for key in parsed.keys:
+            origin = format_path(list(key.path))[2:]
+            parts.append(f"[{key.fingerprint.hex()}/{origin}]{key.canonical}/<0;1>/*")
+        if parsed.role == SINGLESIG_NATIVE:
+            body = f"wpkh({parts[0]})"
+        elif parsed.role == SINGLESIG_TAPROOT:
+            body = f"tr({parts[0]})"
+        else:
+            body = f"wsh(sortedmulti({parsed.threshold},{','.join(parts)}))"
+        descriptor = Descriptor.from_string(f"{body}#{checksum(body)}")
+        names = {"main": "main", "test": "test", "regtest": "regtest"}
+        return descriptor.derive(0, branch_index=0).address(network=NETWORKS[names[self.session.network]])
+
+    def _receive_check(self, frame: Frame):
+        if self.wallet_plan is None:
+            frame.header("Verify Address", "back")
+            frame.text("This wallet is no longer waiting to be loaded.", MARGIN, HEADER + 24, size=TITLE_SIZE)
+            return
+        frame.header("Verify Address", "back")
+        y = frame.text(self._receive_verify_intro(), MARGIN, HEADER + 24, size=TITLE_SIZE)
+        self._grouped_address(frame, self._first_receive_address(), y + 16)
+        self._pin_buttons(frame, [(self._receive_confirm_label(), "receive-continue")])
 
     def _external_details(self, frame: Frame):
         key = self.pending_external
@@ -6850,12 +6973,10 @@ class App:
         if self.external_note_open:
             y += 8 + self._text_height(frame, key_format_note(key.fingerprint.hex()), detail)
         y += 16
-        y += frame.button_height("Verify QR Code") + 8
+        y += frame.button_height("Verify QR Code", icon=True) + 8
         y += self._text_height(frame, KEY_SCAN_NOTE, detail)
         y += 28
         y += frame.button_height("Confirm Key")
-        if self._can_skip_remaining_keys():
-            y += 12 + frame.button_height("Skip All")
         content_end = y + 24
         offset = self._scroll_offset("external-details", content_end, clearance=12)
         y = HEADER + 16 - offset
@@ -6868,11 +6989,9 @@ class App:
         y = self._format_prompt(frame, y + 16)
         if self.external_note_open:
             y = frame.text(key_format_note(key.fingerprint.hex()), MARGIN, y + 8, size=detail, fill=MUTED)
-        y = frame.button(y + 16, "Verify QR Code", "external-verify")
+        y = frame.button(y + 16, "Verify QR Code", "external-verify", icon=Icons.CAMERA, awesome=True)
         y = frame.text(KEY_SCAN_NOTE, MARGIN, y - 4, size=detail)
-        y = frame.button(y + 28, "Confirm Key", "external-continue")
-        if self._can_skip_remaining_keys():
-            frame.button(y, "Skip All", "external-skip")
+        frame.button(y + 28, "Confirm Key", "external-continue")
         frame.header("Load External Key", "back")
         if self.open_dropdown == "external-format":
             self._dropdown_menu(
