@@ -6776,11 +6776,11 @@ class App:
             new = len(plan["new_keys"])
             if new == 1:
                 return (
-                    "You are about to load 1 external key for a multisig wallet. "
+                    "You are about to load 1 external key for a MultiSig wallet. "
                     "Your co-signer must verify on their hardware wallet one of the following:"
                 )
             return (
-                f"You are about to load {new} external keys for a multisig wallet. "
+                f"You are about to load {new} external keys for a MultiSig wallet. "
                 "Your co-signers must verify on their hardware wallets one of the following:"
             )
         return self._lone_key_warning()
@@ -6790,11 +6790,11 @@ class App:
         key = self.pending_external
         if key is not None and getattr(key, "role", None) == MULTISIG_NATIVE:
             return (
-                "You are about to load an external key for a multisig wallet. "
+                "You are about to load an external key for a MultiSig wallet. "
                 "Your co-signer must verify on their hardware wallet one of the following:"
             )
         return (
-            "You are about to load an external key for a singlesig wallet. "
+            "You are about to load an external key for a SingleSig wallet. "
             "Before sending any funds to the wallet addresses, the wallet owner must verify "
             "on their hardware wallet one of the following:"
         )
@@ -6975,8 +6975,8 @@ class App:
             )
         if parsed.role == SINGLESIG_TAPROOT:
             return (
-                "Verify on the other hardware wallet that this is a singlesig wallet, "
-                "not a multisig wallet, and its first Receive Address is:"
+                "Verify on the other hardware wallet that it is a SingleSig wallet, "
+                "not a MultiSig wallet, and its first Receive Address is:"
             )
         return "Verify the first receive address on the other hardware wallet:"
 

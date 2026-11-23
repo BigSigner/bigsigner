@@ -31,7 +31,7 @@ BigSigner opens a screen titled Error loading key, in red text, and does not sto
 
 OK at the bottom of that screen returns to Bitcoin Keys.
 
-Otherwise it opens Load External Key. The first screen shows a centered red Warning. For a single-signature key it says you are about to load an external key for a singlesig wallet, and that before sending any funds the wallet owner must verify on their hardware wallet one of the following. For a multisig key it says you are about to load an external key for a multisig wallet, and that the co-signer must verify on their hardware wallet one of the following. Show Extended Public Key Details at the bottom opens the second Load External Key screen.
+Otherwise it opens Load External Key. The first screen shows a centered red Warning. For a single-signature key it says you are about to load an external key for a SingleSig wallet, and that before sending any funds the wallet owner must verify on their hardware wallet one of the following. For a multisig key it says you are about to load an external key for a MultiSig wallet, and that the co-signer must verify on their hardware wallet one of the following. Show Extended Public Key Details at the bottom opens the second Load External Key screen.
 
 That screen first asks you to verify the extended public key on the other hardware wallet. A grey Format: label sits above a menu of the canonical extended key, the SLIP-132 form when this path has one, or the full key expression, and the chosen key is shown under the menu. Below that it asks you to verify the backed-up details: the type, the account, and the derivation path. Account 0 is marked default. Any other account is shown in red as non-default.
 

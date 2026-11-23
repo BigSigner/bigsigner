@@ -147,7 +147,7 @@ def test_two_new_multisig_keys_are_verified_in_order():
     second = expression(LEGAL, "m/48h/0h/1h/2h")
     app.accept_qr(_multisig(first, second))
     assert app.screen == "external-review"
-    assert app._wallet_key_warning().startswith("You are about to load 2 external keys for a multisig wallet.")
+    assert app._wallet_key_warning().startswith("You are about to load 2 external keys for a MultiSig wallet.")
     assert app._wallet_key_warning().endswith("one of the following:")
     app.render()
     assert any(hit["label"] == "Verify New External Keys (xpubs)" for hit in app.hits)
@@ -186,7 +186,7 @@ def test_a_multisig_import_counts_keys_that_are_already_known():
     assert app._known_keys_sentence() == (
         "1 of the multisig wallet's 2 keys was already loaded: a seed key."
     )
-    assert app._wallet_key_warning().startswith("You are about to load 1 external key for a multisig wallet.")
+    assert app._wallet_key_warning().startswith("You are about to load 1 external key for a MultiSig wallet.")
     app.render()
     assert any(hit["label"] == "Verify New External Key (xpub)" for hit in app.hits)
     draw = ImageDraw.Draw(Image.new("RGB", (WIDTH, 40)))
@@ -637,7 +637,7 @@ def test_verify_first_receive_address_matches_the_loaded_wallet():
     taproot._act("verify-receive")
     taproot.render()
     taproot_text = " ".join(item["text"] for item in taproot.texts)
-    assert "this is a singlesig wallet, not a multisig wallet, and its first Receive Address is:" in taproot_text
+    assert "this is a singlesig wallet, not a MultiSig wallet, and its first Receive Address is:" in taproot_text
     taproot_address = taproot._first_receive_address()
     assert taproot_address.startswith("bc1p")
     taproot._act("receive-continue")
