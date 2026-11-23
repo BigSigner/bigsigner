@@ -29,6 +29,7 @@ class _Ready:
 OPEN_LIMIT = 50_000
 SEQUENCE_NOTE = "Scanning content spread over a sequence of QR codes is not supported. Only a single QR code was captured. Its raw content will be used."
 SCAN_NOTE = "Non-textual data may not scan, or may come back as different content. Encode it in base64 and decode it after scanning."
+BINARY_QR_NOTE = "Non-textual data may not scan, or may come back as different content."
 BASE64_NOTE = "This content is encoded in base64."
 SD_DELETE_NOTE = "Deleted content on SD cards may still be restored. Wipe the SD card thoroughly before using it in a device connected to the internet. Deleting a file does not securely erase its contents."
 _BASE64_BODY = re.compile(rb"[A-Za-z0-9+/]+={0,2}\Z")
@@ -411,7 +412,7 @@ class FileSystemUI:
             self._show_guide(file_qr.spaced_parts(file_qr.gzip_base64(data)))
 
     def _show_binary_qr(self):
-        self._show_codes([self._file_bytes(file_qr.BINARY_DIRECT)])
+        self._show_codes([self._file_bytes(file_qr.BINARY_DIRECT)], note=BINARY_QR_NOTE)
 
     def _show_base64_qr(self):
         data = self._file_bytes(file_qr.QR_SPLIT_LIMIT)
@@ -1190,7 +1191,8 @@ class FileSystemUI:
             app._brightness_control(frame, bright_y)
             y = bright_y + 52 + 12
             if self.qr_note:
-                y = frame.text(self.qr_note, MARGIN, y, size=28)
+                fill = MUTED if self.qr_note == BINARY_QR_NOTE else INK
+                y = frame.text(self.qr_note, MARGIN, y, size=28, fill=fill)
             if self.qr_mono:
                 frame.text(self.qr_mono, MARGIN, y + 4, size=28, mono=True)
         frame.header("File QR", "back")

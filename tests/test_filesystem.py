@@ -302,6 +302,12 @@ def test_file_qr_preserves_bytes_and_dims_the_whole_screen(storage, data):
     assert app._qr_payload() == data
     normal = app.render()
     assert "File QR" in [item["text"] for item in app.texts]
+    shown = " ".join(item["text"] for item in app.texts)
+    if is_text(data):
+        assert "may not scan" not in shown
+    else:
+        note = next(item for item in app.texts if item["text"].startswith("Non-textual"))
+        assert MUTED in {pixel[:3] for pixel in normal.crop(tuple(note["box"])).getdata()}
     assert app._shown_to_a_camera()
     assert {hit["action"] for hit in app.hits} >= {"brightness-down", "brightness-up", "back"}
     _tap(app, "brightness-down")
