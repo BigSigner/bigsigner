@@ -689,6 +689,7 @@ class App:
             "singlesig": self._singlesig,
             "load-error": self._load_error,
             "descriptor-choice": self._descriptor_choice,
+            "descriptor-keys": self._descriptor_keys,
             "wallet-import-note": self._wallet_import_note,
             "external-review": self._external_warning,
             "receive-check": self._receive_check,
@@ -1505,6 +1506,7 @@ class App:
         "confirm-yes": lambda self: self._confirm_yes(),
         "confirm-no": _act_confirm_no,
         "descriptor-both": _act_descriptor_both,
+        "descriptor-one": lambda self: self._open_descriptor_keys(),
         "descriptor-key": lambda self: self._load_chosen_descriptor_key(),
         "confirm-stay": _act_confirm_stay,
         "delete-key": _act_delete_key,
@@ -1589,6 +1591,10 @@ class App:
         if handler is not None:
             handler(self)
             return
+        if action.startswith("descriptor-pick-"):
+            self.descriptor_key_index = int(action[len("descriptor-pick-") :])
+            self._load_chosen_descriptor_key()
+            return
         if action.startswith("pick-ss-"):
             fingerprint = bytes.fromhex(action[len("pick-ss-") :])
             self.singlesig_selected = None if fingerprint == self.singlesig_selected else fingerprint
@@ -1661,8 +1667,6 @@ class App:
                 self._pick_account(bytes.fromhex(name[len("acct-") :]), int(key))
             elif name == "external-format":
                 self.external_format = key
-            elif name == "descriptor-key":
-                self.descriptor_key_index = int(key)
             elif name == "seed-length":
                 self._set_seed_length(int(key))
             elif name == "bip85-words":
@@ -6501,16 +6505,63 @@ class App:
         y = frame.text(self._descriptor_choice_message(), MARGIN, HEADER + 24, size=BODY_SIZE)
         if choice["multisig"]:
             y = frame.button(y + 20, "Load Both Wallet and All Keys", "descriptor-both")
-            labels = choice["labels"]
-            index = min(self.descriptor_key_index, len(labels) - 1)
-            field = self._dropdown_field(frame, y + 64, "descriptor-key", labels[index])
-            frame.button(field[3] + 24, "Load Only Selected Key", "descriptor-key")
-            if self.open_dropdown == "descriptor-key":
-                options = [(str(item), label) for item, label in enumerate(labels)]
-                self._dropdown_menu(frame, field, "descriptor-key", options, str(index))
+            frame.button(y, "Load Only a Single External Key", "descriptor-one")
             return
         frame.button(HEIGHT - 190, "Both Wallet and Key", "descriptor-both")
         frame.button(HEIGHT - 110, "Only the Key", "descriptor-key")
+
+    def _open_descriptor_keys(self):
+        if not self.descriptor_choice or not self.descriptor_choice.get("multisig"):
+            return
+        self.open_dropdown = None
+        self.scroll["descriptor-keys"] = 0
+        self.go("descriptor-keys")
+
+    def _descriptor_key_rows(self) -> list[tuple[str, str]]:
+        """Fingerprint and extended public key, in descriptor order."""
+        rows = []
+        for expression in (self.descriptor_choice or {}).get("expressions") or []:
+            fingerprint, _, rest = expression[1:].partition("/")
+            xpub = rest.split("]", 1)[-1].split("/", 1)[0]
+            rows.append((fingerprint, xpub))
+        return rows
+
+    def _descriptor_key_card_height(self) -> int:
+        line = max(TITLE_SIZE, _DETAIL_ICON)
+        return 16 + line + 12 + TITLE_SIZE + 16
+
+    def _descriptor_keys(self, frame: Frame):
+        rows = self._descriptor_key_rows()
+        if not rows:
+            frame.header("Select an External Key", "back")
+            frame.text("This descriptor is no longer waiting to be loaded.", MARGIN, HEADER + 24, size=TITLE_SIZE)
+            return
+        row_h = self._descriptor_key_card_height()
+        gap = 12
+        list_top = HEADER + 16
+        content_end = list_top + len(rows) * row_h + gap * max(0, len(rows) - 1)
+        offset = self._scroll_offset("descriptor-keys", content_end, clearance=24)
+        y = list_top - offset
+        for index, (fingerprint, xpub) in enumerate(rows):
+            clip = self._list_card_clip(frame, y, row_h, HEADER, HEIGHT)
+            if clip is not None:
+                self._paint_descriptor_key_card(frame, y, row_h, fingerprint, xpub)
+                self._restore_list_card_clip(frame, clip)
+                frame.hit(clip["hit"], f"descriptor-pick-{index}", fingerprint)
+            y += row_h + gap
+        frame.header("Select an External Key", "back")
+
+    def _paint_descriptor_key_card(self, frame: Frame, y: int, row_h: int, fingerprint: str, xpub: str):
+        frame.draw.rounded_rectangle((MARGIN, y, WIDTH - MARGIN, y + row_h), radius=16, fill=WHITE, outline=LINE)
+        inset = MARGIN + 16
+        text_y = y + 16
+        hex_x = frame.leading_icon(
+            Icons.FINGERPRINT, inset, text_y, TITLE_SIZE, MUTED, icon_size=_DETAIL_ICON,
+        )
+        frame.text(fingerprint, hex_x, text_y, size=TITLE_SIZE, fill=INK, mono=True)
+        xpub_y = text_y + max(TITLE_SIZE, _DETAIL_ICON) + 12
+        shown = _one_line(frame, xpub, TITLE_SIZE, WIDTH - MARGIN - 16 - inset, mono=True)
+        frame.text(shown, inset, xpub_y, size=TITLE_SIZE, fill=INK, mono=True)
 
     def _load_chosen_descriptor_key(self):
         choice = self.descriptor_choice

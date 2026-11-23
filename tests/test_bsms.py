@@ -73,9 +73,8 @@ def test_a_bsms_multisig_on_the_keys_page_offers_the_wallet_or_one_key():
         "73c5da0a xpub6DkFAX\u2026",
         "80dfd80b xpub6FN69k\u2026",
     ]
-    _tap(app, "dropdown-descriptor-key")
-    _tap(app, "dropdown-pick-descriptor-key-0")
-    _tap(app, "Load Only Selected Key")
+    _tap(app, "Load Only a Single External Key")
+    _tap(app, "73c5da0a")
     assert app.screen == "external-review"
     assert app.wallet_plan is None
     assert app.pending_external.fingerprint.hex() == "73c5da0a"

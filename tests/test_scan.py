@@ -127,19 +127,20 @@ def test_key_scan_offers_a_multisig_descriptor_choice():
     app.render()
     labels = {hit["label"] for hit in app.hits}
     assert "Load Both Wallet and All Keys" in labels
-    assert "Load Only Selected Key" in labels
-    both_box = next(hit["box"] for hit in app.hits if hit["action"] == "descriptor-both")
-    menu_box = next(hit["box"] for hit in app.hits if hit["action"] == "dropdown-descriptor-key")
-    assert menu_box[1] - both_box[3] >= 64
-    _tap(app, "dropdown-descriptor-key")
-    assert app.open_dropdown == "descriptor-key"
+    assert "Load Only a Single External Key" in labels
+    assert not any(hit["action"].startswith("dropdown-") for hit in app.hits)
+    _tap(app, "Load Only a Single External Key")
+    assert app.screen == "descriptor-keys"
     app.render()
+    assert any(item["text"] == "Select an External Key" for item in app.texts)
     shown = {hit["label"] for hit in app.hits}
-    assert expected[0] in shown and expected[1] in shown
-    _tap(app, "dropdown-pick-descriptor-key-1")
-    assert app.descriptor_key_index == 1
-    assert app.open_dropdown is None
-    _tap(app, "Load Only Selected Key")
+    assert parsed.keys[0].fingerprint.hex() in shown
+    assert parsed.keys[1].fingerprint.hex() in shown
+    second = parsed.keys[1].canonical
+    preview = next(item["text"] for item in app.texts if item["text"].startswith(second[:8]))
+    assert preview.endswith("\u2026")
+    assert second.startswith(preview[:-1])
+    _tap(app, parsed.keys[1].fingerprint.hex())
     assert app.screen == "external-review"
     assert app.wallet_plan is None
     assert app.pending_external.fingerprint == parsed.keys[1].fingerprint
