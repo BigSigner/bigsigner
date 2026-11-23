@@ -583,11 +583,11 @@ def test_verify_first_receive_address_matches_the_loaded_wallet():
     image = app.render()
     assert app.screen == "receive-check"
     text = " ".join(item["text"] for item in app.texts)
-    assert "Verify on all 2 hardware wallets" in text
+    assert "Verify on all 2 other hardware wallets" in text
     assert "exactly 2-of-2" in text
     assert "their first Receive Address is:" in text
     assert any(
-        hit["label"] == "Confirmed On 2 Hardware Wallets" and hit["action"] == "receive-continue"
+        hit["label"] == "Confirmed On 2 Other Hardware Wallets" and hit["action"] == "receive-continue"
         for hit in app.hits
     )
     address = app._first_receive_address()
@@ -653,6 +653,16 @@ def test_verify_first_receive_address_matches_the_loaded_wallet():
     ending = next(item for item in known.texts if item["text"].endswith("following:"))
     assert ending["box"][3] <= known_button[1]
     known._act("verify-receive")
+    known.render()
+    one_other = " ".join(item["text"] for item in known.texts)
+    assert (
+        "Verify on the other hardware wallet that it participates "
+        "in a multisig of exactly 2-of-2, and its first Receive Address is:"
+    ) in one_other
+    assert any(
+        hit["label"] == "Confirmed On Other Hardware Wallet" and hit["action"] == "receive-continue"
+        for hit in known.hits
+    )
     known.back_one()
     assert known.screen == "external-review"
     assert known.session.wallets == []

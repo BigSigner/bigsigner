@@ -6953,12 +6953,24 @@ class App:
         self.wallet_plan_pos = len(plan["new_keys"]) - 1
         self._advance_wallet_import()
 
+    def _other_hardware_wallets(self) -> int:
+        """Descriptor keys whose seed is not loaded. A loaded seed already matched the xpub."""
+        parsed = self.wallet_plan["parsed"]
+        seeds = sum(self.session._seed_for(key.fingerprint) is not None for key in parsed.keys)
+        return len(parsed.keys) - seeds
+
     def _receive_verify_intro(self) -> str:
         parsed = self.wallet_plan["parsed"]
         count = len(parsed.keys)
         if parsed.multisig:
+            others = self._other_hardware_wallets()
+            if others == 1:
+                return (
+                    "Verify on the other hardware wallet that it participates "
+                    f"in a multisig of exactly {parsed.threshold}-of-{count}, and its first Receive Address is:"
+                )
             return (
-                f"Verify on all {count} hardware wallets that they participate "
+                f"Verify on all {others} other hardware wallets that they participate "
                 f"in a multisig of exactly {parsed.threshold}-of-{count}, and their first Receive Address is:"
             )
         if parsed.role == SINGLESIG_TAPROOT:
@@ -6970,9 +6982,12 @@ class App:
 
     def _receive_confirm_label(self) -> str:
         parsed = self.wallet_plan["parsed"]
-        if parsed.multisig:
-            return f"Confirmed On {len(parsed.keys)} Hardware Wallets"
-        return "Confirmed"
+        if not parsed.multisig:
+            return "Confirmed"
+        others = self._other_hardware_wallets()
+        if others == 1:
+            return "Confirmed On Other Hardware Wallet"
+        return f"Confirmed On {others} Other Hardware Wallets"
 
     def _first_receive_address(self) -> str:
         parsed = self.wallet_plan["parsed"]
