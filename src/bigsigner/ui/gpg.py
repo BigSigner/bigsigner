@@ -40,6 +40,8 @@ _SUBKEY_USAGES = (("sign", "Signing"), ("encr", "Encryption"), ("auth", "Authent
 _BIP85_BITS = (("3072", "3072 bits"), ("4096", "4096 bits"))
 _BIP85_ALGOS = (("rsa", "RSA"), ("ed25519", "Ed25519"))
 _BIP85_ROLES = (("cert", "Certificate Only"), ("cert-sign", "Certificate and Signing"))
+# The hovering plus is 94px with a 28px inset, matching the button on Bitcoin Keys.
+_PLUS_CLEARANCE = 122
 
 
 def _companion_looks_like_checksums(relative: str, storage: str) -> bool:
@@ -645,7 +647,6 @@ class GpgUI:
         self.app.scroll["gpg-result"] = 0
 
     def home(self, frame):
-        app = self.app
         frame.header("GPG", "menu")
         y = HEADER + 24
         version = self.backend.version_line()
@@ -658,16 +659,6 @@ class GpgUI:
         y = self._button_row(frame, y, ("Encrypt", "gpg-encrypt-menu"), ("Decrypt", "gpg-decrypt"))
         y = frame.button(y, "Add Entropy to OS", "gpg-entropy")
         frame.text("GPG keys stay in RAM and are cleared when the power is off.", MARGIN, y + 12, size=28, fill=MUTED)
-        if app.add_menu:
-            app._speed_dial(
-                frame,
-                (
-                    ("Load Key from File", "gpg-load-file", Icons.FILE),
-                    ("Load Key from QR Code", "gpg-scan-key", Icons.CAMERA),
-                    ("Derive Key from Bitcoin Seed (BIP-85)", "gpg-load-seed", Icons.SEED),
-                ),
-            )
-        app._plus(frame, "toggle-add", Icons.CLOSE if app.add_menu else Icons.PLUS)
 
     @staticmethod
     def _button_row(frame, y, left, right):
@@ -1320,10 +1311,12 @@ class GpgUI:
             if len(self.outcome.unverified) > 3:
                 self.add_text("and more...", fill=WARNING)
 
-    def content(self, frame, title, review=False, footer=None):
+    def content(self, frame, title, review=False, footer=None, clearance=None):
         gap = 20
         footer_h = gap + frame.button_height(footer[0]) + gap if footer else 0
-        offset = self.app._scroll_offset(self.app.screen, self.content_end, clearance=(footer_h + 12) if footer else (132 if review else 20))
+        if clearance is None:
+            clearance = (footer_h + 12) if footer else (132 if review else 20)
+        offset = self.app._scroll_offset(self.app.screen, self.content_end, clearance=clearance)
         bottom = HEIGHT - footer_h if footer else (HEIGHT - 128 if review else HEIGHT)
         for (left, top, right, end), action in zip(self.cards, self.card_actions):
             if end - offset > HEADER and top - offset < bottom:
@@ -1352,7 +1345,18 @@ class GpgUI:
             self.outcome = Outcome(True, keys=self._restore_keys)
             self._restore_keys = None
             self.build_keys(summary=True)
-        self.content(frame, "List GPG Keys")
+        self.content(frame, "List GPG Keys", clearance=_PLUS_CLEARANCE)
+        app = self.app
+        if app.add_menu:
+            app._speed_dial(
+                frame,
+                (
+                    ("Load Key from File", "gpg-load-file", Icons.FILE),
+                    ("Load Key from QR Code", "gpg-scan-key", Icons.CAMERA),
+                    ("Derive Key from Bitcoin Seed (BIP-85)", "gpg-load-seed", Icons.SEED),
+                ),
+            )
+        app._plus(frame, "toggle-add", Icons.CLOSE if app.add_menu else Icons.PLUS)
 
     def details(self, frame):
         self.content(frame, "GPG Key")

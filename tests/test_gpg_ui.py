@@ -149,8 +149,11 @@ def _settle(app):
 
 
 def _open_load(app):
+    if app.screen != "gpg-keys":
+        _tap(app, "List GPG Keys")
+        _settle(app)
     _tap(app, "plus")
-    assert app.screen == "gpg" and app.add_menu
+    assert app.screen == "gpg-keys" and app.add_menu
 
 
 def _review(source="file", good=True):
@@ -197,16 +200,9 @@ def test_gpg_menu_is_below_file_system_and_all_three_routes_are_available():
     assert rows["GPG"][3] == rows["Settings"][1]
     _tap(app, "GPG")
     app.render()
-    assert {hit["label"] for hit in app.hits} >= {"List GPG Keys", "Verify Signature", "Encrypt", "Decrypt", "plus"}
+    assert {hit["label"] for hit in app.hits} >= {"List GPG Keys", "Verify Signature", "Encrypt", "Decrypt"}
+    assert "plus" not in {hit["label"] for hit in app.hits}
     assert "Load GPG Key" not in {hit["label"] for hit in app.hits}
-    plus = next(hit for hit in app.hits if hit["label"] == "plus")
-    assert plus["box"][0] > WIDTH / 2 and plus["box"][1] > HEIGHT / 2
-    _tap(app, "plus")
-    assert app.screen == "gpg" and app.add_menu
-    app.render()
-    assert {hit["label"] for hit in app.hits} >= {
-        "Load Key from File", "Load Key from QR Code", "Derive Key from Bitcoin Seed (BIP-85)",
-    }
     encrypt = next(hit for hit in app.hits if hit["label"] == "Encrypt")
     decrypt = next(hit for hit in app.hits if hit["label"] == "Decrypt")
     entropy = next(hit for hit in app.hits if hit["label"] == "Add Entropy to OS")
@@ -219,6 +215,16 @@ def test_gpg_menu_is_below_file_system_and_all_three_routes_are_available():
     assert version["box"][3] <= first["box"][1]
     assert version["box"][1] >= HEADER
     assert abs((version["box"][0] + version["box"][2]) / 2 - WIDTH / 2) < 2
+    _tap(app, "List GPG Keys")
+    _settle(app)
+    plus = next(hit for hit in app.hits if hit["label"] == "plus")
+    assert plus["box"][0] > WIDTH / 2 and plus["box"][1] > HEIGHT / 2
+    _tap(app, "plus")
+    assert app.screen == "gpg-keys" and app.add_menu
+    app.render()
+    assert {hit["label"] for hit in app.hits} >= {
+        "Load Key from File", "Load Key from QR Code", "Derive Key from Bitcoin Seed (BIP-85)",
+    }
 
 
 def test_gpg_menu_omits_the_version_line_when_gpg_has_no_stdout():
@@ -251,12 +257,12 @@ def test_date_selector_uses_utc_and_numeric_editing_and_clamps_leap_day():
 def test_key_is_only_imported_after_confirmation_and_cancel_discards_content(source):
     app = _review(source)
     assert app.screen == "gpg-review"
-    assert [call[0] for call in app.gpg.backend.calls] == ["inspect"]
+    assert [call[0] for call in app.gpg.backend.calls] == ["list", "inspect"]
     expected = b"test public key" if source == "file" else b"public\x00\xffkey"
-    assert app.gpg.backend.calls[0] == ("inspect", expected, None)
+    assert app.gpg.backend.calls[-1] == ("inspect", expected, None)
     _tap(app, "Cancel")
-    assert app.screen == "gpg" and not app.gpg.key_data
-    assert [call[0] for call in app.gpg.backend.calls] == ["inspect"]
+    assert app.screen == "gpg-keys" and not app.gpg.key_data
+    assert [call[0] for call in app.gpg.backend.calls] == ["list", "inspect"]
 
     app = _review(source)
     _tap(app, "Confirm")
@@ -1066,6 +1072,8 @@ def test_gpg_screens_save_screenshots(real_backend):
     record.click(app, "back")
     record.click(app, "back")
     record.click(app, "back")
+    record.click(app, "List GPG Keys")
+    _settle(app)
     record.click(app, "plus")
     record.shot(app, "load-menu")
     enc = _app(fixture_date=False)
@@ -1089,6 +1097,8 @@ def test_gpg_screens_save_screenshots(real_backend):
     from test_domain import ABANDON
 
     bip = _app(fixture_date=False)
+    record.click(bip, "List GPG Keys")
+    _settle(bip)
     record.click(bip, "plus")
     record.click(bip, "Derive Key from Bitcoin Seed (BIP-85)")
     record.shot(bip, "bip85-no-seed")
