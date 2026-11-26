@@ -4938,7 +4938,7 @@ class App:
             HEADER + 24,
             size=TITLE_SIZE,
         )
-        y = frame.button(y + 8, "Manual Entry", "address-type")
+        y = frame.button(y + 8, "Manual Entry", "address-type", icon=Icons.PENCIL, awesome=True)
         y = frame.button(y, "Scan QR Code", "address-scan", icon=Icons.CAMERA, awesome=True)
         frame.button(y, "Load from File", "address-sd", icon=Icons.FILE, awesome=True)
 
@@ -8630,7 +8630,7 @@ class App:
 
     def _address_message(self, frame: Frame):
         frame.header("Sign Message", "back")
-        y = frame.button(HEADER + 24, "Manual Entry", "address-message-manual")
+        y = frame.button(HEADER + 24, "Manual Entry", "address-message-manual", icon=Icons.PENCIL, awesome=True)
         y = frame.button(y, "Scan QR Code", "address-message-scan", icon=Icons.CAMERA, awesome=True)
         frame.button(y, "Load from File", "address-message-sd", icon=Icons.FILE, awesome=True)
 

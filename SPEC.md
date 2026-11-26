@@ -204,7 +204,7 @@ Other screens are internal screens reachable by doing actions in those main scre
 
 ## Keys screen
 
-Every Scan QR Code button shows a camera icon before its text inside the button. Every Load from File button shows a file icon before its text. On the Bitcoin Keys plus menu, Enter Seed Words shows a pencil icon and New Seed shows a dice icon. These use the same icon style as New seed, including in the plus menus. Load from File opens the existing file picker on the SD card, or the browser's emulated SD card.
+Every Scan QR Code button shows a camera icon before its text inside the button. Every Load from File button shows a file icon before its text. Every Manual Entry button beside Scan QR Code shows a pencil icon in that same position. On the Bitcoin Keys plus menu, Enter Seed Words shows a pencil icon and New Seed shows a dice icon. These use the same icon style as New seed, including in the plus menus. Load from File opens the existing file picker on the SD card, or the browser's emulated SD card.
 
 The title of the screen should be "Bitcoin Keys".
 This will also be the default screen when the app is opened.

@@ -1199,7 +1199,7 @@ class FileSystemUI:
 
     def new_source(self, frame):
         frame.header("New File", "back")
-        y = frame.button(HEADER + 24, "Manual Entry", "fs-manual")
+        y = frame.button(HEADER + 24, "Manual Entry", "fs-manual", icon=Icons.PENCIL, awesome=True)
         y = frame.button(y, "Scan QR Code", "fs-scan", icon=Icons.CAMERA, awesome=True)
         frame.text(SCAN_NOTE, MARGIN, y, size=28, fill=MUTED)
 

@@ -6,7 +6,7 @@ BigSigner is an air-gapped Bitcoin signer for a portrait 480×800 touchscreen. S
 
 ## Screen
 
-Every Scan QR Code button has a camera icon before its text inside the button. Every Load from File button has a file icon in the same position. On the Bitcoin Keys plus menu, Enter Seed Words has a pencil icon and New Seed has a dice icon. Use the bundled Font Awesome icons, as on New seed, including in the plus menus.
+Every Scan QR Code button has a camera icon before its text inside the button. Every Load from File button has a file icon in the same position. Every Manual Entry button beside Scan QR Code has a pencil icon in that same position. On the Bitcoin Keys plus menu, Enter Seed Words has a pencil icon and New Seed has a dice icon. Use the bundled Font Awesome icons, as on New seed, including in the plus menus.
 
 The panel is 480×800. The title bar is 88 pixels and does not scroll. The page margin is 20. Colors and the button rules live in `src/bigsigner/ui/canvas.py`, `.cursor/rules/button-colors.mdc`, and `.cursor/rules/button-labels.mdc`.
 
