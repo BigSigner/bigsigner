@@ -9,7 +9,7 @@ import time
 
 from .. import sdcard
 from ..bip85gpg import (
-    creation_text, ed25519_path, entropy_path, expiration_seconds, identity, path_text, raw_entropy, secret_armor,
+    creation_text, eddsa_armor, eddsa_path, entropy_path, expiration_seconds, identity, path_text, raw_entropy, secret_armor,
 )
 from ..entropy import camera_digest
 from ..gpg import (
@@ -38,7 +38,7 @@ _USAGE = (("c", "Certification"), ("s", "Signing"), ("e", "Encryption"), ("a", "
 _SUBKEY_ALGOS = (("ed25519", "Ed25519"), ("cv25519", "Curve25519"), ("rsa3072", "RSA-3072"), ("rsa4096", "RSA-4096"))
 _SUBKEY_USAGES = (("sign", "Signing"), ("encr", "Encryption"), ("auth", "Authentication"))
 _BIP85_BITS = (("3072", "3072 bits"), ("4096", "4096 bits"))
-_BIP85_ALGOS = (("rsa", "RSA"), ("ed25519", "Ed25519"))
+_BIP85_ALGOS = (("rsa", "RSA"), ("eddsa", "EdDSA"))
 _BIP85_ROLES = (("cert", "Certificate Only"), ("cert-sign", "Certificate and Signing"))
 # The hovering plus is 94px with a 28px inset, matching the button on Bitcoin Keys.
 _PLUS_CLEARANCE = 122
@@ -766,7 +766,7 @@ class GpgUI:
                   "encrypt": "Encrypting File…", "decrypt-inspect": "Reading Encrypted File…",
                   "decrypt": "Decrypting File…"}
         y = frame.text(labels.get(self.job_kind, "Working…"), MARGIN, HEADER + 40, size=BODY_SIZE)
-        if self.job_kind == "bip85":
+        if self.job_kind == "bip85" and self.bip85_algo == "rsa":
             frame.text(BIP85_WAIT_NOTE, MARGIN, y + 8, size=28, fill=MUTED)
         self.work_shown = True
 
@@ -1750,12 +1750,10 @@ class GpgUI:
         except ValueError as exc:
             self.app.set_error(str(exc))
             return
-        if self.bip85_algo != "rsa":
-            self.app.set_error("Ed25519 primary keys are not generated yet.")
-            return
         fingerprint, bits, index = self.bip85_fp, self.bip85_bits, self.bip85_index
         name, email = self.bip85_name, self.bip85_email
         signing = self.bip85_role == "cert-sign"
+        algorithm = self.bip85_algo
         session = self.app.session
 
         def job():
@@ -1769,7 +1767,10 @@ class GpgUI:
             if root is None:
                 return Outcome(False, "This seed is no longer loaded.")
             try:
-                payload = secret_armor(root, bits, index, name, email, signing=signing, expires_on=expires)
+                if algorithm == "eddsa":
+                    payload = eddsa_armor(root, index, name, email, signing=signing, expires_on=expires)
+                else:
+                    payload = secret_armor(root, bits, index, name, email, signing=signing, expires_on=expires)
             except ValueError as exc:
                 return Outcome(False, str(exc))
             return self.backend.import_key(payload.encode())
@@ -1900,7 +1901,7 @@ class GpgUI:
         face = font(22, mono=True)
         shown_path = (
             path_text(self.bip85_bits, self.bip85_index)
-            if self.bip85_algo == "rsa" else ed25519_path(self.bip85_index)
+            if self.bip85_algo == "rsa" else eddsa_path(self.bip85_index)
         )
         for line in wrap(frame.draw, shown_path, face, WIDTH - 2 * MARGIN):
             width = frame.draw.textlength(line, font=face)

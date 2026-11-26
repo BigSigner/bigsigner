@@ -12,7 +12,10 @@ import pytest
 from embit.bip32 import HDKey
 from embit.bip39 import mnemonic_to_seed
 
-from bigsigner.bip85gpg import armor, derive_rsa, drng_bytes, entropy_for, entropy_path, raw_entropy, secret_packets
+from bigsigner.bip85gpg import (
+    armor, derive_rsa, drng_bytes, eddsa_entropy, eddsa_packets, eddsa_path, eddsa_seed, ed25519_public,
+    entropy_for, entropy_path, raw_entropy, secret_packets,
+)
 from bigsigner.gpg import GpgBackend
 
 ABANDON = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
@@ -124,6 +127,54 @@ def test_name_email_and_expiration_do_not_change_the_private_key():
     assert b"Grace Hopper <grace@example.invalid>" in signed
     with pytest.raises(ValueError, match="before this key was created"):
         secret_packets(key, "Ada", "ada@example.invalid", signing=False, expires_on=(2009, 1, 3))
+
+
+_PROPOSAL_ROOT = (
+    "xprv9s21ZrQH143K2LBWUUQRFXhucrQqBpKdRRxNVq2zBqsx8HVqFk2uYo8kmbaLLHRdqtQpUm98uKfu3vca1LqdGhUtyoFnCNkfmXRyPXLjbKb"
+)
+_EDDSA_ENTROPY = (
+    "0321683e4d481bb6b5bac0585dbb06689827b9d6db3c530b5f6c31e20c52e444"
+    "7059dbf3076cbd982cb90e2054f098a5cad5496528a5a7542b09b5b3e5394dbb"
+)
+_EDDSA_SEED = "087ee76428459d94cfe2315a78e9097caa86a21d51494d215fce6acb320e2ced"
+_EDDSA_PUBLIC = "e386230cf7de7fedcea59b9671fca03af5ae90254fe44f91591c598371d0e25b"
+_EDDSA_FINGERPRINT = "00D77A1ED4BC8C4F0092143D30926A8DDD9F988E"
+
+
+def test_eddsa_matches_the_proposal_and_imports_without_a_salt(monkeypatch):
+    if not shutil.which("gpg"):
+        pytest.skip("GPG is required")
+
+    def refused(*_args, **_kwargs):
+        raise AssertionError("EdDSA key generation read the operating system random source")
+
+    monkeypatch.setattr(os, "urandom", refused)
+    root = HDKey.from_base58(_PROPOSAL_ROOT)
+    assert eddsa_path(0) == "m/83696968h/828366h/1h/256h/0h"
+    assert eddsa_entropy(root, 0).hex() == _EDDSA_ENTROPY
+    seed = eddsa_seed(root, 0)
+    assert seed.hex() == _EDDSA_SEED
+    assert ed25519_public(seed).hex() == _EDDSA_PUBLIC
+    certificate = eddsa_packets(seed, "Ada Lovelace", "ada@example.invalid", signing=False)
+    signed = eddsa_packets(seed, "Grace Hopper", "grace@example.invalid", signing=True, expires_on=(2030, 1, 2))
+    assert certificate != signed
+    assert seed in certificate and seed in signed
+    assert armor(certificate) == armor(eddsa_packets(seed, "Ada Lovelace", "ada@example.invalid", signing=False))
+    with tempfile.TemporaryDirectory(prefix="bsgpg-eddsa-") as home:
+        backend = GpgBackend(Path(home))
+        imported = backend.import_key(armor(certificate).encode())
+        assert imported.ok, imported
+        cert = backend.list_keys().keys[0]
+    with tempfile.TemporaryDirectory(prefix="bsgpg-eddsa-") as home:
+        backend = GpgBackend(Path(home))
+        imported = backend.import_key(armor(signed).encode())
+        assert imported.ok, imported
+        both = backend.list_keys().keys[0]
+    assert cert.fingerprint == both.fingerprint == _EDDSA_FINGERPRINT
+    assert cert.algorithm.startswith("EdDSA")
+    assert "s" not in cert.capabilities.lower() and "c" in cert.capabilities.lower()
+    assert "s" in both.capabilities.lower()
+    assert both.expires.startswith("2030-01-02")
 
 
 def test_gpg_imports_the_same_fingerprint_for_either_signature():

@@ -1229,7 +1229,7 @@ def test_gpg_screens_save_screenshots(real_backend):
     app.camera_frames = [b"scene"]
     record.click(app, "Capture")
     record.shot(app, "subkey-options")
-    record.click(app, "Ed25519")
+    record.click(app, "EdDSA")
     record.shot(app, "subkey-algorithm")
     record.click(app, "dropdown-pick-gpg-algo-ed25519")
     record.click(app, "Signing")
@@ -1362,10 +1362,10 @@ def test_bip85_load_asks_for_a_seed_and_imports_one_primary_key():
     assert "Number of Bits" in text
     assert any("m/83696968h/828365h/4096h/0h" in item["text"] for item in app.texts)
     _tap(app, "dropdown-gpg-bip85-algo")
-    _tap(app, "Ed25519")
+    _tap(app, "EdDSA")
     app.render()
     assert "Number of Bits" not in " ".join(item["text"] for item in app.texts)
-    assert any("m/83696968h/828366h/4h/256h/0h" in item["text"] for item in app.texts)
+    assert any("m/83696968h/828366h/1h/256h/0h" in item["text"] for item in app.texts)
     _tap(app, "dropdown-gpg-bip85-algo")
     _tap(app, "RSA")
     _tap(app, "+")

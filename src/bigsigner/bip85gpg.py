@@ -1,9 +1,14 @@
-"""Deterministic RSA primary keys from BIP-85 application 828365.
+"""Deterministic primary keys from BIP-85.
 
-The path is m/83696968h/828365h/{bits}h/{index}h. BIP-85 turns that child
-key into 64 bytes, then BIP85-DRNG-SHAKE256 feeds the prime search. The
-primality test uses fixed bases and does not read the DRNG, so the same
-seed, bit length, and index always produce the same primes.
+RSA uses application 828365, path m/83696968h/828365h/{bits}h/{index}h.
+BIP-85 turns that child key into 64 bytes, then BIP85-DRNG-SHAKE256 feeds
+the prime search. The primality test uses fixed bases and does not read the
+DRNG, so the same seed, bit length, and index always produce the same primes.
+
+EdDSA uses application 828366, path m/83696968h/828366h/1h/256h/{index}h.
+The same DRNG supplies the 32-byte Ed25519 seed. The OpenPGP packet is
+version 4, algorithm 22, which GnuPG calls EdDSA. The self-signature is
+Ed25519, which is deterministic, so no salt is drawn.
 
 Name, email, key flags, and expiration are OpenPGP signatures over that
 public key. They are not inputs to the DRNG. BIP-85 fixes the key creation
@@ -18,9 +23,11 @@ from datetime import datetime, timezone
 from embit.bip85 import derive_entropy
 
 APPLICATION = 828365
-ED25519_APPLICATION = 828366
-ED25519_TYPE = 4
-ED25519_BITS = 256
+EDDSA_APPLICATION = 828366
+EDDSA_TYPE = 1
+EDDSA_BITS = 256
+# RFC 9580 Ed25519 OID 1.3.6.1.4.1.11591.15.1, with its one-byte length.
+_ED25519_OID = bytes.fromhex("092b06010401da470f01")
 ENTROPY_APPLICATION = 128169
 ENTROPY_BYTES = 64
 CREATION = 1231006505  # 2009-01-03 18:15:05 UTC
@@ -292,6 +299,134 @@ def path_text(bits: int, index: int) -> str:
     return f"m/83696968h/{APPLICATION}h/{bits}h/{index}h"
 
 
-def ed25519_path(index: int) -> str:
-    """OpenPGP v6 Ed25519 primary key: application 828366, key type 4, 256 bits."""
-    return f"m/83696968h/{ED25519_APPLICATION}h/{ED25519_TYPE}h/{ED25519_BITS}h/{index}h"
+def eddsa_path(index: int) -> str:
+    """Version-4 EdDSA primary key: application 828366, key type 1, 256 bits."""
+    return f"m/83696968h/{EDDSA_APPLICATION}h/{EDDSA_TYPE}h/{EDDSA_BITS}h/{index}h"
+
+
+_P = 2**255 - 19
+_L = 2**252 + 27742317777372353535851937790883648493
+_D = (-121665 * pow(121666, -1, _P)) % _P
+_I = pow(2, (_P - 1) // 4, _P)
+
+
+def _edwards_add(p, q):
+    x1, y1 = p
+    x2, y2 = q
+    prod = _D * x1 * x2 * y1 * y2
+    x3 = (x1 * y2 + x2 * y1) * pow(1 + prod, -1, _P)
+    y3 = (y1 * y2 + x1 * x2) * pow(1 - prod, -1, _P)
+    return x3 % _P, y3 % _P
+
+
+def _scalarmult(point, scalar: int):
+    result = (0, 1)
+    addend = point
+    while scalar:
+        if scalar & 1:
+            result = _edwards_add(result, addend)
+        addend = _edwards_add(addend, addend)
+        scalar >>= 1
+    return result
+
+
+def _base_point():
+    y = 4 * pow(5, -1, _P) % _P
+    xx = (y * y - 1) * pow(_D * y * y + 1, -1, _P) % _P
+    x = pow(xx, (_P + 3) // 8, _P)
+    if (x * x - xx) % _P != 0:
+        x = x * _I % _P
+    if x & 1:
+        x = _P - x
+    return x % _P, y
+
+
+_B = _base_point()
+
+
+def _clamp(seed_hash: bytes) -> int:
+    scalar = int.from_bytes(seed_hash[:32], "little")
+    scalar &= (1 << 254) - 8
+    scalar |= 1 << 254
+    return scalar
+
+
+def _encode_point(point) -> bytes:
+    x, y = point
+    return (y | ((x & 1) << 255)).to_bytes(32, "little")
+
+
+def ed25519_public(seed: bytes) -> bytes:
+    """32-byte RFC 8032 public key from a 32-byte seed."""
+    if len(seed) != 32:
+        raise ValueError("The EdDSA seed must be 32 bytes.")
+    scalar = _clamp(hashlib.sha512(seed).digest())
+    return _encode_point(_scalarmult(_B, scalar))
+
+
+def ed25519_sign(seed: bytes, message: bytes) -> bytes:
+    """64-byte RFC 8032 signature. The nonce comes from the seed, not the OS."""
+    if len(seed) != 32:
+        raise ValueError("The EdDSA seed must be 32 bytes.")
+    digest = hashlib.sha512(seed).digest()
+    scalar = _clamp(digest)
+    public = _encode_point(_scalarmult(_B, scalar))
+    nonce = int.from_bytes(hashlib.sha512(digest[32:] + message).digest(), "little") % _L
+    commitment = _encode_point(_scalarmult(_B, nonce))
+    challenge = int.from_bytes(hashlib.sha512(commitment + public + message).digest(), "little") % _L
+    response = (nonce + challenge * scalar) % _L
+    return commitment + response.to_bytes(32, "little")
+
+
+def eddsa_entropy(root, index: int) -> bytes:
+    if index < 0 or index >= 0x80000000:
+        raise ValueError("The index is too large.")
+    return derive_entropy(root, EDDSA_APPLICATION, [EDDSA_TYPE, EDDSA_BITS, index])
+
+
+def eddsa_seed(root, index: int) -> bytes:
+    """First 32 bytes of the DRNG. The derivation does not clamp this seed."""
+    return ShakeReader(eddsa_entropy(root, index)).read(32)
+
+
+def eddsa_packets(seed: bytes, name: str, email: str, *, signing: bool, expires_on=None) -> bytes:
+    """Version-4 EdDSA secret key, user id, and one self-signature. No subkeys."""
+    point = ed25519_public(seed)
+    public = bytes([4]) + CREATION.to_bytes(4, "big") + bytes([22]) + _ED25519_OID + _mpi(int.from_bytes(b"\x40" + point, "big"))
+    fingerprint = hashlib.sha1(b"\x99" + len(public).to_bytes(2, "big") + public).digest()
+    uid = identity(name, email)
+    flags = b"\x03" if signing else b"\x01"
+    hashed = b"".join([
+        _subpacket(2, CREATION.to_bytes(4, "big")),
+        _subpacket(27, flags),
+        _subpacket(11, bytes([9, 8, 7])),
+        _subpacket(21, bytes([10, 9, 8])),
+        _subpacket(22, bytes([2, 1, 0])),
+        _subpacket(30, b"\x01"),
+        _subpacket(33, b"\x04" + fingerprint),
+    ])
+    seconds = expiration_seconds(expires_on)
+    if seconds is not None:
+        hashed += _subpacket(9, seconds.to_bytes(4, "big"))
+    unhashed = _subpacket(16, fingerprint[-8:])
+    prefix = bytes([4, 0x13, 22, 10]) + len(hashed).to_bytes(2, "big") + hashed
+    signed = (
+        b"\x99" + len(public).to_bytes(2, "big") + public
+        + b"\xb4" + len(uid).to_bytes(4, "big") + uid
+        + prefix
+        + b"\x04\xff" + len(prefix).to_bytes(4, "big")
+    )
+    digest = hashlib.sha512(signed).digest()
+    # GnuPG checks this as PureEdDSA over the SHA-512 digest. The two
+    # signature values are the RFC 8032 halves, stored as unsigned integers.
+    native = ed25519_sign(seed, digest)
+    signature = _mpi(int.from_bytes(native[:32], "big")) + _mpi(int.from_bytes(native[32:], "big"))
+    sig_body = prefix + len(unhashed).to_bytes(2, "big") + unhashed + digest[:2] + signature
+    secret_mpi = _mpi(int.from_bytes(seed, "big"))
+    checksum = sum(secret_mpi) & 0xFFFF
+    secret = public + bytes([0]) + secret_mpi + checksum.to_bytes(2, "big")
+    return _packet(5, secret) + _packet(13, uid) + _packet(2, sig_body)
+
+
+def eddsa_armor(root, index: int, name: str, email: str, *, signing: bool, expires_on=None) -> str:
+    return armor(eddsa_packets(eddsa_seed(root, index), name, email, signing=signing, expires_on=expires_on))
