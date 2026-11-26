@@ -8,6 +8,7 @@ import re
 import sys
 
 from .. import archive, file_qr, sdcard
+from ..i18n import display, has_hebrew, hebrew_layout, t
 from ..diskimage import BurnResult, CardBurner, header_from_bytes, header_from_path, looks_like_disk_image
 from .canvas import BLUE, BODY_SIZE, GREEN, HEADER, HEIGHT, INK, LINE, MARGIN, MUTED, RED, TITLE_SIZE, WHITE, WIDTH, Frame, Icons, font, wrap
 from .text_editor import TextEditor
@@ -875,19 +876,21 @@ class FileSystemUI:
         self.file_shown = True
 
     def sha_progress(self, frame):
-        message = "Calculating SHA256\u2026"
+        message = t("Calculating SHA256\u2026")
         face = font(BODY_SIZE)
         lines = wrap(frame.draw, message, face, WIDTH - 2 * MARGIN) or [""]
+        rtl = hebrew_layout(message)
         bar_h = 28
         bar_bottom = HEIGHT - 110
         bar_top = bar_bottom - bar_h
         text_h = len(lines) * (BODY_SIZE + 8)
         y = max(MARGIN, (HEIGHT - text_h) // 2)
         for line in lines:
-            width = frame.draw.textlength(line, font=face)
+            shown = display(line, base="R") if rtl else line
+            width = frame.draw.textlength(shown, font=face)
             x = (WIDTH - width) / 2
-            frame.draw.text((x, y), line, font=face, fill=INK)
-            frame.mark(line, frame.draw.textbbox((x, y), line, font=face))
+            frame.draw.text((x, y), shown, font=face, fill=INK)
+            frame.mark(line, frame.draw.textbbox((x, y), shown, font=face))
             y += BODY_SIZE + 8
         left, right = MARGIN, WIDTH - MARGIN
         frame.draw.rounded_rectangle((left, bar_top, right, bar_bottom), radius=10, outline=LINE, width=2, fill=WHITE)
@@ -902,18 +905,21 @@ class FileSystemUI:
         self.sha_shown = True
 
     def _progress_bar(self, frame, message, done, total):
+        message = t(message)
         face = font(BODY_SIZE)
         lines = wrap(frame.draw, message, face, WIDTH - 2 * MARGIN) or [""]
+        rtl = hebrew_layout(message)
         bar_h = 28
         bar_bottom = HEIGHT - 110
         bar_top = bar_bottom - bar_h
         text_h = len(lines) * (BODY_SIZE + 8)
         y = max(MARGIN, (HEIGHT - text_h) // 2)
         for line in lines:
-            width = frame.draw.textlength(line, font=face)
+            shown = display(line, base="R") if rtl else line
+            width = frame.draw.textlength(shown, font=face)
             x = (WIDTH - width) / 2
-            frame.draw.text((x, y), line, font=face, fill=INK)
-            frame.mark(line, frame.draw.textbbox((x, y), line, font=face))
+            frame.draw.text((x, y), shown, font=face, fill=INK)
+            frame.mark(line, frame.draw.textbbox((x, y), shown, font=face))
             y += BODY_SIZE + 8
         left, right = MARGIN, WIDTH - MARGIN
         frame.draw.rounded_rectangle((left, bar_top, right, bar_bottom), radius=10, outline=LINE, width=2, fill=WHITE)
@@ -999,11 +1005,17 @@ class FileSystemUI:
         frame.header("File Details", "back")
 
     @staticmethod
-    def centered(frame, text, y, size, *, mono=False, fill=INK):
+    def centered(frame, text, y, size, *, mono=False, fill=INK, content=False):
+        if not content and not mono:
+            text = t(text)
         face = font(size, mono=mono)
         for line in wrap(frame.draw, text, face, WIDTH - 2 * MARGIN):
-            width = frame.draw.textlength(line, font=face)
-            frame.text(line, (WIDTH - width) / 2, y, size=size, mono=mono, fill=fill)
+            shown = line if content or mono or not hebrew_layout(text) else display(line, base="R")
+            width = frame.draw.textlength(shown, font=face)
+            frame.text(
+                line, (WIDTH - width) / 2, y, size=size, mono=mono, fill=fill,
+                align="left", content=content,
+            )
             y += size + 8
         return y
 
@@ -1013,15 +1025,33 @@ class FileSystemUI:
         size_text = f"{size:,} {'byte' if size == 1 else 'bytes'}"
         y = app._flow_text(frame, y, "Filename:", paint, offset, BODY_SIZE, MUTED)
         if paint:
-            self.centered(frame, Path(self.path).name, y - offset, BODY_SIZE)
-        y += app._text_height(frame, Path(self.path).name, BODY_SIZE) + 12
+            self.centered(frame, Path(self.path).name, y - offset, BODY_SIZE, content=True)
+        y += app._text_height(frame, Path(self.path).name, BODY_SIZE, content=True) + 12
         size_font = BODY_SIZE
         while frame.draw.textlength(f"Size: {size_text}", font=font(size_font)) > WIDTH - 2 * MARGIN:
             size_font -= 1
         if paint:
-            frame.text("Size:", MARGIN, y - offset, size=size_font, fill=MUTED)
-            value_x = MARGIN + frame.draw.textlength("Size: ", font=font(size_font))
-            frame.text(size_text, value_x, y - offset, size=size_font)
+            if hebrew_layout(t("Size:")):
+                face = font(size_font)
+                label = t("Size:")
+                shown_label = display(label)
+                shown_value = display(size_text) if has_hebrew(size_text) else size_text
+                label_w = frame.draw.textlength(shown_label, font=face)
+                value_w = frame.draw.textlength(shown_value, font=face)
+                gap = frame.draw.textlength(" ", font=face)
+                right = WIDTH - MARGIN
+                if has_hebrew(label):
+                    label_x = right - label_w
+                    value_x = label_x - gap - value_w
+                else:
+                    value_x = right - value_w
+                    label_x = value_x - gap - label_w
+                frame.text(label, label_x, y - offset, size=size_font, fill=MUTED, align="left")
+                frame.text(size_text, value_x, y - offset, size=size_font, align="left", content=True)
+            else:
+                frame.text("Size:", MARGIN, y - offset, size=size_font, fill=MUTED)
+                value_x = MARGIN + frame.draw.textlength("Size: ", font=font(size_font))
+                frame.text(size_text, value_x, y - offset, size=size_font)
         y += size_font + 20
         y = app._flow_button(frame, y + 8, "Open", "fs-open", paint, offset, enabled=size <= OPEN_LIMIT)
         if size > OPEN_LIMIT:

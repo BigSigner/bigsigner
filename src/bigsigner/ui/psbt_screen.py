@@ -2,6 +2,7 @@
 
 from PIL import Image, ImageDraw
 
+from ..i18n import display, hebrew_layout, t
 from ..psbt_view import format_btc, hex_lines, is_ascii
 from .canvas import (
     BLUE,
@@ -793,7 +794,7 @@ def _chevron(frame, y, paint, offset, title, open_now, action) -> int:
         _left, ink_top, _right, ink_bottom = frame.draw.textbbox((0, 0), title, font=font(TITLE_SIZE))
         _section_chevron(frame, open_now, MARGIN + 16, text_y + (ink_top + ink_bottom - 1) / 2)
         frame.text(title, MARGIN + 40, text_y, size=TITLE_SIZE)
-        frame.hit((MARGIN, top, WIDTH - MARGIN, top + height), action, title)
+        frame.hit((MARGIN, top, WIDTH - MARGIN, top + height), action, t(title))
     return y + height + 8
 
 
@@ -1022,8 +1023,10 @@ def _centered_flow(frame, text, y, paint, offset, size, fill, mono=False) -> int
 def _centered(frame, text, y, size, fill, mono=False):
     if not _strip_visible(frame, y, ink_span(size)):
         return
+    logical = text if mono else t(text)
+    shown = display(logical, base="R") if not mono and hebrew_layout(logical) else logical
     face = font(size, mono=mono)
-    width = frame.draw.textlength(text, font=face)
+    width = frame.draw.textlength(shown, font=face)
     x = (WIDTH - width) / 2
-    frame.draw.text((x, y), text, font=face, fill=fill)
-    frame.mark(text, frame.draw.textbbox((x, y), text, font=face))
+    frame.draw.text((x, y), shown, font=face, fill=fill)
+    frame.mark(logical, frame.draw.textbbox((x, y), shown, font=face))

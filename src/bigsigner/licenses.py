@@ -142,4 +142,14 @@ NOTICES = (
     Notice("DejaVu fonts", "Bitstream Vera", _DEJAVU),
     Notice("Font Awesome Free", "SIL OFL 1.1", _resource("FontAwesome-LICENSE.txt")),
     Notice("SeedSigner icons", "MIT", _resource("seedsigner-icons.LICENSE")),
+    Notice(
+        "python-bidi",
+        "LGPL-3.0",
+        "Bidirectional text reordering, copied from python-bidi 0.6.12.\n"
+        "Copyright (C) 2008-2010 Yaacov Zamir.\n"
+        "Copyright (C) 2010-2024 Meir Kriheli.\n\n"
+        + _resource("python-bidi-LGPL.txt")
+        + "\n"
+        + _resource("python-bidi-GPL.txt"),
+    ),
 )

@@ -4,6 +4,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+from ..i18n import display, hebrew_layout, t
+
 WIDTH = 480
 HEIGHT = 800
 HEADER = 88
@@ -270,20 +272,40 @@ class Frame:
 
     def header(self, title: str, left: str | None = None):
         self.draw.rectangle((0, 0, WIDTH, HEADER), fill=NAVY)
-        face = font(TITLE_SIZE)
+        title = t(title)
+        # The title stays on the left. Hebrew is reordered inside that block.
         if left is None:
-            width = self.draw.textlength(title, font=face)
+            max_width = WIDTH - 2 * MARGIN
+            shown, face = self._fit_line(title, max_width, TITLE_SIZE)
+            width = self.draw.textlength(shown, font=face)
             x = (WIDTH - width) / 2
-            self.draw.text((x, 28), title, font=face, fill=WHITE)
-            self.mark(title, self.draw.textbbox((x, 28), title, font=face))
+        else:
+            max_width = WIDTH - MARGIN - 84
+            shown, face = self._fit_line(title, max_width, TITLE_SIZE)
+            x = 84
+        self.draw.text((x, 28), shown, font=face, fill=WHITE)
+        self.mark(title, self.draw.textbbox((x, 28), shown, font=face))
+        if left is None:
             return
-        self.draw.text((84, 28), title, font=face, fill=WHITE)
-        self.mark(title, self.draw.textbbox((84, 28), title, font=face))
         self.hit((0, 0, 84, HEADER), left, left)
         if left == "menu":
             self.draw.text((26, 24), "≡", font=font(36), fill=WHITE)
         else:
             self.glyph(Icons.BACK, 42, HEADER / 2, 42, WHITE)
+
+    def _fit_line(self, text: str, max_width: int, size: int):
+        """Visual text that fits. The font shrinks, then the end is cut with …."""
+        shown = display(text)
+        face = font(size)
+        while size > 18 and self.draw.textlength(shown, font=face) > max_width:
+            size -= 1
+            face = font(size)
+        if self.draw.textlength(shown, font=face) <= max_width:
+            return shown, face
+        cut = shown
+        while cut and self.draw.textlength(cut + ELLIPSIS, font=face) > max_width:
+            cut = cut[:-1]
+        return (cut + ELLIPSIS if cut else ELLIPSIS), face
 
     def button_height(self, text: str, icon: bool = False, inset: int = 0) -> int:
         """The button's box height, without the 12px gap `button` leaves under it."""
@@ -291,6 +313,7 @@ class Frame:
         return height
 
     def _button_metrics(self, text: str, icon: bool, inset: int = 0):
+        text = t(text)
         face = font(BODY_SIZE)
         icon_size = BODY_SIZE
         icon_gap = 12
@@ -311,7 +334,8 @@ class Frame:
         return face, lines, line_h, height, text_delta, icon_size, icon_gap
 
     def button(self, y: int, text: str, action: str, color=BLUE, label: str = "", icon: str | None = None, awesome: bool = False, enabled: bool = True, inset: int = 0):
-        face, lines, line_h, height, text_delta, icon_size, icon_gap = self._button_metrics(text, icon is not None, inset)
+        visible = t(text)
+        face, lines, line_h, height, text_delta, icon_size, icon_gap = self._button_metrics(visible, icon is not None, inset)
         text_top = y + text_delta
         box = (MARGIN + inset, y, WIDTH - MARGIN - inset, y + height)
         text_fill = WHITE
@@ -319,7 +343,18 @@ class Frame:
             color = (186, 190, 196)
             text_fill = (132, 136, 142)
         self.draw.rounded_rectangle(box, radius=14, fill=color)
-        if icon:
+        if icon and hebrew_layout(visible):
+            # The icon stays beside the words, on their right, and the pair sits on the right.
+            pad = 16
+            text_right = box[2] - pad - icon_size - icon_gap
+            self.glyph(icon, box[2] - pad - icon_size / 2, y + height / 2, icon_size, text_fill, awesome=awesome)
+            for index, line in enumerate(lines):
+                shown = display(line, base="R")
+                width = self.draw.textlength(shown, font=face)
+                origin = (text_right - width, text_top + index * line_h)
+                self.draw.text(origin, shown, font=face, fill=text_fill)
+                self.mark(line, self.draw.textbbox(origin, shown, font=face))
+        elif icon:
             text_width = max(self.draw.textlength(line, font=face) for line in lines)
             content_left = (WIDTH - text_width - icon_size - icon_gap) / 2
             self.glyph(icon, content_left + icon_size / 2, y + height / 2, icon_size, text_fill, awesome=awesome)
@@ -328,10 +363,14 @@ class Frame:
                 self.draw.text((text_left, text_top + index * line_h), line, font=face, fill=text_fill)
         else:
             for index, line in enumerate(lines):
-                width = self.draw.textlength(line, font=face)
-                self.draw.text(((box[0] + box[2] - width) / 2, text_top + index * line_h), line, font=face, fill=text_fill)
+                shown = display(line, base="R") if hebrew_layout(visible) else line
+                width = self.draw.textlength(shown, font=face)
+                origin = ((box[0] + box[2] - width) / 2, text_top + index * line_h)
+                self.draw.text(origin, shown, font=face, fill=text_fill)
+                if hebrew_layout(visible) or shown != line:
+                    self.mark(line, self.draw.textbbox(origin, shown, font=face))
         if enabled:
-            self.hit(box, action, label or text)
+            self.hit(box, action, t(label) if label else visible)
         return y + height + 12
 
     def button_box(self, box, text: str, action: str, color=BLUE, text_delta: float | None = None, enabled: bool = True):
@@ -340,7 +379,8 @@ class Frame:
         ``text_delta`` pins the baseline. Side-by-side labels share one value so a
         descender in one word does not lift that word above the other.
         """
-        face, lines, line_h, _height, own_delta, _icon_size, _icon_gap = self._button_metrics(text, False)
+        visible = t(text)
+        face, lines, line_h, _height, own_delta, _icon_size, _icon_gap = self._button_metrics(visible, False)
         if text_delta is None:
             text_delta = own_delta
         text_fill = WHITE
@@ -350,10 +390,14 @@ class Frame:
         text_top = box[1] + text_delta
         self.draw.rounded_rectangle(box, radius=14, fill=color)
         for index, line in enumerate(lines):
-            width = self.draw.textlength(line, font=face)
-            self.draw.text(((box[0] + box[2] - width) / 2, text_top + index * line_h), line, font=face, fill=text_fill)
+            shown = display(line, base="R") if hebrew_layout(visible) else line
+            width = self.draw.textlength(shown, font=face)
+            origin = ((box[0] + box[2] - width) / 2, text_top + index * line_h)
+            self.draw.text(origin, shown, font=face, fill=text_fill)
+            if hebrew_layout(visible) or shown != line:
+                self.mark(line, self.draw.textbbox(origin, shown, font=face))
         if enabled:
-            self.hit(box, action, text)
+            self.hit(box, action, visible)
 
     def fingerprint_icon(self, x: int, y: int, size: int = 28, fill=MUTED):
         self.glyph(Icons.FINGERPRINT, x + size / 2, y + size / 2, size, fill)
@@ -367,6 +411,8 @@ class Frame:
         return x + drawn + 12
 
     def fingerprint_line(self, y: int, fingerprint_hex: str, text_size: int = 22, icon_size: int = 28, left: int = MARGIN):
+        if self.rtl_fingerprint(left, y, fingerprint_hex, text_size, icon_size):
+            return y + icon_size + 16
         size = icon_size
         self.fingerprint_icon(left, y, size)
         label = "Fingerprint: "
@@ -380,6 +426,28 @@ class Frame:
         self.draw.text((x, text_y), fingerprint_hex, font=hex_face, fill=MUTED)
         return y + size + 16
 
+    def rtl_fingerprint(self, left: int, y: int, fingerprint_hex: str, text_size: int, icon_size: int) -> bool:
+        """Hebrew: the label and icon sit on the right, and the hex is the English run on their left."""
+        if not hebrew_layout(t("Fingerprint")):
+            return False
+        label = t("Fingerprint") + ": "
+        shown = display(label)
+        label_face = font(text_size)
+        hex_face = font(text_size, mono=True)
+        _left, top, _right, bottom = self.draw.textbbox((0, 0), shown, font=label_face)
+        text_y = y + (icon_size - (bottom - top)) / 2 - top
+        right = WIDTH - left
+        label_w = self.draw.textlength(shown, font=label_face)
+        hex_w = self.draw.textlength(fingerprint_hex, font=hex_face)
+        label_x = right - icon_size - 10 - label_w
+        hex_x = label_x - hex_w
+        self.draw.text((hex_x, text_y), fingerprint_hex, font=hex_face, fill=MUTED)
+        self.mark(fingerprint_hex, self.draw.textbbox((hex_x, text_y), fingerprint_hex, font=hex_face))
+        self.draw.text((label_x, text_y), shown, font=label_face, fill=MUTED)
+        self.mark(label, self.draw.textbbox((label_x, text_y), shown, font=label_face))
+        self.fingerprint_icon(right - icon_size, y, icon_size)
+        return True
+
     def glyph(self, char: str, cx: float, cy: float, size: int, fill, awesome: bool = False):
         rendered = glyph_sprite(char, size, tuple(fill), awesome)
         if rendered is None:
@@ -387,12 +455,45 @@ class Frame:
         icon, (center_x, center_y) = rendered
         self.image.paste(icon, (round(cx - center_x), round(cy - center_y)), icon)
 
-    def text(self, value: str, x: int, y: int, size=BODY_SIZE, fill=INK, mono=False, width=None):
+    def text(
+        self,
+        value: str,
+        x: int,
+        y: int,
+        size=BODY_SIZE,
+        fill=INK,
+        mono=False,
+        width=None,
+        align=None,
+        content=False,
+    ):
+        # Monospace and user content stay in their current place and reading order.
+        if not content and not mono:
+            value = t(value)
         face = font(size, mono=mono)
-        lines = wrap(self.draw, value, face, width or WIDTH - x - MARGIN)
+        limit = width if width is not None else WIDTH - x - MARGIN
+        lines = wrap(self.draw, value, face, max(1, limit))
+        reorder = not content and not mono and hebrew_layout(value)
+        if align is None:
+            # A Hebrew label that starts at the margin is right-aligned.
+            # English with no translation, and a value already placed further
+            # along the row, keep that x.
+            if content or mono or not hebrew_layout(value) or x > MARGIN + 16:
+                align = "left"
+            else:
+                align = "right"
+        right_edge = x + limit
         clip_top = getattr(self, "clip_top", HEADER)
         clip_bottom = getattr(self, "clip_bottom", HEIGHT)
         for line in lines:
+            shown = display(line, base="R") if reorder else line
+            line_width = self.draw.textlength(shown, font=face)
+            if align == "right":
+                draw_x = right_edge - line_width
+            elif align == "center":
+                draw_x = x + (limit - line_width) / 2
+            else:
+                draw_x = x
             # Live frames use clip_top=HEADER so a line that starts under the
             # title bar is not sliced in half. Tile strips use clip_top=0 and
             # must still paint a line that began on the previous tile, including
@@ -401,7 +502,7 @@ class Frame:
                 y >= clip_top or (clip_top == 0 and y + ink_span(size) > clip_top)
             )
             if visible:
-                self.draw.text((x, y), line, font=face, fill=fill)
-                self.mark(line, self.draw.textbbox((x, y), line, font=face))
+                self.draw.text((draw_x, y), shown, font=face, fill=fill)
+                self.mark(line, self.draw.textbbox((draw_x, y), shown, font=face))
             y += size + 8
         return y

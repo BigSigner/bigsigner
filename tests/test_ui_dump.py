@@ -2,7 +2,6 @@
 
 from bigsigner.hardware.ui_dump import snapshot
 from bigsigner.ui.app import App
-from bigsigner.ui.canvas import HEADER
 
 ABANDON = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 
@@ -13,17 +12,16 @@ def _one(items, text):
     return found[0]
 
 
-def test_warning_marks_the_title_above_the_button():
+def test_initial_screen_offers_a_language_above_the_button():
     app = App()
     app.screen = "warning"
     app.render()
     snap = snapshot(app, 12, 1)
-    title = _one(snap["texts"], "Remove SD Card")
+    assert not any(item.get("text") == "Remove SD Card" for item in snap["texts"])
+    label = _one(snap["texts"], "Choose Language:")
     button = _one(snap["hits"], "Continue")
     body = next(item for item in snap["texts"] if "SD card" in item["text"])
-    assert title["box"][1] >= 0
-    assert title["box"][3] <= HEADER
-    assert body["box"][1] >= title["box"][3]
+    assert label["box"][3] <= body["box"][1]
     assert body["box"][3] <= button["box"][1]
     assert button["box"][1] > 640
 

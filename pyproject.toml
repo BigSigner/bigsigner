@@ -25,7 +25,7 @@ bigsigner = "bigsigner.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-bigsigner = ["resources/*"]
+bigsigner = ["resources/*", "resources/bigsigner-translations/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -97,3 +97,8 @@ License 1.1. See src/bigsigner/resources/FontAwesome-LICENSE.txt.
 SeedSigner icons
 Copyright (c) 2021 SeedSigner. MIT License.
 See src/bigsigner/resources/seedsigner-icons.LICENSE.
+
+python-bidi
+Copyright (C) 2008-2010 Yaacov Zamir. Copyright (C) 2010-2024 Meir Kriheli.
+The display-reordering algorithm is copied under LGPL-3.0.
+See src/bigsigner/resources/python-bidi-LGPL.txt and python-bidi-GPL.txt.

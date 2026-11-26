@@ -17,6 +17,7 @@ from ..gpg import (
     PASSWORD_LIMIT, decrypted_filename, looks_like_sha256sums,
 )
 from .. import file_qr
+from ..i18n import display, hebrew, hebrew_layout, t
 from .canvas import BLUE, BODY_SIZE, HEADER, HEIGHT, INK, LINE, MARGIN, MUTED, PAPER, RED, TITLE_SIZE, WARNING, WHITE, WIDTH, Frame, Icons, font, wrap
 
 
@@ -771,19 +772,21 @@ class GpgUI:
         self.work_shown = True
 
     def _verify_progress(self, frame):
-        message = "Verifying Signature\u2026"
+        message = t("Verifying Signature\u2026")
         face = font(BODY_SIZE)
         lines = wrap(frame.draw, message, face, WIDTH - 2 * MARGIN) or [""]
+        rtl = hebrew_layout(message)
         bar_h = 28
         bar_bottom = HEIGHT - 110
         bar_top = bar_bottom - bar_h
         text_h = len(lines) * (BODY_SIZE + 8)
         y = max(MARGIN, (HEIGHT - text_h) // 2)
         for line in lines:
-            width = frame.draw.textlength(line, font=face)
+            shown = display(line, base="R") if rtl else line
+            width = frame.draw.textlength(shown, font=face)
             x = (WIDTH - width) / 2
-            frame.draw.text((x, y), line, font=face, fill=INK)
-            frame.mark(line, frame.draw.textbbox((x, y), line, font=face))
+            frame.draw.text((x, y), shown, font=face, fill=INK)
+            frame.mark(line, frame.draw.textbbox((x, y), shown, font=face))
             y += BODY_SIZE + 8
         left, right = MARGIN, WIDTH - MARGIN
         frame.draw.rounded_rectangle((left, bar_top, right, bar_bottom), radius=10, outline=LINE, width=2, fill=WHITE)
@@ -808,15 +811,29 @@ class GpgUI:
         self.buttons.append((self.content_end, text, action, height, inset, enabled, color))
         self.content_end += height + 12
 
-    def add_text(self, text, *, fill=INK, size=TITLE_SIZE, mono=False, center=False, inset=0):
+    def add_text(self, text, *, fill=INK, size=TITLE_SIZE, mono=False, center=False, inset=0, content=False):
+        if not content and not mono:
+            text = t(text)
         face = font(size, mono=mono)
+        rtl = not content and not mono and hebrew_layout(text)
         for paragraph in str(text).split("\n"):
             for line in wrap(self.scratch.draw, paragraph, face, WIDTH - 2 * (MARGIN + inset)):
-                x = (WIDTH - self.scratch.draw.textlength(line, font=face)) / 2 if center else MARGIN + inset
-                self.rows.append((x, self.content_end, line, size, fill, mono))
+                shown = display(line, base="R") if rtl else line
+                width = self.scratch.draw.textlength(shown, font=face)
+                if center:
+                    x = (WIDTH - width) / 2
+                else:
+                    x = MARGIN + inset
+                stored = (x, self.content_end, line, size, fill, mono)
+                if content:
+                    stored = (*stored, False, True)
+                self.rows.append(stored)
                 self.content_end += size + 8
 
     def add_labeled_value(self, label, value, *, value_fill=INK, size=28):
+        if hebrew_layout(t(label)):
+            self._add_same_line(label, value, inset=0, size=size, value_fill=value_fill)
+            return
         face = font(size)
         self.rows.append((MARGIN, self.content_end, label, size, MUTED, False))
         value_x = MARGIN + self.scratch.draw.textlength(label + " ", font=face)
@@ -856,22 +873,48 @@ class GpgUI:
         names = [name for letter, name in _USAGE if letter in capabilities]
         if not names:
             return "Unknown"
-        if len(names) == 1:
-            return names[0]
-        if len(names) == 2:
-            return f"{names[0]} and {names[1]}"
-        return ", ".join(names[:-1]) + ", and " + names[-1]
+        if not hebrew():
+            if len(names) == 1:
+                return names[0]
+            if len(names) == 2:
+                return f"{names[0]} and {names[1]}"
+            return ", ".join(names[:-1]) + ", and " + names[-1]
+        shown = [t(name) for name in names]
+        if len(shown) == 1:
+            return shown[0]
+        if len(shown) == 2:
+            return f"{shown[0]} ו{shown[1]}"
+        return ", ".join(shown[:-1]) + f" ו{shown[-1]}"
 
     def _add_fingerprint(self, fingerprint):
         groups = [fingerprint[i:i + 4] for i in range(0, len(fingerprint), 4)]
         for start in range(0, len(groups), 4):
             self.add_text(" ".join(groups[start:start + 4]), mono=True, center=True, inset=16)
 
-    def _add_same_line(self, label, value, *, inset=16, size=TITLE_SIZE):
+    def _add_same_line(self, label, value, *, inset=16, size=TITLE_SIZE, value_fill=INK):
         face = font(size)
+        label = t(label)
+        value = t(value)
+        if hebrew_layout(label):
+            shown_label = display(label)
+            shown_value = display(value)
+            label_w = self.scratch.draw.textlength(shown_label, font=face)
+            value_w = self.scratch.draw.textlength(shown_value, font=face)
+            gap = self.scratch.draw.textlength(" ", font=face)
+            right = WIDTH - MARGIN - inset
+            label_x = right - label_w
+            value_x = label_x - gap - value_w
+            if label_x <= MARGIN + 16 or value_x <= MARGIN + 16:
+                self.add_text(label, fill=MUTED, size=size, inset=inset)
+                self.add_text(value, size=size, inset=inset)
+                return
+            self.rows.append((label_x, self.content_end, label, size, MUTED, False, True))
+            self.rows.append((value_x, self.content_end, value, size, value_fill, False, True))
+            self.content_end += size + 8
+            return
         x = MARGIN + inset
         self.rows.append((x, self.content_end, label, size, MUTED, False))
-        self.rows.append((x + self.scratch.draw.textlength(label + " ", font=face), self.content_end, value, size, INK, False))
+        self.rows.append((x + self.scratch.draw.textlength(label + " ", font=face), self.content_end, value, size, value_fill, False))
         self.content_end += size + 8
 
     def _add_value(self, label, value, *, mono=False):
@@ -926,7 +969,7 @@ class GpgUI:
             top = self.content_end
             self.content_end += 16
             for user_id in key.user_ids or [key.fingerprint]:
-                self.add_text(user_id, inset=16)
+                self.add_text(user_id, inset=16, content=True)
             self.content_end += 8
             for sub in self._encryption_subkeys(key):
                 self.add_text("Encryption", fill=MUTED, inset=16)
@@ -1307,7 +1350,7 @@ class GpgUI:
         if self.outcome.unverified:
             self.add_text("Other files in the folder were not verified.", fill=WARNING)
             for filename in self.outcome.unverified[:3]:
-                self.add_text(filename, fill=WARNING)
+                self.add_text(filename, fill=WARNING, content=True)
             if len(self.outcome.unverified) > 3:
                 self.add_text("and more...", fill=WARNING)
 
@@ -1327,10 +1370,16 @@ class GpgUI:
             top = y - offset
             if top >= HEADER and top < bottom:
                 frame.button(top, text, action, color=color, inset=inset, enabled=enabled)
-        for x, y, text, size, fill, mono in self.rows:
+        for row in self.rows:
+            x, y, text, size, fill, mono = row[:6]
+            pinned = len(row) > 6 and bool(row[6])
+            content = len(row) > 7 and bool(row[7])
             y -= offset
             if y + size + 8 > HEADER and y < bottom:
-                frame.text(text, x, y, size=size, fill=fill, mono=mono)
+                frame.text(
+                    text, x, y, size=size, fill=fill, mono=mono,
+                    align="left" if pinned else None, content=content,
+                )
         if footer:
             frame.draw.rectangle((0, bottom, WIDTH, HEIGHT), fill=PAPER)
             frame.button(HEIGHT - gap - frame.button_height(footer[0]), footer[0], footer[1], enabled=footer[2])

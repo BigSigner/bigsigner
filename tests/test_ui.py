@@ -192,13 +192,15 @@ def test_the_sd_card_screen_shows_the_logo_above_the_text():
     app.screen = "warning"
     image = app.render()
     # The logo is the orange mark. The version sits under it, and Continue stays.
-    assert image.getpixel((WIDTH // 2, HEADER + 60))[0] > 180
-    assert image.getpixel((MARGIN + 8, HEADER + 220))[:3] == PAPER
+    mark = logo(WIDTH - 48, 150)
+    logo_top = 28
+    assert image.getpixel((WIDTH // 2, logo_top + mark.height // 2))[0] > 180
+    assert image.getpixel((8, logo_top + 8))[:3] == PAPER
     version = f"Version {__version__}"
     face = font(28)
     version_width = int(ImageDraw.Draw(image).textlength(version, font=face))
     version_left = (WIDTH - version_width) // 2
-    version_y = HEADER + 24 + logo(WIDTH - 48, 180).height + 12
+    version_y = logo_top + mark.height + 12
     ink = [
         image.getpixel((x, y))[:3]
         for y in range(version_y, version_y + 28)
@@ -500,7 +502,8 @@ def test_an_error_stays_until_dismiss_is_clicked():
     box = dismiss["box"]
     assert image.getpixel(((box[0] + box[2]) // 2, (box[1] + box[3]) // 2))[:3] == (24, 92, 184)
     assert image.getpixel((MARGIN + 6, box[1] - 16))[:3] == (255, 255, 255)
-    assert sum(image.getpixel((WIDTH - 16, 24))[:3]) < sum(NAVY)
+    # The dialog dims the page. This screen has no title bar.
+    assert sum(image.getpixel((12, 20))[:3]) < sum(PAPER)
     assert any(image.getpixel((x, box[1] - 36))[:3] == (168, 36, 42) for x in range(MARGIN + 16, WIDTH - MARGIN - 16))
     app.tap(240, 180)
     assert app.notice == "This wallet descriptor is not supported."

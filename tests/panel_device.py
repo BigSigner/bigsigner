@@ -20,7 +20,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from bigsigner.ui.canvas import BLUE, HEADER, HEIGHT, NAVY, WIDTH
+from bigsigner.ui.canvas import BLUE, HEADER, HEIGHT, NAVY, PAPER, WIDTH
 
 # The panel logs a frame of 500ms or more as slow. Scrolling an already-built
 # QR is a crop of that picture, so it stays under the same line.
@@ -265,17 +265,17 @@ def run():
 
 
 def check_remove_sd(panel: Panel):
-    print("Remove SD Card", flush=True)
-    snap = panel.wait(lambda item: item["screen"] == "warning", 30, "Remove SD Card")
-    title = require_text(snap, "Remove SD Card")
+    print("Initial screen", flush=True)
+    snap = panel.wait(lambda item: item["screen"] == "warning", 30, "initial screen")
+    label = require_text(snap, "Choose Language:")
     button = require_hit(snap, "Continue")
     body = next(item for item in snap["texts"] if "SD card" in item["text"])
-    assert title["box"][3] <= HEADER, title
-    assert body["box"][1] >= title["box"][3]
+    assert not any(item.get("text") == "Remove SD Card" for item in snap["texts"])
+    assert label["box"][3] <= body["box"][1]
     assert body["box"][3] <= button["box"][1]
     assert button["box"][1] > 640
     image = panel.shot("remove-sd")
-    _assert_closer(image.getpixel((12, 20)), NAVY, (255, 255, 255), "title bar")
+    _assert_closer(image.getpixel((12, 20)), PAPER, NAVY, "page background")
     panel.tap("Continue")
     panel.wait(lambda item: item["menu"], 20, "the menu")
 

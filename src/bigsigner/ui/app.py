@@ -57,7 +57,9 @@ from ..sdcard import (
     SdError, child_path, disk_usage, file_exists, human_bytes, list_folder,
     parent_path, read_bytes, read_text, write_bytes, write_text,
 )
+from ..i18n import display, english_layout, has_hebrew, hebrew, hebrew_layout, language_name, set_language, t
 from ..licenses import NOTICES
+from ..settings_file import SettingsRejected, load_initial, save_language
 from ..seedqr import compact_bytes
 from ..slip132 import display_form, label_of
 from ..ur import descriptor_ur_parts
@@ -231,11 +233,28 @@ def _name_icon(has_seed: bool):
 
 
 def _draw_name_block(frame: Frame, y: int, lines: list[str], size: int, icon: str, awesome: bool, icon_size: int, paint: bool, offset: int = 0, left: int = MARGIN) -> int:
-    """Two name lines after a leading icon, sharing the fingerprint line's left edge."""
+    """Two name lines beside an icon, sharing the fingerprint line's outer edge.
+
+    The name is generated English. In Hebrew the icon sits on the right of those
+    words and the pair is right-aligned. The words themselves are not reordered.
+    """
     face = font(size)
     _left, top, _right, bottom = frame.draw.textbbox((0, 0), "Ag", font=face)
     step = size + 8
     text_mid = (top + bottom) / 2 + step * (len(lines) - 1) / 2
+    if hebrew():
+        icon_right = WIDTH - left
+        text_right = icon_right - icon_size - 10
+        if paint and y - offset + text_mid >= HEADER:
+            frame.glyph(icon, icon_right - icon_size / 2, y - offset + text_mid, icon_size, INK, awesome=awesome)
+        if paint:
+            for index, line in enumerate(lines):
+                line_y = y - offset + index * step
+                if line_y >= HEADER:
+                    width = frame.draw.textlength(line, font=face)
+                    frame.draw.text((text_right - width, line_y), line, font=face, fill=INK)
+                    frame.mark(line, frame.draw.textbbox((text_right - width, line_y), line, font=face))
+        return y + step * len(lines)
     if paint and y - offset + text_mid >= HEADER:
         frame.glyph(icon, left + icon_size / 2, y - offset + text_mid, icon_size, INK, awesome=awesome)
     if paint:
@@ -515,6 +534,10 @@ class App:
         self._pending_network = None
         self.entropy_words = 24
         self.open_dropdown = None
+        self.language = "en"
+        self.saved_language = None
+        self._language_loaded = False
+        set_language("en")
         self.scan_kind = "key"
         self.qr_sequence = QrSequence()
         self.psbt_parts = SpecterParts()
@@ -1469,6 +1492,7 @@ class App:
         "load-error-ok": _act_load_error_ok,
         "psbt-error-ok": lambda self: self._close_psbt_error(),
         "dismiss-notice": lambda self: self.set_notice(""),
+        "save-language": lambda self: self._save_language(),
         "external-known": lambda self: self._continue_loaded_multisig(),
         "verify-receive": lambda self: self._open_receive_check(),
         "receive-continue": lambda self: self._accept_receive_address(),
@@ -1657,6 +1681,8 @@ class App:
                     self.singlesig_selected = None
             elif name == "multisig-m":
                 self.multisig_m = int(key)
+            elif name == "language":
+                self._choose_language(key, persist=self.screen == "warning")
             elif name == "network" and key != self.session.network:
                 if self.session.network == "main" and key != "main":
                     self._pending_network = key
@@ -1786,16 +1812,31 @@ class App:
         else:
             fill, ink, outline = (186, 190, 196), (132, 136, 142), (186, 190, 196)
         frame.draw.rounded_rectangle(box, radius=14, fill=fill, outline=outline, width=2)
-        limit = (box[2] - 52) - (box[0] + 20)
+        logical = t(label)
+        rtl = hebrew_layout(logical)
+        shown = display(logical) if rtl else logical
+        # The chevron sits on the left of a right-aligned value, and on the right otherwise.
+        if rtl:
+            limit = (box[2] - 20) - (box[0] + 52)
+            chevron_x = box[0] + 36
+        else:
+            limit = (box[2] - 52) - (box[0] + 20)
+            chevron_x = box[2] - 36
         size = TITLE_SIZE
         face = font(size)
-        while size > 18 and frame.draw.textlength(label, font=face) > limit:
+        while size > 18 and frame.draw.textlength(shown, font=face) > limit:
             size -= 1
             face = font(size)
-        left, top, right, bottom = frame.draw.textbbox((0, 0), label, font=face)
+        _ink_left, top, _ink_right, bottom = frame.draw.textbbox((0, 0), shown, font=face)
         text_y = y + (height - (bottom - top)) / 2 - top
-        frame.draw.text((box[0] + 20, text_y), label, font=face, fill=ink)
-        frame.glyph(Icons.CHEVRON_UP if open_now else Icons.CHEVRON_DOWN, box[2] - 36, y + height / 2, 28, ink if not enabled else MUTED)
+        if rtl:
+            text_x = box[2] - 20 - frame.draw.textlength(shown, font=face)
+        else:
+            text_x = box[0] + 20
+        frame.draw.text((text_x, text_y), shown, font=face, fill=ink)
+        if rtl:
+            frame.mark(logical, frame.draw.textbbox((text_x, text_y), shown, font=face))
+        frame.glyph(Icons.CHEVRON_UP if open_now else Icons.CHEVRON_DOWN, chevron_x, y + height / 2, 28, ink if not enabled else MUTED)
         if enabled:
             frame.hit(box, f"dropdown-{name}", label)
             self._hit_above(frame, box, f"dropdown-{name}", label, DROPDOWN_RAISE)
@@ -1820,9 +1861,18 @@ class App:
                     fill=(228, 230, 234),
                 )
             face = font(TITLE_SIZE)
-            text_left, text_top, _text_right, text_bottom = frame.draw.textbbox((0, 0), label, font=face)
+            logical = t(label)
+            rtl = hebrew_layout(logical)
+            shown = display(logical) if rtl else logical
+            text_left, text_top, text_right, text_bottom = frame.draw.textbbox((0, 0), shown, font=face)
             text_y = row_top + (row_h - (text_bottom - text_top)) / 2 - text_top
-            frame.draw.text((left + 20 - text_left, text_y), label, font=face, fill=INK)
+            if rtl:
+                text_x = right - 20 - text_right
+            else:
+                text_x = left + 20 - text_left
+            frame.draw.text((text_x, text_y), shown, font=face, fill=INK)
+            if rtl:
+                frame.mark(logical, frame.draw.textbbox((text_x, text_y), shown, font=face))
             if index < len(options) - 1:
                 frame.draw.line((left + 16, row[3], right - 16, row[3]), fill=LINE, width=2)
             frame.hit(row, f"dropdown-pick-{name}-{key}", label)
@@ -2314,7 +2364,18 @@ class App:
         frame.draw.rectangle((0, HEADER, WIDTH, list_top), fill=PAPER)
         if usage is not None:
             total, used, free = usage
-            usage_text = f"Used: {human_bytes(used)} / {human_bytes(total)} Free: {human_bytes(free)}"
+            used_text = human_bytes(used)
+            total_text = human_bytes(total)
+            free_text = human_bytes(free)
+            if hebrew():
+                # Keep each size run left-to-right so the numbers stay with their units.
+                embed, pop = "\u202a", "\u202c"
+                usage_text = (
+                    f"{t('Used:')} {embed}{used_text} / {total_text}{pop} "
+                    f"{t('Free:')} {embed}{free_text}{pop}"
+                )
+            else:
+                usage_text = f"Used: {used_text} / {total_text} Free: {free_text}"
             usage_size = 24
             while usage_size > 8 and frame.draw.textlength(usage_text, font=font(usage_size)) > WIDTH - 2 * MARGIN:
                 usage_size -= 1
@@ -2886,10 +2947,63 @@ class App:
         else:
             self.set_notice(message, error=error)
 
+    def _load_language_settings(self):
+        """Read the card once. A missing file is created here and nowhere else."""
+        if self._language_loaded:
+            return
+        self._language_loaded = True
+        loaded = load_initial()
+        self.language = loaded.language
+        self.saved_language = loaded.saved
+        set_language(loaded.language)
+        if loaded.error:
+            self.set_error(loaded.error)
+
+    def _language_dirty(self) -> bool:
+        baseline = self.saved_language if self.saved_language is not None else "en"
+        return self.language != baseline
+
+    def _choose_language(self, code: str, *, persist: bool):
+        if code not in ("en", "he") or code == self.language:
+            return
+        self.language = code
+        set_language(code)
+        if persist:
+            self._write_language(code)
+
+    def _save_language(self):
+        if self._language_dirty():
+            self._write_language(self.language)
+
+    def _write_language(self, code: str):
+        if code == self.saved_language:
+            return
+        try:
+            save_language(code)
+        except (SettingsRejected, SdError):
+            self.set_error("Could not save the language.")
+            return
+        self.saved_language = code
+        self.set_notice("Language saved.")
+
+    def _language_menu(self, frame: Frame, field):
+        self._dropdown_menu(
+            frame,
+            field,
+            "language",
+            (("en", "English"), ("he", "עברית")),
+            self.language,
+        )
+
     def _warning(self, frame: Frame):
-        frame.header("Remove SD Card")
-        mark = logo(WIDTH - 48, 180)
-        logo_top = HEADER + 24
+        # This screen stays in English. The choice is remembered for the screens after Continue.
+        self._load_language_settings()
+        with english_layout():
+            self._paint_initial(frame)
+
+    def _paint_initial(self, frame: Frame):
+        mark = logo(WIDTH - 48, 150)
+        logo_top = 28
         frame.image.paste(mark, ((WIDTH - mark.width) // 2, logo_top), mark)
         version = f"Version {__version__}"
         version_size = 28
@@ -2897,13 +3011,18 @@ class App:
         face = font(version_size)
         version_width = frame.draw.textlength(version, font=face)
         frame.draw.text(((WIDTH - version_width) / 2, version_y), version, font=face, fill=MUTED)
+        frame.mark(version, frame.draw.textbbox(((WIDTH - version_width) / 2, version_y), version, font=face))
+        y = frame.text("Choose Language:", MARGIN, version_y + version_size + 20, size=TITLE_SIZE)
+        field = self._dropdown_field(frame, y + 8, "language", language_name(self.language))
         frame.text(
             "It is now safe to remove the SD card to guarantee nothing will be saved on permanent storage.",
             MARGIN,
-            version_y + version_size + 24,
+            field[3] + 16,
             size=BODY_SIZE,
         )
         frame.button(HEIGHT - 110, "Continue", "warning-ok")
+        if self.open_dropdown == "language":
+            self._language_menu(frame, field)
 
     def _keys(self, frame: Frame):
         y = HEADER + 24
@@ -2926,8 +3045,25 @@ class App:
         for item in placed:
             if item[0] == "label":
                 _kind, top, title, icon, awesome, _line_count = item
-                text_x = frame.leading_icon(icon, MARGIN, top - offset, TITLE_SIZE, INK, awesome=awesome)
-                frame.text(title, text_x, top - offset, size=TITLE_SIZE)
+                if hebrew_layout(t(title)):
+                    icon_right = WIDTH - MARGIN
+                    text_right = icon_right - TITLE_SIZE - 12
+                    _box_left, ink_top, _box_right, ink_bottom = frame.draw.textbbox((0, 0), "Ag", font=font(TITLE_SIZE))
+                    frame.glyph(
+                        icon,
+                        icon_right - TITLE_SIZE / 2,
+                        top - offset + (ink_top + ink_bottom) / 2,
+                        TITLE_SIZE,
+                        INK,
+                        awesome=awesome,
+                    )
+                    frame.text(
+                        title, MARGIN, top - offset, size=TITLE_SIZE,
+                        width=text_right - MARGIN, align="right",
+                    )
+                else:
+                    text_x = frame.leading_icon(icon, MARGIN, top - offset, TITLE_SIZE, INK, awesome=awesome)
+                    frame.text(title, text_x, top - offset, size=TITLE_SIZE)
             else:
                 _kind, top, fingerprint, record, key, index = item
                 self._key_card(frame, top - offset, fingerprint, record, key, index)
@@ -3024,12 +3160,15 @@ class App:
         y += max(NAME_ON_CARD, _DETAIL_ICON) + 12
         text_width = right - (inset + _DETAIL_ICON + 12)
         if any(key.has_seed for key in record.keys):
-            summary = self.session.seed_summary(record.keys[0])
+            summary = t(self.session.seed_summary(record.keys[0]))
             if paint:
                 text_x = frame.leading_icon(
                     Icons.SEED, inset, y, NAME_ON_CARD, MUTED, awesome=True, icon_size=_DETAIL_ICON,
                 )
-                y = frame.text(summary, text_x, y, size=NAME_ON_CARD, fill=MUTED, width=text_width)
+                y = frame.text(
+                    summary, text_x, y, size=NAME_ON_CARD, fill=MUTED, width=text_width,
+                    content=not has_hebrew(summary),
+                )
             else:
                 lines = wrap(frame.draw, summary, font(NAME_ON_CARD), text_width) or [""]
                 y += len(lines) * (NAME_ON_CARD + 8)
@@ -3038,12 +3177,12 @@ class App:
             keys = [only] if only is not None else self._external_keys(record)
             for key in keys:
                 kind = self._external_script(key)
-                account = f"Account #{key.account}"
+                account = f"{t('Account')} #{key.account}"
                 if paint:
                     y = frame.text(kind, inset, y, size=NAME_ON_CARD, fill=MUTED, width=kind_width)
                     y = frame.text(account, inset, y, size=NAME_ON_CARD, fill=MUTED, width=kind_width)
                 else:
-                    for value in (kind, account):
+                    for value in (t(kind), account):
                         lines = wrap(frame.draw, value, font(NAME_ON_CARD), kind_width) or [""]
                         y += len(lines) * (NAME_ON_CARD + 8)
         return y + _CARD_PAD
@@ -3103,9 +3242,26 @@ class App:
 
     def _first_word_line(self, frame: Frame, y: int, word: str, text_size: int, icon_size: int) -> None:
         """The seedling icon and the seed's first word, aligned with the fingerprint line."""
+        face = font(text_size)
+        if hebrew_layout(t("First Word:")):
+            label = t("First Word:")
+            shown = display(label)
+            _left, top, _right, bottom = frame.draw.textbbox((0, 0), shown, font=face)
+            text_y = y + (icon_size - (bottom - top)) / 2 - top
+            right = WIDTH - MARGIN
+            frame.glyph(Icons.SEED, right - icon_size / 2, y + icon_size / 2, icon_size, MUTED, awesome=True)
+            label_w = frame.draw.textlength(shown, font=face)
+            label_x = right - icon_size - 10 - label_w
+            gap = frame.draw.textlength(" ", font=face)
+            word_w = frame.draw.textlength(word, font=face)
+            word_x = label_x - gap - word_w
+            frame.draw.text((word_x, text_y), word, font=face, fill=MUTED)
+            frame.mark(word, frame.draw.textbbox((word_x, text_y), word, font=face))
+            frame.draw.text((label_x, text_y), shown, font=face, fill=MUTED)
+            frame.mark(label, frame.draw.textbbox((label_x, text_y), shown, font=face))
+            return
         frame.glyph(Icons.SEED, MARGIN + icon_size / 2, y + icon_size / 2, icon_size, MUTED, awesome=True)
         label = f"First Word: {word}"
-        face = font(text_size)
         _left, top, _right, bottom = frame.draw.textbbox((0, 0), label, font=face)
         text_y = y + (icon_size - (bottom - top)) / 2 - top
         x = MARGIN + icon_size + 10
@@ -3152,9 +3308,9 @@ class App:
             return self._flow_button(
                 frame, y, "Derive a BIP85\nChild Seed", "derive-bip85", paint, offset, "Derive a BIP85 Child Seed",
             )
-        y = self._flow_text(frame, y, f"Type: {self._external_kind(key)}", paint, offset, size=text_size)
+        y = self._flow_text(frame, y, f"{t('Type:')} {t(self._external_kind(key))}", paint, offset, size=text_size)
         if key.account is not None:
-            y = self._flow_text(frame, y, f"Account: {key.account}", paint, offset, size=text_size)
+            y = self._flow_text(frame, y, f"{t('Account')}: {key.account}", paint, offset, size=text_size)
         preview = key.xpub.to_string()[:XPUB_KEY_PREVIEW] + ELLIPSIS
         y = self._flow_value_below(frame, y, "Derivation Path:", format_path(list(key.path)), paint, offset, text_size)
         y = self._flow_value_below(frame, y, "Extended Public Key:", preview, paint, offset, text_size)
@@ -3442,7 +3598,7 @@ class App:
         if paint and y - offset >= HEADER:
             frame.fingerprint_line(y - offset, record.fingerprint.hex(), text_size=text_size, icon_size=icon)
         y += icon + 16
-        y = self._flow_text(frame, y, f"Type: {self._external_kind(key)}", paint, offset, size=text_size)
+        y = self._flow_text(frame, y, f"{t('Type:')} {t(self._external_kind(key))}", paint, offset, size=text_size)
         y = self._account_selector(frame, y, self.derive_account, paint, offset)
         preview = key.xpub.to_string()[:XPUB_ACCOUNT_PREVIEW] + ELLIPSIS
         y = self._flow_value_below(frame, y, "Derivation Path:", format_path(list(key.path)), paint, offset, text_size)
@@ -3547,7 +3703,7 @@ class App:
         self._plus(frame, "toggle-add", Icons.CLOSE if self.add_menu else Icons.PLUS)
 
     def _wallet_kind_line(self, wallet) -> str:
-        kind = "Taproot" if wallet.role == SINGLESIG_TAPROOT else "Native-Segwit"
+        kind = t("Taproot") if wallet.role == SINGLESIG_TAPROOT else t("Native-Segwit")
         if wallet.multisig:
             return f"{wallet.threshold}-of-{len(wallet.fingerprints)} {kind}"
         return kind
@@ -3681,18 +3837,21 @@ class App:
                 name_step = NAME_ON_MULTISIG + 8
                 name_y = self._draw_picker_kind(frame, record, y + 12, MULTISIG_NATIVE)
                 for line_index, line in enumerate(_fingerprint_name_lines(record.nickname)):
-                    frame.text(line, MARGIN + 56, name_y + line_index * name_step, size=NAME_ON_MULTISIG)
+                    frame.text(line, MARGIN + 56, name_y + line_index * name_step, size=NAME_ON_MULTISIG, content=True)
                 hex_y = name_y + name_step + NAME_ON_MULTISIG + 8
-                hex_x = frame.leading_icon(
-                    Icons.FINGERPRINT, MARGIN + 56, hex_y, FINGERPRINT_ON_MULTISIG, MUTED,
-                )
-                hex_label = "Fingerprint: "
-                frame.draw.text((hex_x, hex_y), hex_label, font=font(FINGERPRINT_ON_MULTISIG), fill=MUTED)
-                hex_x += int(frame.draw.textlength(hex_label, font=font(FINGERPRINT_ON_MULTISIG)))
-                frame.draw.text(
-                    (hex_x, hex_y), fingerprint.hex(),
-                    font=font(FINGERPRINT_ON_MULTISIG, mono=True), fill=MUTED,
-                )
+                if not frame.rtl_fingerprint(
+                    MARGIN + 56, hex_y, fingerprint.hex(), FINGERPRINT_ON_MULTISIG, FINGERPRINT_ON_MULTISIG,
+                ):
+                    hex_x = frame.leading_icon(
+                        Icons.FINGERPRINT, MARGIN + 56, hex_y, FINGERPRINT_ON_MULTISIG, MUTED,
+                    )
+                    hex_label = "Fingerprint: "
+                    frame.draw.text((hex_x, hex_y), hex_label, font=font(FINGERPRINT_ON_MULTISIG), fill=MUTED)
+                    hex_x += int(frame.draw.textlength(hex_label, font=font(FINGERPRINT_ON_MULTISIG)))
+                    frame.draw.text(
+                        (hex_x, hex_y), fingerprint.hex(),
+                        font=font(FINGERPRINT_ON_MULTISIG, mono=True), fill=MUTED,
+                    )
                 self._restore_list_card_clip(frame, clip)
                 frame.hit(clip["hit"], f"toggle-ms-{fingerprint.hex()}", record.nickname)
             y += row_h + 12
@@ -3751,18 +3910,21 @@ class App:
                 name_step = NAME_ON_MULTISIG + 8
                 name_y = self._draw_picker_kind(frame, record, y + 12, self.singlesig_role)
                 for line_index, line in enumerate(_fingerprint_name_lines(record.nickname)):
-                    frame.text(line, MARGIN + 56, name_y + line_index * name_step, size=NAME_ON_MULTISIG)
+                    frame.text(line, MARGIN + 56, name_y + line_index * name_step, size=NAME_ON_MULTISIG, content=True)
                 hex_y = name_y + name_step + NAME_ON_MULTISIG + 8
-                hex_x = frame.leading_icon(
-                    Icons.FINGERPRINT, MARGIN + 56, hex_y, FINGERPRINT_ON_MULTISIG, MUTED,
-                )
-                hex_label = "Fingerprint: "
-                frame.draw.text((hex_x, hex_y), hex_label, font=font(FINGERPRINT_ON_MULTISIG), fill=MUTED)
-                hex_x += int(frame.draw.textlength(hex_label, font=font(FINGERPRINT_ON_MULTISIG)))
-                frame.draw.text(
-                    (hex_x, hex_y), fingerprint.hex(),
-                    font=font(FINGERPRINT_ON_MULTISIG, mono=True), fill=MUTED,
-                )
+                if not frame.rtl_fingerprint(
+                    MARGIN + 56, hex_y, fingerprint.hex(), FINGERPRINT_ON_MULTISIG, FINGERPRINT_ON_MULTISIG,
+                ):
+                    hex_x = frame.leading_icon(
+                        Icons.FINGERPRINT, MARGIN + 56, hex_y, FINGERPRINT_ON_MULTISIG, MUTED,
+                    )
+                    hex_label = "Fingerprint: "
+                    frame.draw.text((hex_x, hex_y), hex_label, font=font(FINGERPRINT_ON_MULTISIG), fill=MUTED)
+                    hex_x += int(frame.draw.textlength(hex_label, font=font(FINGERPRINT_ON_MULTISIG)))
+                    frame.draw.text(
+                        (hex_x, hex_y), fingerprint.hex(),
+                        font=font(FINGERPRINT_ON_MULTISIG, mono=True), fill=MUTED,
+                    )
                 self._restore_list_card_clip(frame, clip)
                 frame.hit(clip["hit"], f"pick-ss-{fingerprint.hex()}", record.nickname)
             y += row_h + 12
@@ -4026,7 +4188,7 @@ class App:
     def _wallet_flow(self, frame: Frame, wallet, paint: bool, offset: int = 0):
         """Lay out the wallet under the title. Returns the unshifted y, and any open account menu."""
         y = HEADER + 16
-        kind = f"Type: {self._wallet_kind_line(wallet)}"
+        kind = f"{t('Type:')} {self._wallet_kind_line(wallet)}"
         if paint:
             frame.text(kind, MARGIN, y - offset, size=TITLE_SIZE)
         y += self._text_height(frame, kind, TITLE_SIZE) + 8
@@ -4137,7 +4299,7 @@ class App:
         options = self.session.account_options(fingerprint, wallet.role)
         if options is not None and len(options) <= 1:
             account = wallet.accounts[fingerprint]
-            label = f"Account: {_account_label(account)}"
+            label = f"{t('Account')}: {_account_label(account)}"
             if paint:
                 frame.text(label, left, y - offset, size=TITLE_SIZE, width=right - left)
             y += self._text_height(frame, label, TITLE_SIZE) + 8
@@ -4725,11 +4887,16 @@ class App:
             x = MARGIN + index * (width + gap)
             box = (x, y, x + width, y + height)
             frame.draw.rounded_rectangle(box, radius=14, fill=BLUE if selected else NAVY)
-            text_width = frame.draw.textlength(label, font=face)
-            _left, text_top, _right, text_bottom = frame.draw.textbbox((0, 0), label, font=face)
+            visible = t(label)
+            shown = display(visible)
+            text_width = frame.draw.textlength(shown, font=face)
+            _left, text_top, _right, text_bottom = frame.draw.textbbox((0, 0), shown, font=face)
             text_y = y + (height - (text_bottom - text_top)) / 2 - text_top
-            frame.draw.text((x + (width - text_width) / 2, text_y), label, font=face, fill=WHITE)
-            frame.hit(box, action, label)
+            origin = (x + (width - text_width) / 2, text_y)
+            frame.draw.text(origin, shown, font=face, fill=WHITE)
+            if hebrew() or shown != visible:
+                frame.mark(visible, frame.draw.textbbox(origin, shown, font=face))
+            frame.hit(box, action, visible)
         return y + height + 12
 
     def _address(self, frame: Frame):
@@ -5119,7 +5286,15 @@ class App:
 
     def _settings(self, frame: Frame):
         frame.header("Settings", "menu")
-        y = frame.text("Network:", MARGIN, HEADER + 24, size=TITLE_SIZE)
+        y = frame.text("Language:", MARGIN, HEADER + 24, size=TITLE_SIZE)
+        language = self._dropdown_field(frame, y + 8, "language", language_name(self.language))
+        y = frame.button(
+            language[3] + 16,
+            "Save to SD Card",
+            "save-language",
+            enabled=self._language_dirty(),
+        )
+        y = frame.text("Network:", MARGIN, y + 8, size=TITLE_SIZE)
         names = {"main": "mainnet", "test": "testnet", "regtest": "regtest"}
         field = self._dropdown_field(frame, y + 8, "network", names[self.session.network])
         frame.text(
@@ -5128,6 +5303,8 @@ class App:
             field[3] + 16,
             size=TITLE_SIZE,
         )
+        if self.open_dropdown == "language":
+            self._language_menu(frame, language)
         if self.open_dropdown == "network":
             self._dropdown_menu(
                 frame,
@@ -6133,18 +6310,20 @@ class App:
             text_width = frame.draw.textlength(label, font=face)
             frame.draw.text((box[0] + (side - text_width) / 2, y + 14), label, font=face, fill=WHITE)
             frame.hit(box, action, label)
+        logical = t(name)
+        shown = display(logical)
         limit = (WIDTH - MARGIN - 72) - (MARGIN + 72) - 16
         size = TITLE_SIZE
         face = font(size)
-        while size > 22 and frame.draw.textlength(name, font=face) > limit:
+        while size > 22 and frame.draw.textlength(shown, font=face) > limit:
             size -= 1
             face = font(size)
-        text_width = frame.draw.textlength(name, font=face)
-        text_left, text_top, _text_right, text_bottom = frame.draw.textbbox((0, 0), name, font=face)
+        text_width = frame.draw.textlength(shown, font=face)
+        text_left, text_top, _text_right, text_bottom = frame.draw.textbbox((0, 0), shown, font=face)
         text_y = y + (64 - (text_bottom - text_top)) / 2 - text_top
         origin = ((WIDTH - text_width) / 2 - text_left, text_y)
-        frame.draw.text(origin, name, font=face, fill=INK)
-        frame.mark(name, frame.draw.textbbox(origin, name, font=face))
+        frame.draw.text(origin, shown, font=face, fill=INK)
+        frame.mark(logical, frame.draw.textbbox(origin, shown, font=face))
 
     def _step_seed_format(self, delta: int):
         self.seed_format = (self.seed_format + delta) % len(SEED_FORMATS)
@@ -6291,10 +6470,23 @@ class App:
             next_y = y + row_h
             if action == f"nav-{section}":
                 frame.draw.rectangle((0, y + 1, 320, next_y), fill=(228, 230, 234))
-            _left, top, _right, bottom = frame.draw.textbbox((0, 0), label, font=face)
+            shown_label = t(label)
+            row_face = face
+            shown = display(shown_label)
+            size = 30
+            while size > 18 and frame.draw.textlength(shown, font=row_face) > 320 - 56:
+                size -= 1
+                row_face = font(size)
+                shown = display(shown_label)
+            _left, top, _right, bottom = frame.draw.textbbox((0, 0), shown, font=row_face)
             text_y = y + (row_h - (bottom - top)) / 2 - top
-            frame.draw.text((28, text_y), label, font=face, fill=INK)
-            frame.hit((0, y, 320, next_y), action, label)
+            text_width = frame.draw.textlength(shown, font=row_face)
+            # Every side-menu row is right-aligned in Hebrew, including a label that stays in English.
+            text_x = 320 - 28 - text_width if hebrew() else 28
+            frame.draw.text((text_x, text_y), shown, font=row_face, fill=INK)
+            if hebrew():
+                frame.mark(shown_label, frame.draw.textbbox((text_x, text_y), shown, font=row_face))
+            frame.hit((0, y, 320, next_y), action, shown_label)
             y = next_y
             frame.draw.line((20, y, 300, y), fill=LINE, width=2)
         frame.hit((320, 0, WIDTH, HEIGHT), "close-menu", "close")
@@ -6370,7 +6562,7 @@ class App:
         frame.image = Image.alpha_composite(base, overlay).convert("RGB")
         frame.draw = ImageDraw.Draw(frame.image)
         frame.hit((0, 0, WIDTH, HEIGHT), "confirm-no", "outside")
-        message = self._confirm_message()
+        message = t(self._confirm_message())
         face = font(BODY_SIZE)
         if self.confirm == "psbt-found":
             lines = _wrap_name(frame.draw, message, face, WIDTH - 88) or [""]
@@ -6392,9 +6584,15 @@ class App:
         frame.draw.rounded_rectangle(box, radius=18, fill=WHITE, outline=LINE)
         frame.hit(box, "confirm-stay", "dialog")
         y = text_top
+        rtl = hebrew_layout(message)
         for line in lines:
-            frame.draw.text((44, y), line, font=face, fill=INK)
-            frame.mark(line, frame.draw.textbbox((44, y), line, font=face))
+            shown = display(line, base="R") if rtl else line
+            if rtl:
+                x = box[2] - 20 - frame.draw.textlength(shown, font=face)
+            else:
+                x = 44
+            frame.draw.text((x, y), shown, font=face, fill=INK)
+            frame.mark(line, frame.draw.textbbox((x, y), shown, font=face))
             y += line_h
         self._confirm_buttons(frame, box)
 
@@ -6427,12 +6625,14 @@ class App:
     def _dialog_button(self, frame: Frame, box, text: str, action: str, color):
         frame.draw.rounded_rectangle(box, radius=14, fill=color)
         face = font(BODY_SIZE)
-        left, top, right, bottom = frame.draw.textbbox((0, 0), text, font=face)
+        text = t(text)
+        shown = display(text)
+        left, top, right, bottom = frame.draw.textbbox((0, 0), shown, font=face)
         cx = (box[0] + box[2]) / 2
         cy = (box[1] + box[3]) / 2
         frame.draw.text(
             (cx - (right - left) / 2 - left, cy - (bottom - top) / 2 - top),
-            text,
+            shown,
             font=face,
             fill=WHITE,
         )
@@ -7099,9 +7299,14 @@ class App:
         return y + height
 
     def _centered_text(self, frame: Frame, value: str, y: int, size: int, fill) -> int:
+        logical = t(value)
+        shown = display(logical)
         face = font(size)
-        width = frame.draw.textlength(value, font=face)
-        frame.draw.text(((WIDTH - width) / 2, y), value, font=face, fill=fill)
+        width = frame.draw.textlength(shown, font=face)
+        origin = ((WIDTH - width) / 2, y)
+        frame.draw.text(origin, shown, font=face, fill=fill)
+        if hebrew_layout(logical):
+            frame.mark(logical, frame.draw.textbbox(origin, shown, font=face))
         return y + size + 8
 
     def _centered_block(self, frame: Frame, value: str, y: int, size: int, fill) -> int:
@@ -7113,7 +7318,9 @@ class App:
             y += size + 8
         return y
 
-    def _text_height(self, frame: Frame, value: str, size: int, mono: bool = False) -> int:
+    def _text_height(self, frame: Frame, value: str, size: int, mono: bool = False, content: bool = False) -> int:
+        if not mono and not content:
+            value = t(value)
         face = font(size, mono=mono)
         lines = wrap(frame.draw, value, face, WIDTH - 2 * MARGIN) or [""]
         return len(lines) * (size + 8)
@@ -7169,25 +7376,45 @@ class App:
             frame.button(y + 16, "Continue", "external-continue")
         frame.header("Verify QR Code", "back")
 
+    def _notice_text(self) -> str:
+        return t(self.notice)
+
     def _notice_layout(self, frame: Frame):
         face = font(TITLE_SIZE)
         text_width = WIDTH - 2 * MARGIN - 32
-        lines = wrap(frame.draw, self.notice, face, text_width) or [""]
+        lines = wrap(frame.draw, self._notice_text(), face, text_width) or [""]
         line_h = TITLE_SIZE + 8
         pad = 16
         height = pad * 2 + line_h * len(lines) - 8
         if self.notice_error:
-            height += 12 + frame.button_height("Dismiss")
+            height += 12 + frame.button_height(t("Dismiss"))
         top = HEIGHT - 24 - height
         return face, lines, line_h, pad, top, height
 
     def _toast(self, frame: Frame):
+        if self.screen == "warning":
+            with english_layout():
+                self._paint_toast(frame)
+        else:
+            self._paint_toast(frame)
+
+    def _paint_toast_line(self, frame: Frame, line: str, y: int, face, fill):
+        rtl = hebrew_layout(self._notice_text())
+        shown = display(line, base="R") if rtl else line
+        if rtl:
+            x = WIDTH - MARGIN - 16 - frame.draw.textlength(shown, font=face)
+        else:
+            x = MARGIN + 16
+        frame.draw.text((x, y), shown, font=face, fill=fill)
+        frame.mark(line, frame.draw.textbbox((x, y), shown, font=face))
+
+    def _paint_toast(self, frame: Frame):
         face, lines, line_h, pad, top, height = self._notice_layout(frame)
         if not self.notice_error:
             frame.draw.rounded_rectangle((MARGIN, top, WIDTH - MARGIN, top + height), radius=16, fill=NAVY)
             y = top + pad
             for line in lines:
-                frame.draw.text((MARGIN + 16, y), line, font=face, fill=WHITE)
+                self._paint_toast_line(frame, line, y, face, WHITE)
                 y += line_h
             return
         overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 110))
@@ -7198,18 +7425,19 @@ class App:
         )
         y = top + pad
         for line in lines:
-            frame.draw.text((MARGIN + 16, y), line, font=face, fill=RED)
+            self._paint_toast_line(frame, line, y, face, RED)
             y += line_h
-        button_h = frame.button_height("Dismiss")
+        button_h = frame.button_height(t("Dismiss"))
         button_top = y + 4
         box = (MARGIN + 16, button_top, WIDTH - MARGIN - 16, button_top + button_h)
         frame.draw.rounded_rectangle(box, radius=14, fill=BLUE)
-        label = "Dismiss"
+        label = t("Dismiss")
+        shown = display(label)
         button_face = font(BODY_SIZE)
-        text_width = frame.draw.textlength(label, font=button_face)
-        _left, text_top, _right, text_bottom = frame.draw.textbbox((0, 0), label, font=button_face)
+        text_width = frame.draw.textlength(shown, font=button_face)
+        _left, text_top, _right, text_bottom = frame.draw.textbbox((0, 0), shown, font=button_face)
         text_y = button_top + (button_h - (text_bottom - text_top)) / 2 - text_top
-        frame.draw.text(((box[0] + box[2] - text_width) / 2, text_y), label, font=button_face, fill=WHITE)
+        frame.draw.text(((box[0] + box[2] - text_width) / 2, text_y), shown, font=button_face, fill=WHITE)
         frame.hit(box, "dismiss-notice", label)
 
     def _speed_dial(self, frame: Frame, items):
@@ -7226,6 +7454,7 @@ class App:
         icon_size = BODY_SIZE
         icon_gap = 12
         for label, action, icon in items:
+            label = t(label)
             label_width = text_width - (icon_size + icon_gap if icon else 0)
             lines = wrap(frame.draw, label, face, label_width)
             height = max(BODY_SIZE + 28, 16 + line_h * len(lines))
@@ -7239,13 +7468,25 @@ class App:
             _left, top, _right, bottom = frame.draw.textbbox((0, 0), lines[0], font=face)
             block = (bottom - top) + line_h * (len(lines) - 1)
             text_y = y + (height - block) / 2 - top
-            text_x = box[0] + 18
-            if icon:
-                frame.glyph(icon, text_x + icon_size / 2, y + height / 2, icon_size, INK, awesome=True)
-                text_x += icon_size + icon_gap
-            for line in lines:
-                frame.draw.text((text_x, text_y), line, font=face, fill=INK)
-                text_y += line_h
+            if hebrew_layout(label):
+                text_right = box[2] - 18 - (icon_size + icon_gap if icon else 0)
+                if icon:
+                    frame.glyph(icon, box[2] - 18 - icon_size / 2, y + height / 2, icon_size, INK, awesome=True)
+                for line in lines:
+                    shown = display(line, base="R")
+                    width = frame.draw.textlength(shown, font=face)
+                    origin = (text_right - width, text_y)
+                    frame.draw.text(origin, shown, font=face, fill=INK)
+                    frame.mark(line, frame.draw.textbbox(origin, shown, font=face))
+                    text_y += line_h
+            else:
+                text_x = box[0] + 18
+                if icon:
+                    frame.glyph(icon, text_x + icon_size / 2, y + height / 2, icon_size, INK, awesome=True)
+                    text_x += icon_size + icon_gap
+                for line in lines:
+                    frame.draw.text((text_x, text_y), line, font=face, fill=INK)
+                    text_y += line_h
             rows.append((y, y + height, action, label))
             y -= gap
         # The grey page behind the rows closes the menu. The top row sits in
@@ -8959,9 +9200,9 @@ class App:
         y += _DETAIL_ICON + 8
         account = wallet.accounts[fingerprint]
         branch = "Receive" if self.message_branch == 0 else "Change"
-        y = self._flow_text(frame, y, f"Account: {account}", paint, offset, TITLE_SIZE)
-        y = self._flow_text(frame, y, f"Address Type: {branch}", paint, offset, TITLE_SIZE)
-        y = self._flow_text(frame, y, f"Address Index: {self.message_index}", paint, offset, TITLE_SIZE)
+        y = self._flow_text(frame, y, f"{t('Account')}: {account}", paint, offset, TITLE_SIZE)
+        y = self._flow_text(frame, y, f"{t('Address Type:')} {t(branch)}", paint, offset, TITLE_SIZE)
+        y = self._flow_text(frame, y, f"{t('Address Index:')} {self.message_index}", paint, offset, TITLE_SIZE)
         try:
             address = self.session.addresses(self.wallet_index, self.message_branch, self.message_index, 1)[0]
         except SessionError:
@@ -9091,7 +9332,7 @@ def _paint_die_face(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], d
 
 def _account_label(account: int) -> str:
     if account == 0:
-        return "0 (default)"
+        return t("0 (default)")
     return str(account)
 
 
