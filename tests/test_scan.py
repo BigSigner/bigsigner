@@ -32,6 +32,9 @@ def test_manual_entry_is_the_first_add_option():
     app.render()
     manual = next(hit for hit in app.hits if hit["action"] == "add-manual")
     scan = next(hit for hit in app.hits if hit["action"] == "add-scan")
+    created = next(hit for hit in app.hits if hit["action"] == "add-generate")
+    assert manual["label"] == "Enter Seed Words"
+    assert created["label"] == "New Seed"
     assert manual["box"][1] < scan["box"][1]
 
 

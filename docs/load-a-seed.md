@@ -4,7 +4,7 @@ A seed is a BIP39 mnemonic of 12, 18, or 24 English words. BigSigner checks the 
 
 The seed stays in memory until you power the device off. It is not written to the microSD card.
 
-Scan QR Code and Load from File first show Seed Words, with 12 Words Seed, 18 Words Seed, or 24 Words Seed above a scrollable column of the words. The list starts at the bottom so the last word is visible. Scroll up to review the earlier words. Continue below the list opens the passphrase choice. Manual Entry also keeps the completed word list on screen after the last word; tap Continue to proceed. Choosing No Passphrase or saving a passphrase then loads the seed. Back from the passphrase choice returns to the words.
+Scan QR Code and Load from File first show Seed Words, with 12 Words Seed, 18 Words Seed, or 24 Words Seed above a scrollable column of the words. The list starts at the bottom so the last word is visible. Scroll up to review the earlier words. Continue below the list opens the passphrase choice. Enter Seed Words also keeps the completed word list on screen after the last word; tap Continue to proceed. Choosing No Passphrase or saving a passphrase then loads the seed. Back from the passphrase choice returns to the words.
 
 ## Passphrase
 

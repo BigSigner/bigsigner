@@ -2936,10 +2936,10 @@ class App:
             self._speed_dial(
                 frame,
                 (
-                    ("Manual Entry", "add-manual", None),
+                    ("Enter Seed Words", "add-manual", Icons.PENCIL),
                     ("Scan QR Code", "add-scan", Icons.CAMERA),
                     ("Load from File", "add-sd", Icons.FILE),
-                    ("Generate New Seed", "add-generate", None),
+                    ("New Seed", "add-generate", Icons.DICE),
                 ),
             )
         self._plus(frame, "toggle-add", Icons.CLOSE if self.add_menu else Icons.PLUS)

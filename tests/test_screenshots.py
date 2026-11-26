@@ -72,7 +72,7 @@ def test_manual_seed_entry_saves_screenshots():
     record.shot(app, "keys")
     record.click(app, "plus")
     record.shot(app, "add-menu")
-    record.click(app, "Manual Entry")
+    record.click(app, "Enter Seed Words")
     record.shot(app, "keyboard")
     app.seed_length = 12
     type_word(app, "abandon", record, "suggestions")
@@ -172,7 +172,7 @@ def test_camera_without_a_picture_saves_screenshots():
     record.note("Opened Bitcoin Keys in code.")
     record.shot(app, "keys")
     record.click(app, "plus")
-    record.click(app, "Generate New Seed")
+    record.click(app, "New Seed")
     record.shot(app, "generate")
     record.click(app, "Camera")
     record.shot(app, "camera")

@@ -89,6 +89,7 @@ class Icons:
     FILE = "\uf15b"  # Font Awesome file
     FOLDER = "\uf07b"  # Font Awesome folder
     DICE = "\uf522"  # Font Awesome dice
+    PENCIL = "\uf303"  # Font Awesome pencil
     COINS = "\uf51e"  # Font Awesome coins
     EYE = "\uf06e"  # Font Awesome eye, for a key expression that is not a seed
     SEED = "\uf4d8"  # Font Awesome seedling

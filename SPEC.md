@@ -204,17 +204,17 @@ Other screens are internal screens reachable by doing actions in those main scre
 
 ## Keys screen
 
-Every Scan QR Code button shows a camera icon before its text inside the button. Every Load from File button shows a file icon before its text. Both use the same icon style as New seed, including in the plus menus. Load from File opens the existing file picker on the SD card, or the browser's emulated SD card.
+Every Scan QR Code button shows a camera icon before its text inside the button. Every Load from File button shows a file icon before its text. On the Bitcoin Keys plus menu, Enter Seed Words shows a pencil icon and New Seed shows a dice icon. These use the same icon style as New seed, including in the plus menus. Load from File opens the existing file picker on the SD card, or the browser's emulated SD card.
 
 The title of the screen should be "Bitcoin Keys".
 This will also be the default screen when the app is opened.
 When no keys are present, the screen should show a message "No keys found. Press the plus button to add a new key."
 
 The plus button (hovering over the bottom right corner of the screen) will open a menu with the options to add a new key, similar to SeedSigner:
+- Enter Seed Words
 - Scan QR Code
-- Manual Entry
 - Load from File
-- Generate New Seed
+- New Seed
 
 When adding a new key, we should first check if the key is already present - and warn the user if it is.
 
