@@ -1347,8 +1347,17 @@ def test_bip85_load_asks_for_a_seed_and_imports_one_primary_key():
     _tap(app, "gpg-bip85-pick:" + added["fingerprint"].hex())
     app.render()
     text = " ".join(item["text"] for item in app.texts)
+    assert "BIP-85 GPG Key" in text
     assert "BigSigner only generates primary keys, not subkeys." in text
+    assert "Number of Bits" in text
     assert any("m/83696968h/828365h/4096h/0h" in item["text"] for item in app.texts)
+    _tap(app, "dropdown-gpg-bip85-algo")
+    _tap(app, "Ed25519")
+    app.render()
+    assert "Number of Bits" not in " ".join(item["text"] for item in app.texts)
+    assert any("m/83696968h/828366h/4h/256h/0h" in item["text"] for item in app.texts)
+    _tap(app, "dropdown-gpg-bip85-algo")
+    _tap(app, "RSA")
     _tap(app, "+")
     assert app.gpg.bip85_index == 1
     _tap(app, "dropdown-gpg-bits")

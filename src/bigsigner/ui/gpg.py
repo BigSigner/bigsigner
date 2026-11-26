@@ -8,7 +8,9 @@ import re
 import time
 
 from .. import sdcard
-from ..bip85gpg import creation_text, entropy_path, expiration_seconds, identity, path_text, raw_entropy, secret_armor
+from ..bip85gpg import (
+    creation_text, ed25519_path, entropy_path, expiration_seconds, identity, path_text, raw_entropy, secret_armor,
+)
 from ..entropy import camera_digest
 from ..gpg import (
     CHECKSUM_LIMIT, CHECKSUM_NAME, CHECKSUM_SIGNATURE, GpgBackend, GpgError, KEY_LIMIT, Outcome,
@@ -24,7 +26,7 @@ EXPIRE_NOTE = "This is the UTC time when the subkey expires."
 SIGN_NOTE = "Signing a file requires this key's private key."
 SIGN_PASSPHRASE_NOTE = "Signing a file requires a key with no passphrase."
 SIGN_TIME_NOTE = "This time is written on the signature. The air-gapped device has no reliable clock."
-BIP85_EXPIRE_NOTE = "This date is written on the certificate. It does not change the RSA private key."
+BIP85_EXPIRE_NOTE = "This date is written on the certificate. It does not change the private key."
 BIP85_WAIT_NOTE = "This can take over a minute."
 ENTROPY_INDEX_NOTE = (
     "Choose a unique index that will not be used for other purposes. "
@@ -36,6 +38,7 @@ _USAGE = (("c", "Certification"), ("s", "Signing"), ("e", "Encryption"), ("a", "
 _SUBKEY_ALGOS = (("ed25519", "Ed25519"), ("cv25519", "Curve25519"), ("rsa3072", "RSA-3072"), ("rsa4096", "RSA-4096"))
 _SUBKEY_USAGES = (("sign", "Signing"), ("encr", "Encryption"), ("auth", "Authentication"))
 _BIP85_BITS = (("3072", "3072 bits"), ("4096", "4096 bits"))
+_BIP85_ALGOS = (("rsa", "RSA"), ("ed25519", "Ed25519"))
 _BIP85_ROLES = (("cert", "Certificate Only"), ("cert-sign", "Certificate and Signing"))
 
 
@@ -99,6 +102,7 @@ class GpgUI:
         self.sign_overwrite = []
         self.camera_for = ""
         self.bip85_fp = None
+        self.bip85_algo = "rsa"
         self.bip85_bits = 4096
         self.bip85_index = 0
         self.bip85_role = "cert-sign"
@@ -1535,6 +1539,8 @@ class GpgUI:
             self.subkey_usage = key
         elif name == "gpg-bits" and key in dict(_BIP85_BITS):
             self.bip85_bits = int(key)
+        elif name == "gpg-bip85-algo" and key in dict(_BIP85_ALGOS):
+            self.bip85_algo = key
         elif name == "gpg-role" and key in dict(_BIP85_ROLES):
             self.bip85_role = key
 
@@ -1672,6 +1678,7 @@ class GpgUI:
         return [record for _added, record in found]
 
     def _open_bip85(self):
+        self.bip85_algo = "rsa"
         self.bip85_bits = 4096
         self.bip85_index = 0
         self.bip85_role = "cert-sign"
@@ -1738,6 +1745,9 @@ class GpgUI:
                 expiration_seconds(expires)
         except ValueError as exc:
             self.app.set_error(str(exc))
+            return
+        if self.bip85_algo != "rsa":
+            self.app.set_error("Ed25519 primary keys are not generated yet.")
             return
         fingerprint, bits, index = self.bip85_fp, self.bip85_bits, self.bip85_index
         name, email = self.bip85_name, self.bip85_email
@@ -1870,19 +1880,25 @@ class GpgUI:
 
     def bip85_options(self, frame):
         app = self.app
-        frame.header("BIP-85 RSA Key", "back")
+        frame.header("BIP-85 GPG Key", "back")
         if not any(record.fingerprint == self.bip85_fp for record in self._seed_records()):
             frame.text("This seed is no longer loaded.", MARGIN, HEADER + 24, size=TITLE_SIZE)
             return
         y = HEADER + 16
-        y = self._choice(frame, y, "Number of Bits", "gpg-bits", _BIP85_BITS, str(self.bip85_bits))
+        y = self._choice(frame, y, "Algorithm", "gpg-bip85-algo", _BIP85_ALGOS, self.bip85_algo)
+        if self.bip85_algo == "rsa":
+            y = self._choice(frame, y + 16, "Number of Bits", "gpg-bits", _BIP85_BITS, str(self.bip85_bits))
         y = app._account_selector(
             frame, y + 16, self.bip85_index, True, 0, caption="Index",
             down="gpg-bip85-dec", up="gpg-bip85-inc", edit="gpg-bip85-edit", maximum=0x7FFFFFFF,
         )
         y = frame.text("Derivation Path:", MARGIN, y, size=TITLE_SIZE, fill=MUTED)
         face = font(22, mono=True)
-        for line in wrap(frame.draw, path_text(self.bip85_bits, self.bip85_index), face, WIDTH - 2 * MARGIN):
+        shown_path = (
+            path_text(self.bip85_bits, self.bip85_index)
+            if self.bip85_algo == "rsa" else ed25519_path(self.bip85_index)
+        )
+        for line in wrap(frame.draw, shown_path, face, WIDTH - 2 * MARGIN):
             width = frame.draw.textlength(line, font=face)
             frame.draw.text((max(MARGIN, (WIDTH - width) / 2), y), line, font=face, fill=MUTED)
             frame.mark(line, frame.draw.textbbox((max(MARGIN, (WIDTH - width) / 2), y), line, font=face))
@@ -1890,7 +1906,9 @@ class GpgUI:
         y += 8
         y = frame.text("BigSigner only generates primary keys, not subkeys.", MARGIN, y, size=28, fill=MUTED)
         frame.button(y + 16, "Continue", "gpg-bip85-continue")
-        if app.open_dropdown == "gpg-bits":
+        if app.open_dropdown == "gpg-bip85-algo":
+            app._dropdown_menu(frame, self._choice_box, "gpg-bip85-algo", _BIP85_ALGOS, self.bip85_algo)
+        elif app.open_dropdown == "gpg-bits" and self.bip85_algo == "rsa":
             app._dropdown_menu(frame, self._choice_box, "gpg-bits", _BIP85_BITS, str(self.bip85_bits))
 
     def bip85_details(self, frame):

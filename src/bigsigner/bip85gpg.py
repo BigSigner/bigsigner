@@ -18,6 +18,9 @@ from datetime import datetime, timezone
 from embit.bip85 import derive_entropy
 
 APPLICATION = 828365
+ED25519_APPLICATION = 828366
+ED25519_TYPE = 4
+ED25519_BITS = 256
 ENTROPY_APPLICATION = 128169
 ENTROPY_BYTES = 64
 CREATION = 1231006505  # 2009-01-03 18:15:05 UTC
@@ -287,3 +290,8 @@ def secret_armor(root, bits: int, index: int, name: str, email: str, *, signing:
 
 def path_text(bits: int, index: int) -> str:
     return f"m/83696968h/{APPLICATION}h/{bits}h/{index}h"
+
+
+def ed25519_path(index: int) -> str:
+    """OpenPGP v6 Ed25519 primary key: application 828366, key type 4, 256 bits."""
+    return f"m/83696968h/{ED25519_APPLICATION}h/{ED25519_TYPE}h/{ED25519_BITS}h/{index}h"
