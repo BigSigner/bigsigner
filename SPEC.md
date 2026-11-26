@@ -308,7 +308,7 @@ If the data includes only an xpub without a fingerprint or derivation path (i.e.
 
 QR code scanning functionality will be needed in multiple places. I suggest to implement a common mechanism for scanning QR codes that return their data and type, and then depending on the functionality verify the data type and warn the user if it's not one of the expected types. For example, if the user scans a QR code containing a PSBT where he is expected to scan a QR code of a seed.
 
-While the scan or camera-entropy screen is open, the Raspberry Pi panel opens the camera and draws the live picture in the viewfinder on the screen. QR codes are read from those frames when zbar is installed. The emulator still shows the browser camera above the panel instead of inside the viewfinder. It first uses a locally bundled QR decoder that returns raw bytes, and sends those bytes as flagged hex. When that decoder does not see a code, the browser's own QR detector supplies the text. An empty text result is not sent in place of binary content.
+While the scan or camera-entropy screen is open, the Raspberry Pi panel opens the camera and draws the live picture in the viewfinder on the screen. QR codes are read from those frames when zbar is installed. The emulator shows the browser camera inside that viewfinder. It first uses a locally bundled QR decoder that returns raw bytes, and sends those bytes as flagged hex. When that decoder does not see a code, the browser's own QR detector supplies the text. An empty text result is not sent in place of binary content.
 
 ### Manual Entry screen
 

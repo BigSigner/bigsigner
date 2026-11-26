@@ -17,8 +17,8 @@
   #layout { display: flex; justify-content: center; align-items: flex-start; gap: 28px; flex-wrap: wrap; min-height: 100vh; box-sizing: border-box; padding: 16px; }
   #stage { display: grid; justify-items: center; gap: 12px; }
   #status { margin: 0; max-width: min(90vw, 36rem); white-space: pre-wrap; color: #f0d090; }
-  video { width: 51.84mm; height: 180px; object-fit: cover; background: #000; display: none; }
-  #panel-wrap { width: 51.84mm; aspect-ratio: 480 / 800; background: #1a1a1a; display: grid; }
+  #panel-wrap { position: relative; width: 51.84mm; aspect-ratio: 480 / 800; background: #1a1a1a; display: grid; }
+  #panel-wrap video { position: absolute; display: none; object-fit: cover; object-position: center; pointer-events: none; background: #000; z-index: 2; }
   #panel-wrap img { width: 100%; height: 100%; display: none; grid-area: 1 / 1; touch-action: none; background: white; }
   #panel-loading { grid-area: 1 / 1; place-self: center; margin: 0; color: #f0d090; font: 32px/1.2 sans-serif; }
   #panel-wrap.ready img { display: block; }
@@ -83,13 +83,12 @@
 <div id="layout">
   <div id="stage">
     <p id="status">Loading the emulator…</p>
-    <video id="camera" playsinline autoplay muted></video>
     <div id="size">
       <button type="button" id="smaller" title="Smaller">−</button>
       <button type="button" id="size-label" title="Reset to the Waveshare picture size"></button>
       <button type="button" id="larger" title="Larger">+</button>
     </div>
-    <div id="panel-wrap"><p id="panel-loading">Loading</p><img id="panel" alt="BigSigner"></div>
+    <div id="panel-wrap"><p id="panel-loading">Loading</p><img id="panel" alt="BigSigner"><video id="camera" playsinline autoplay muted></video></div>
     <p id="size-note">The 4 inch Waveshare picture is 51.8 mm wide. Match a ruler, then leave it.</p>
   </div>
   <aside id="sd-column">
@@ -269,7 +268,6 @@ function panelScale() {
 function applyPanelSize(scale) {
   const width = (PANEL_WIDTH_MM * scale) + "mm";
   panelWrap.style.width = width;
-  video.style.width = width;
   const label = document.getElementById("size-label");
   label.textContent = scale === 1 ? "51.8 × 86.4 mm" : Math.round(scale * 100) + "%";
 }
@@ -953,14 +951,31 @@ async function watchQr() {
     qrBusy = false;
   }
 }
+let previewBox = null;
+function placePreview(box) {
+  previewBox = Array.isArray(box) && box.length === 4 ? box.map(Number) : null;
+  applyPreview();
+}
+function applyPreview() {
+  if (!previewBox || !video.srcObject) {
+    video.style.display = "none";
+    return;
+  }
+  const [left, top, right, bottom] = previewBox;
+  video.style.left = (left / 480 * 100) + "%";
+  video.style.top = (top / 800 * 100) + "%";
+  video.style.width = ((right - left) / 480 * 100) + "%";
+  video.style.height = ((bottom - top) / 800 * 100) + "%";
+  video.style.display = "block";
+}
 async function syncCamera(name) {
   if (!usesCamera(name)) {
     if (usesCamera(screenName)) stopCamera();
     screenName = name;
+    applyPreview();
     return;
   }
   screenName = name;
-  video.style.display = "block";
   if (!video.srcObject) {
     let stream = null;
     for (const constraints of [{video: {facingMode: "environment"}, audio: false}, {video: true, audio: false}]) {
@@ -970,12 +985,13 @@ async function syncCamera(name) {
       } catch (err) {}
     }
     if (!stream) {
-      video.style.display = "none";
+      applyPreview();
       return;
     }
     video.srcObject = stream;
     await video.play();
   }
+  applyPreview();
   if (!sampler) sampler = setInterval(() => {
     if (screenName === "camera") sampleCamera();
     if (screenName === "scan") watchQr();
@@ -1005,7 +1021,7 @@ function hideStatus() {
   status.hidden = true;
   status.textContent = "";
 }
-async function paintPanel(png, screen) {
+async function paintPanel(png, screen, preview) {
   const binary = atob(png);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -1018,6 +1034,7 @@ async function paintPanel(png, screen) {
   // The first callback precedes paint; the next gives that paint time to show.
   await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   hideStatus();
+  placePreview(preview);
   syncCamera(screen || "");
 }
 async function showFrame(msg) {
@@ -1026,7 +1043,7 @@ async function showFrame(msg) {
     tapFrame += 1;
     press = null;
   }
-  if (msg.png !== null) await paintPanel(msg.png, msg.screen || "");
+  if (msg.png !== null) await paintPanel(msg.png, msg.screen || "", msg.preview);
   if (msg.tap_guard) tapBlockedUntil = performance.now() + 250;
   // null waits for a click. 0 asks for the next frame now; that frame does the work.
   // Loading blocks taps; address search keeps Stop and Back available.

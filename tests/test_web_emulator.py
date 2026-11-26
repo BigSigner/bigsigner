@@ -313,6 +313,32 @@ const initial = {};
     assert result.returncode == 0, result.stderr
 
 
+def test_emulator_frame_reports_the_viewfinder(monkeypatch):
+    import sys
+
+    from bigsigner.ui.app import App
+
+    worker = Path("web/worker.js").read_text(encoding="utf-8")
+    driver = worker.split("const DRIVER = `", 1)[1].rsplit("`;", 1)[0]
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    namespace = {}
+    exec(compile(driver, "web/worker.js:DRIVER", "exec"), namespace)
+    app = App()
+    namespace["app"] = app
+    tick = namespace["tick"]
+    app.screen = "keys"
+    assert json.loads(tick('{"kind":"frame"}'))["preview"] is None
+    app.screen = "scan"
+    scan = json.loads(tick('{"kind":"frame"}'))
+    assert scan["preview"] == list(app.camera_preview_box())
+    app.screen = "camera"
+    app.camera_purpose = "gpg"
+    app.gpg.camera_for = "sign"
+    signing = json.loads(tick('{"kind":"frame"}'))
+    assert signing["preview"] == list(app.camera_preview_box())
+    assert signing["preview"] != scan["preview"]
+
+
 def test_worker_polls_search_once_per_request_and_accepts_stop(monkeypatch):
     import sys
 

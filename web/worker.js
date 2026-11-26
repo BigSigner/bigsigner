@@ -210,11 +210,13 @@ def tick(raw):
         png = base64.b64encode(buffer.getvalue()).decode("ascii")
     delay = app.notice_delay()
     changed = consume_memory_change()
+    box = app.camera_preview_box()
     return json.dumps({
         "screen": app.screen,
         "delay": delay,
         "tap_guard": tap_guard,
         "interactive": app.psbt_search_active(),
+        "preview": list(box) if box else None,
         "png": png,
         "card": changed,
     })
