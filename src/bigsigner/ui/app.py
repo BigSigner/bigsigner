@@ -5560,7 +5560,7 @@ class App:
         note_h = TITLE_SIZE + 8
         mismatch = "No BIP39 word matches this." if prefix and not matches else ""
         checksum = (
-            "The next word has to match the checksum"
+            t("The next word has to match the checksum")
             if len(self.seed_words) + 1 == self.seed_length
             else ""
         )
@@ -5577,19 +5577,37 @@ class App:
         self._seed_field_box = box
         self._paint_seed_field(frame, box)
         note_y = box[3] + 8
+        rtl_note = hebrew_layout(checksum)
         for line in checksum_lines:
-            frame.draw.text((MARGIN, note_y), line, font=note_face, fill=MUTED)
+            shown = display(line, base="R") if rtl_note else line
+            if rtl_note:
+                x = WIDTH - MARGIN - frame.draw.textlength(shown, font=note_face)
+            else:
+                x = MARGIN
+            frame.draw.text((x, note_y), shown, font=note_face, fill=MUTED)
+            frame.mark(line, frame.draw.textbbox((x, note_y), shown, font=note_face))
             note_y += note_h
 
     def _paint_seed_field(self, frame: Frame, box):
         prefix = self.word_prefix
         frame.draw.rounded_rectangle(box, radius=12, fill=WHITE, outline=LINE)
-        shown = prefix if prefix else "Type a seed word"
-        text_x = box[0] + 16
+        if prefix:
+            logical = prefix
+            rtl = False
+        else:
+            logical = t("Type a seed word")
+            rtl = hebrew_layout(logical)
+        shown = display(logical, base="R") if rtl else logical
         field_face = font(TITLE_SIZE)
         _left, text_top, _right, text_bottom = frame.draw.textbbox((0, 0), shown, font=field_face)
         text_y = box[1] + (72 - (text_bottom - text_top)) / 2 - text_top
+        if rtl:
+            text_x = box[2] - 16 - frame.draw.textlength(shown, font=field_face)
+        else:
+            text_x = box[0] + 16
         frame.draw.text((text_x, text_y), shown, font=field_face, fill=INK if prefix else MUTED)
+        if not prefix:
+            frame.mark(logical, frame.draw.textbbox((text_x, text_y), shown, font=field_face))
         if prefix:
             caret_x = text_x + frame.draw.textlength(prefix[: self.word_cursor], font=field_face)
             frame.draw.line((caret_x, box[1] + 14, caret_x, box[3] - 14), fill=BLUE, width=2)

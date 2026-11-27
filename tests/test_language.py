@@ -401,3 +401,25 @@ def test_the_seed_key_screen_uses_the_seed_key_wording():
     app.render()
     count = _one(app.texts, "12 מילים")
     assert abs((_box(count)[0] + _box(count)[2]) / 2 - WIDTH / 2) <= 8
+
+
+def test_seed_entry_placeholder_checksum_and_ok_are_hebrew():
+    set_language("he")
+    assert t("Type a seed word") == "נא להזין מילות מפתח"
+    assert t("The next word has to match the checksum") == "המילה הבאה חייבת להיות מילת ביקורת"
+    assert t("OK") == "אישור"
+    app = App()
+    set_language("he")
+    app.screen = "seed"
+    app.render()
+    placeholder = _one(app.texts, "נא להזין מילות מפתח")
+    assert _box(placeholder)[0] >= MARGIN
+    assert _box(placeholder)[2] >= WIDTH - MARGIN - 24
+    app.seed_length = 12
+    app.seed_words = WORDS[:11]
+    app.render()
+    note = next(item for item in app.texts if item["text"].startswith("המילה הבאה"))
+    assert _box(note)[2] >= WIDTH - MARGIN - 4
+    app.screen = "load-error"
+    app.render()
+    assert _one(app.hits, "אישור")["action"] == "load-error-ok"
