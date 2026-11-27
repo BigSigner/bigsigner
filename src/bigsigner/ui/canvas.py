@@ -363,11 +363,11 @@ class Frame:
                 self.draw.text((text_left, text_top + index * line_h), line, font=face, fill=text_fill)
         else:
             for index, line in enumerate(lines):
-                shown = display(line, base="R") if hebrew_layout(visible) else line
+                shown = display(line, base="R") if hebrew_layout(line) else line
                 width = self.draw.textlength(shown, font=face)
                 origin = ((box[0] + box[2] - width) / 2, text_top + index * line_h)
                 self.draw.text(origin, shown, font=face, fill=text_fill)
-                if hebrew_layout(visible) or shown != line:
+                if hebrew_layout(line) or shown != line:
                     self.mark(line, self.draw.textbbox(origin, shown, font=face))
         if enabled:
             self.hit(box, action, t(label) if label else visible)
@@ -390,11 +390,11 @@ class Frame:
         text_top = box[1] + text_delta
         self.draw.rounded_rectangle(box, radius=14, fill=color)
         for index, line in enumerate(lines):
-            shown = display(line, base="R") if hebrew_layout(visible) else line
+            shown = display(line, base="R") if hebrew_layout(line) else line
             width = self.draw.textlength(shown, font=face)
             origin = ((box[0] + box[2] - width) / 2, text_top + index * line_h)
             self.draw.text(origin, shown, font=face, fill=text_fill)
-            if hebrew_layout(visible) or shown != line:
+            if hebrew_layout(line) or shown != line:
                 self.mark(line, self.draw.textbbox(origin, shown, font=face))
         if enabled:
             self.hit(box, action, visible)

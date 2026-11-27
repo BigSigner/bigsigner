@@ -5558,7 +5558,7 @@ class App:
         input_h = 72
         note_face = font(TITLE_SIZE)
         note_h = TITLE_SIZE + 8
-        mismatch = "No BIP39 word matches this." if prefix and not matches else ""
+        mismatch = t("No BIP39 word matches this.") if prefix and not matches else ""
         checksum = (
             t("The next word has to match the checksum")
             if len(self.seed_words) + 1 == self.seed_length
@@ -5570,8 +5570,15 @@ class App:
         checksum_h = note_h * len(checksum_lines)
         grid_bottom = bottom - input_h - mismatch_h - checksum_h - 8
         y = self._seed_entered_grid(frame, top, grid_bottom)
+        rtl_mismatch = hebrew_layout(mismatch)
         for line in mismatch_lines:
-            frame.draw.text((MARGIN, y), line, font=note_face, fill=MUTED)
+            shown = display(line, base="R") if rtl_mismatch else line
+            if rtl_mismatch:
+                x = WIDTH - MARGIN - frame.draw.textlength(shown, font=note_face)
+            else:
+                x = MARGIN
+            frame.draw.text((x, y), shown, font=note_face, fill=MUTED)
+            frame.mark(line, frame.draw.textbbox((x, y), shown, font=note_face))
             y += note_h
         box = (MARGIN, y, WIDTH - MARGIN, y + input_h)
         self._seed_field_box = box
@@ -8427,7 +8434,7 @@ class App:
 
     def _psbt_error(self, frame: Frame):
         frame.header("Error loading PSBT")
-        message = self.psbt_error or "This PSBT could not be loaded."
+        message = t(self.psbt_error or "This PSBT could not be loaded.")
         button_top = HEIGHT - 110
         text_top = HEADER + 28
         lines = wrap(frame.draw, message, font(BODY_SIZE), WIDTH - 2 * MARGIN)

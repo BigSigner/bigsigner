@@ -766,16 +766,18 @@ def _card_button(frame, y, label, action, paint, offset, enabled=True) -> int:
         text = WHITE if enabled else (132, 136, 142)
         frame.draw.rounded_rectangle(box, radius=14, fill=color)
         face = font(36)
-        lines = wrap(frame.draw, label, face, box[2] - box[0] - 24)
+        visible = t(label)
+        lines = wrap(frame.draw, visible, face, box[2] - box[0] - 24)
         line_h = 42
         text_y = top + (height - line_h * len(lines)) / 2
         for index, line in enumerate(lines):
-            width = frame.draw.textlength(line, font=face)
+            shown = display(line, base="R") if hebrew_layout(line) else line
+            width = frame.draw.textlength(shown, font=face)
             x = (box[0] + box[2] - width) / 2
-            frame.draw.text((x, text_y + index * line_h), line, font=face, fill=text)
-        frame.mark(label, box)
+            frame.draw.text((x, text_y + index * line_h), shown, font=face, fill=text)
+            frame.mark(line, frame.draw.textbbox((x, text_y + index * line_h), shown, font=face))
         if enabled:
-            frame.hit(box, action, label)
+            frame.hit(box, action, visible)
     return y + height + 12
 
 
@@ -853,10 +855,12 @@ def _zero_amount_line(frame, y, paint, offset) -> int:
     label = "Amount (BTC): "
     value = "0"
     face = font(TITLE_SIZE)
-    x = MARGIN + 16
-    if paint:
+    if paint and _strip_visible(frame, y - offset, ink_span(TITLE_SIZE)):
         yy = y - offset
-        if _strip_visible(frame, yy, ink_span(TITLE_SIZE)):
+        if hebrew_layout(t("Amount (BTC):")):
+            _rtl_pair(frame, yy, t("Amount (BTC):"), value, face, font(TITLE_SIZE), MUTED, INK)
+        else:
+            x = MARGIN + 16
             frame.draw.text((x, yy), label, font=face, fill=MUTED)
             frame.draw.text((x + frame.draw.textlength(label, font=face), yy), value, font=face, fill=INK)
             frame.mark(label + value, frame.draw.textbbox((x, yy), label + value, font=face))
@@ -894,10 +898,12 @@ def _sequence_line(frame, y, paint, offset, sequence: int) -> int:
     value = f"0x{int(sequence):08X}"
     face = font(TITLE_SIZE)
     mono = font(TITLE_SIZE, mono=True)
-    x = MARGIN + 16
-    if paint:
+    if paint and _strip_visible(frame, y - offset, ink_span(TITLE_SIZE)):
         yy = y - offset
-        if _strip_visible(frame, yy, ink_span(TITLE_SIZE)):
+        if hebrew_layout(t("Sequence:")):
+            _rtl_pair(frame, yy, t("Sequence:"), value, face, mono, MUTED, INK)
+        else:
+            x = MARGIN + 16
             frame.draw.text((x, yy), label, font=face, fill=MUTED)
             label_w = frame.draw.textlength(label, font=face)
             frame.draw.text((x + label_w, yy), value, font=mono, fill=INK)
@@ -905,16 +911,37 @@ def _sequence_line(frame, y, paint, offset, sequence: int) -> int:
     return y + TITLE_SIZE + 8
 
 
+def _rtl_pair(frame, y, label, value, label_face, value_face, label_fill, value_fill):
+    shown = display(label)
+    label_w = frame.draw.textlength(shown, font=label_face)
+    value_w = frame.draw.textlength(value, font=value_face)
+    gap = frame.draw.textlength(" ", font=label_face)
+    right = WIDTH - MARGIN - 16
+    label_x = right - label_w
+    value_x = label_x - gap - value_w
+    frame.draw.text((value_x, y), value, font=value_face, fill=value_fill)
+    frame.draw.text((label_x, y), shown, font=label_face, fill=label_fill)
+    frame.mark(value, frame.draw.textbbox((value_x, y), value, font=value_face))
+    frame.mark(label, frame.draw.textbbox((label_x, y), shown, font=label_face))
+
+
 def _card_text(frame, text, y, paint, offset, size, fill) -> int:
+    logical = t(text)
     face = font(size)
-    lines = wrap(frame.draw, text, face, WIDTH - 2 * MARGIN - 32) or [""]
-    x = MARGIN + 16
+    lines = wrap(frame.draw, logical, face, WIDTH - 2 * MARGIN - 32) or [""]
+    rtl = hebrew_layout(logical)
     if paint:
         for index, line in enumerate(lines):
             yy = y - offset + index * (size + 8)
-            if _strip_visible(frame, yy, ink_span(size)):
-                frame.draw.text((x, yy), line, font=face, fill=fill)
-                frame.mark(line, frame.draw.textbbox((x, yy), line, font=face))
+            if not _strip_visible(frame, yy, ink_span(size)):
+                continue
+            shown = display(line, base="R") if rtl else line
+            if rtl:
+                x = WIDTH - MARGIN - 16 - frame.draw.textlength(shown, font=face)
+            else:
+                x = MARGIN + 16
+            frame.draw.text((x, yy), shown, font=face, fill=fill)
+            frame.mark(line, frame.draw.textbbox((x, yy), shown, font=face))
     return y + len(lines) * (size + 8)
 
 

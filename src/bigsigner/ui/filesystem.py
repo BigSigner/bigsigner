@@ -1315,9 +1315,9 @@ class FileSystemUI:
 
     def delete_warning(self, frame):
         app = self.app
-        message = f'Delete "{Path(self.path).name}"?'
+        message = t(f'Delete "{Path(self.path).name}"?')
         if self.storage == "sd":
-            message += "\n\n" + SD_DELETE_NOTE
+            message += "\n\n" + t(SD_DELETE_NOTE)
         end = HEADER + 24 + app._text_height(frame, message, TITLE_SIZE)
         offset = app._scroll_offset("fs-delete", end, clearance=140)
         frame.text(message, MARGIN, HEADER + 24 - offset, size=TITLE_SIZE, fill=RED)

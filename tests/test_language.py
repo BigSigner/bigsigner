@@ -403,6 +403,29 @@ def test_the_seed_key_screen_uses_the_seed_key_wording():
     assert abs((_box(count)[0] + _box(count)[2]) / 2 - WIDTH / 2) <= 8
 
 
+def test_remaining_screens_and_popups_are_hebrew():
+    set_language("he")
+    assert t("Scan Address") == "סריקת כתובת"
+    assert t("No BIP39 word matches this.") == "אין מילה תואמת ברשימת BIP39."
+    assert t("Dice 12/50") == "קובייה 12/50"
+    assert t("Coins 40/128") == "מטבעות 40/128"
+    assert t("2 of 3 must sign") == "2 מתוך 3 לחתימה"
+    assert t("Encryption") == "הצפנה"
+    assert t('Delete "notes.txt"?') == 'למחוק את "\u202anotes.txt\u202c"?'
+    assert t("The wallet was added successfully.") == "הארנק נוסף בהצלחה."
+    assert t("Address found in Receive addresses: #120") == "הכתובת נמצאה בכתובות קבלה: #120"
+    assert t("Search 0-99") == "חיפוש 0–99"
+    assert t("Sequence:") == "רצף:"
+    assert t("A transaction with more than 100 inputs is not supported by this hardware wallet.").startswith("פקודת העברה")
+    assert "אינו נתמך" in t("A transaction with no inputs is not supported by this hardware wallet.")
+    note = t(
+        "Different wallets may display the key expression in different formats. "
+        "fingerprint (aabbccdd) is not displayed, as long as the wallet does not show a different fingerprint."
+    )
+    assert "aabbccdd" in note
+    assert note.startswith("ארנקים שונים")
+
+
 def test_seed_entry_placeholder_checksum_and_ok_are_hebrew():
     set_language("he")
     assert t("Type a seed word") == "נא להזין מילות מפתח"
