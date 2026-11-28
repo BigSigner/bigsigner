@@ -273,16 +273,13 @@ class Frame:
     def header(self, title: str, left: str | None = None):
         self.draw.rectangle((0, 0, WIDTH, HEADER), fill=NAVY)
         title = t(title)
-        # The title stays on the left. Hebrew is reordered inside that block.
-        if left is None:
-            max_width = WIDTH - 2 * MARGIN
-            shown, face = self._fit_line(title, max_width, TITLE_SIZE)
-            width = self.draw.textlength(shown, font=face)
-            x = (WIDTH - width) / 2
-        else:
-            max_width = WIDTH - MARGIN - 84
-            shown, face = self._fit_line(title, max_width, TITLE_SIZE)
-            x = 84
+        # The title is centered. A back or menu control stays on the left, and
+        # the title keeps that same gap on the right so it does not run under it.
+        side = 84 if left is not None else MARGIN
+        max_width = WIDTH - 2 * side
+        shown, face = self._fit_line(title, max_width, TITLE_SIZE)
+        width = self.draw.textlength(shown, font=face)
+        x = (WIDTH - width) / 2
         self.draw.text((x, 28), shown, font=face, fill=WHITE)
         self.mark(title, self.draw.textbbox((x, 28), shown, font=face))
         if left is None:

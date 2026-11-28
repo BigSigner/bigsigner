@@ -2713,10 +2713,16 @@ class App:
         frame.hit((0, 0, 84, HEADER), "back", "back")
         frame.glyph(Icons.BACK, 42, HEADER / 2, 42, WHITE)
         face = font(28)
+        logical = t("Point the camera at a detailed random scene.")
+        rtl = hebrew_layout(logical)
+        limit = WIDTH - 2 * 84
         y = 8
-        for line in wrap(frame.draw, "Point the camera at a detailed random scene.", face, WIDTH - 84 - MARGIN):
-            frame.draw.text((84, y), line, font=face, fill=WHITE)
-            frame.mark(line, frame.draw.textbbox((84, y), line, font=face))
+        for line in wrap(frame.draw, logical, face, limit):
+            shown = display(line, base="R") if rtl else line
+            width = frame.draw.textlength(shown, font=face)
+            x = (WIDTH - width) / 2
+            frame.draw.text((x, y), shown, font=face, fill=WHITE)
+            frame.mark(line, frame.draw.textbbox((x, y), shown, font=face))
             y += 34
 
     def _entropy(self, frame: Frame):

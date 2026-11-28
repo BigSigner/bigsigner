@@ -190,7 +190,10 @@ def test_hebrew_alignment_keeps_the_chrome_and_moves_the_label():
     label = next(item for item in app.texts if item["text"].startswith("לא נמצאו מפתחות"))
     assert _box(label)[2] >= WIDTH - MARGIN - 8
     title = _one(app.texts, "מפתחות ביטקוין")
-    assert abs(_box(title)[0] - 84) <= 8
+    assert abs((_box(title)[0] + _box(title)[2]) / 2 - WIDTH / 2) <= 8
+    assert _box(title)[0] >= 84
+    english_title = _one(english.texts, "Bitcoin Keys")
+    assert abs((_box(english_title)[0] + _box(english_title)[2]) / 2 - WIDTH / 2) <= 8
     menu_hit = next(hit for hit in app.hits if hit["action"] == "menu")
     assert _box(menu_hit)[0] == 0
     assert _box(menu_hit)[2] == 84
@@ -285,8 +288,9 @@ def test_untranslated_english_stays_left_and_the_chevron_follows_the_value():
     image = app.render()
     sentence = next(item for item in app.texts if item["text"].startswith("Switching network"))
     assert abs(_box(sentence)[0] - MARGIN) <= 4
-    network = next(item for item in app.texts if item["text"] == "Network:")
-    assert abs(_box(network)[0] - MARGIN) <= 4
+    network = next(item for item in app.texts if item["text"] == "רשת:")
+    assert _box(network)[2] >= WIDTH - MARGIN - 8
+    assert next(hit for hit in app.hits if hit["action"] == "dropdown-network")["label"] == "mainnet"
     hebrew_value = _one(app.texts, "עברית")
     language_field = next(hit["box"] for hit in app.hits if hit["action"] == "dropdown-language")
     network_field = next(hit["box"] for hit in app.hits if hit["action"] == "dropdown-network")
