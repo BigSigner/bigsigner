@@ -1,0 +1,139 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      os-ref:
+        description: The bigsigner-os ref (tag/branch/sha) to use
+        default: main
+        required: true
+
+# Least privilege that still lets this workflow upload the images and save the cache.
+permissions:
+  contents: read
+  actions: write
+
+# A newer push to main replaces the build already running. These images are
+# intermediate; the reproducible release images are built locally.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    # A fork's push to its own main should not spend this build. A manual run still can.
+    if: (!github.event.repository.fork || github.event_name == 'workflow_dispatch')
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ["pi0", "pi2", "pi02w", "pi4"]
+    steps:
+      - name: checkout bigsigner-os
+        uses: actions/checkout@v4
+        with:
+          repository: BigSigner/bigsigner-os
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.os-ref || 'main' }}
+          submodules: true
+          path: bigsigner-os
+          fetch-depth: 1
+
+      - name: checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: bigsigner-os/opt/rootfs-overlay/opt
+          fetch-depth: 1
+
+      - name: Get and set meta data
+        run: |
+          echo "builder_hash=$(git -C bigsigner-os rev-parse --short HEAD)" | tee -a "$GITHUB_ENV"
+
+      - name: restore build cache
+        uses: actions/cache@v4
+        # Buildroot's download dir and compiler cache. A hit skips most of the download and recompile.
+        with:
+          path: |
+            bigsigner-os/.buildroot-ccache/
+            bigsigner-os/.buildroot_dl/
+          key: build-cache-${{ matrix.target }}-${{ env.builder_hash }}
+          restore-keys: |
+            build-cache-${{ matrix.target }}-
+
+      - name: Create build container
+        run: |
+          # The Dockerfile only installs the build tools. The OS tree is mounted when the build runs.
+          mkdir -p /tmp/bigsigner-os-docker
+          cp bigsigner-os/Dockerfile /tmp/bigsigner-os-docker/Dockerfile
+          docker build -t bigsigner-os-build /tmp/bigsigner-os-docker
+
+      - name: build
+        run: |
+          mkdir -p \
+            bigsigner-os/.buildroot-ccache \
+            bigsigner-os/.buildroot_dl \
+            bigsigner-os/images
+          docker run \
+            --rm \
+            --entrypoint bash \
+            -v "$(pwd)/bigsigner-os/opt:/opt" \
+            -v "$(pwd)/bigsigner-os/images:/images" \
+            -v "$(pwd)/bigsigner-os:/src/bigsigner-os:ro" \
+            -v "$(pwd)/bigsigner-os/.buildroot_dl:/buildroot_dl" \
+            -v "$(pwd)/bigsigner-os/.buildroot-ccache:/root/.buildroot-ccache" \
+            bigsigner-os-build \
+            -c 'git config --global --add safe.directory "$(cd /opt/rootfs-overlay/opt && pwd)" && exec ./build.sh --${{ matrix.target }} --skip-repo --no-clean --app-branch=main'
+          sudo chown -R "$USER:$USER" bigsigner-os/images bigsigner-os/.buildroot_dl bigsigner-os/.buildroot-ccache
+
+      - name: list image
+        run: |
+          ls -la bigsigner-os/images
+
+      - name: print sha256sum
+        run: |
+          cd bigsigner-os/images
+          sha256sum *.img
+
+      - name: upload images
+        uses: actions/upload-artifact@v4
+        with:
+          name: bigsigner_os_images-${{ matrix.target }}
+          path: bigsigner-os/images/*.img
+          if-no-files-found: error
+          retention-days: 90
+
+  sha256sum:
+    name: calculate sha256sum
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: download images
+        uses: actions/download-artifact@v4
+        with:
+          path: images
+
+      - name: list images
+        run: |
+          ls -lRa images
+
+      - name: get bigsigner commit hash
+        run: echo "source_hash=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: write sha256sum
+        run: |
+          cd images
+          find . -name "*.img" -exec mv {} . \;
+          sha256sum *.img > "bigsigner_os.${{ env.source_hash }}.sha256"
+
+      - name: upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: bigsigner_os_images_sha256
+          path: images/*.sha256
+          if-no-files-found: error
+          retention-days: 90
